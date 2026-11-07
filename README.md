@@ -15,8 +15,11 @@ packages/core/
   src/tools/fs.ts                    list_dir / read_file / grep / write_file / edit_file
   src/tools/shell.ts                 run_command
 apps/cli/
-  src/index.tsx                      入口 / 参数解析
+  src/index.tsx                      入口：解析参数、切换 TUI / 无头
+  src/args.ts                        命令行参数解析（纯函数，可单测）
   src/app.tsx                        Ink + React TUI + 审批面板
+  src/headless.ts                    无头单次运行（stdout=回复，stderr=工具活动）
+  src/system-prompt.ts               系统提示（两种界面共用）
   src/stream-lines.ts                流式文本按行切分
   src/config.ts                      .env 配置读取
 ```
@@ -39,6 +42,55 @@ npm run dev
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
 | Moonshot | `https://api.moonshot.cn/v1` | `kimi-k2-0711-preview` |
+
+## 运行方式
+
+### 交互式 TUI
+
+```bash
+npm run dev
+```
+
+### 无头模式（单次问答）
+
+```bash
+npm run dev -- -p "这个项目是做什么的"
+npm run dev -- "这个项目是做什么的"          # 位置参数等价
+npm run dev -- --mode auto -p "修一下测试"
+cat task.md | npm run dev -- -p -            # 从 stdin 读 prompt
+
+# 重定向时用 --silent，否则 npm 会在 stdout 前面打印两行命令 banner
+npm run --silent dev -- -p "..." > answer.md
+```
+
+- **stdout 只有模型的文字回复**（加 `--silent` 时），可以直接重定向
+- **stderr** 是工具活动（`→ write_file …` / `✓ 12ms`）、警告与错误
+- 退出码：`0` 成功，`1` 失败或达到最大轮数，`130` 被中断
+
+无头模式下没有人能点审批，所以一律 **fail-closed**：
+
+| 模式 | 无头行为 |
+|---|---|
+| `ask`（默认） | 读写类工具直接拒绝，模型预先被告知不要重试 |
+| `auto` | 自动放行 |
+| `plan` | 拒绝所有修改 |
+
+要让它真的改文件，必须显式 `--mode auto`。
+
+### 指定工作目录
+
+```bash
+npm run dev -- --cwd ../my-app
+npm run dev -- -C ../my-app -p "跑一下测试"
+```
+
+工作目录同时决定：工具能访问的根、`run_command` 的执行目录、`.env` 的查找起点。
+
+`.env` 查找顺序（先命中者生效；真实环境变量永远优先于任何文件）：
+
+1. `<工作目录>/.env`
+2. `<工作目录>/../../.env`（兼容 monorepo）
+3. Cooper 自己的 `.env`（所以换项目时不必复制密钥）
 
 ## 审批模式
 
@@ -79,9 +131,11 @@ COOPER_MODE=auto npm run dev # 也可用环境变量
 ## 命令
 
 ```bash
-npm run dev         # 启动 TUI（从仓库根目录运行）
-npm run typecheck   # 全仓库类型检查
-npm test            # core + cli 单元测试
+npm run dev                                # 启动 TUI（从仓库根目录运行）
+npm run dev -- -p "..." [--mode auto]      # 无头单次运行
+npm run dev -- --cwd ../other-project      # 在别的工作区启动
+npm run typecheck                          # 全仓库类型检查
+npm test                                   # core + cli 单元测试
 ```
 
 ## 架构约定
@@ -92,6 +146,7 @@ npm test            # core + cli 单元测试
 4. 会修改工作区或执行命令的工具必须标记 `requiresApproval`，审批由宿主回调决定。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。
+7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，TUI 与无头模式共用，避免两侧规则漂移。
 
 ## 下一步
 

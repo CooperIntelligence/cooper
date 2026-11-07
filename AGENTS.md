@@ -11,7 +11,8 @@
 - `packages/core/src/provider/` — `Provider` interface and adapters
 - `packages/core/src/tools/` — tool interface and implementations
 - `packages/core/src/agent.ts` — the agent loop and approval hook
-- `apps/cli/src/` — TUI shell only (`app.tsx`, `stream-lines.ts`, `config.ts`)
+- `apps/cli/src/` — surfaces only: `app.tsx` (TUI), `headless.ts` (one-shot),
+  `args.ts`, `system-prompt.ts`, `stream-lines.ts`, `config.ts`
 
 ## Hard rules
 
@@ -38,11 +39,17 @@
    approval panel instead of raw JSON arguments.
 10. `plan` mode is enforced by the host: it denies every approval-gated tool
     and never silently downgrades to `ask`.
+11. Headless (`-p`) runs have no approver and must fail closed: only `auto`
+    allows approval-gated tools. Never default headless to `auto`, and keep
+    `system-prompt.ts` as the single source of the permission instructions
+    shared by `app.tsx` and `headless.ts`.
 
 ## Commands
 
 ```bash
-npm run dev         # start the TUI from the repo root
+npm run dev                              # start the TUI from the repo root
+npm run dev -- -p "..." [--mode auto]    # headless, one-shot
+npm run dev -- --cwd <dir>               # run against another workspace
 npm run typecheck
 npm test
 ```

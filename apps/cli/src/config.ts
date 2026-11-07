@@ -1,7 +1,22 @@
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 
 let envLoaded = false;
+
+/** Nearest .env at or above `start`, so the CLI finds its own credentials. */
+function findEnvFileUpwards(start: string, levels = 5): string | null {
+  let dir = start;
+  for (let depth = 0; depth < levels; depth += 1) {
+    const candidate = path.join(dir, ".env");
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
 
 export function loadEnvFiles(): void {
   if (envLoaded) return;
@@ -13,6 +28,14 @@ export function loadEnvFiles(): void {
     path.resolve(process.cwd(), ".env"),
     path.resolve(process.cwd(), "../../.env"),
   ];
+
+  // `--cwd` may point at a project with no .env of its own, so fall back to
+  // the one next to the CLI rather than forcing credentials to be copied.
+  const cliEnv = findEnvFileUpwards(path.dirname(fileURLToPath(import.meta.url)));
+  if (cliEnv !== null) candidates.push(cliEnv);
+
+  // dotenv never overrides existing values, so the first file defining a key
+  // wins, and real environment variables always win over any file.
   for (const file of candidates) {
     dotenv.config({ path: file, quiet: true });
   }

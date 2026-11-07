@@ -12,6 +12,7 @@ import {
 } from "@cooper/core";
 import type { ApprovalMode, Config } from "./config.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
+import { buildSystemPrompt } from "./system-prompt.js";
 
 type ToolStatus = "running" | "ok" | "error" | "denied";
 
@@ -161,20 +162,10 @@ export function App({
         baseURL: config.baseURL,
       }),
   );
-  const permissionLine =
-    mode === "plan"
-      ? "You are in plan mode: you may inspect files, but do not modify files or run commands. Produce a plan for the user to approve."
-      : "You may inspect files, edit files, and run shell commands. Tools that change the workspace or execute commands require user approval.";
   const history = useRef<Message[]>([
     {
       role: "system",
-      content: [
-        `You are Cooper, a terminal coding agent working in the project at ${root}.`,
-        permissionLine,
-        "Prefer read_file/grep over guessing, and edit_file over write_file for targeted changes.",
-        "Keep changes minimal and verify your work by running tests when appropriate.",
-        "Be concise and reply in the same language as the user.",
-      ].join("\n"),
+      content: buildSystemPrompt({ root, mode, interactive: true }),
     },
   ]);
   const abortRef = useRef<AbortController | null>(null);
