@@ -30,6 +30,64 @@ describe("read_file", () => {
   });
 });
 
+describe("tool previews", () => {
+  it("write_file previews a new file as an empty baseline", async () => {
+    const preview = await writeFileTool.preview?.(
+      { path: "new.txt", content: "hello\n" },
+      { root },
+    );
+    expect(preview).toEqual({
+      kind: "diff",
+      path: "new.txt",
+      before: "",
+      after: "hello\n",
+    });
+  });
+
+  it("write_file previews the existing content as the baseline", async () => {
+    await fs.writeFile(path.join(root, "a.txt"), "old\n", "utf8");
+    const preview = await writeFileTool.preview?.(
+      { path: "a.txt", content: "new\n" },
+      { root },
+    );
+    expect(preview?.kind === "diff" ? preview.before : "").toBe("old\n");
+  });
+
+  it("edit_file previews the applied replacement", async () => {
+    await fs.writeFile(path.join(root, "a.txt"), "one two two\n", "utf8");
+
+    const single = await editFileTool.preview?.(
+      { path: "a.txt", old_string: "one", new_string: "1" },
+      { root },
+    );
+    expect(single?.kind === "diff" ? single.after : "").toBe("1 two two\n");
+
+    const all = await editFileTool.preview?.(
+      { path: "a.txt", old_string: "two", new_string: "2", replace_all: true },
+      { root },
+    );
+    expect(all?.kind === "diff" ? all.after : "").toBe("one 2 2\n");
+  });
+
+  it("edit_file preview keeps $ sequences in the replacement literal", async () => {
+    await fs.writeFile(path.join(root, "a.txt"), "price\n", "utf8");
+    const preview = await editFileTool.preview?.(
+      { path: "a.txt", old_string: "price", new_string: "$& and $1" },
+      { root },
+    );
+    expect(preview?.kind === "diff" ? preview.after : "").toBe("$& and $1\n");
+  });
+
+  it("skips the preview when the edit itself would fail", async () => {
+    await fs.writeFile(path.join(root, "a.txt"), "x\n", "utf8");
+    const missing = await editFileTool.preview?.(
+      { path: "a.txt", old_string: "nope", new_string: "y" },
+      { root },
+    );
+    expect(missing).toBeUndefined();
+  });
+});
+
 describe("write_file", () => {
   it("creates parent directories and writes content", async () => {
     const result = await writeFileTool.execute(

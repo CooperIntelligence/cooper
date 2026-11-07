@@ -11,6 +11,7 @@ import {
   type LoadedInstructions,
   type Message,
 } from "@cooper/core";
+import { buildPreviewRows } from "./preview.js";
 import type { ApprovalMode, Config } from "./config.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
@@ -123,7 +124,10 @@ function ItemRow({ item }: { item: UiItem }) {
   );
 }
 
-function ApprovalPanel({ request }: { request: ApprovalRequest }) {
+export function ApprovalPanel({ request }: { request: ApprovalRequest }) {
+  const preview = request.preview;
+  const diff = preview?.kind === "diff" ? buildPreviewRows(preview) : null;
+
   return (
     <Box
       marginTop={1}
@@ -136,9 +140,44 @@ function ApprovalPanel({ request }: { request: ApprovalRequest }) {
         Approve {request.toolName}?
       </Text>
       <Text wrap="wrap">{request.summary}</Text>
-      <Text dimColor>
-        y allow once · a always allow {request.toolName} · n / esc deny
-      </Text>
+
+      {preview?.kind === "diff" && diff !== null ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>
+            {preview.path} · +{diff.added} −{diff.removed}
+          </Text>
+          {diff.rows.length > 0 ? (
+            diff.rows.map((row, index) => (
+              <Text
+                key={index}
+                color={
+                  row.tone === "add"
+                    ? "green"
+                    : row.tone === "remove"
+                      ? "red"
+                      : row.tone === "hunk"
+                        ? "cyan"
+                        : "gray"
+                }
+                wrap="truncate-end"
+              >
+                {row.text}
+              </Text>
+            ))
+          ) : (
+            <Text dimColor>No changes.</Text>
+          )}
+          {diff.hidden > 0 ? (
+            <Text dimColor>… {diff.hidden} more line(s)</Text>
+          ) : null}
+        </Box>
+      ) : null}
+
+      <Box marginTop={1}>
+        <Text dimColor>
+          y allow once · a always allow {request.toolName} · n / esc deny
+        </Text>
+      </Box>
     </Box>
   );
 }

@@ -17,6 +17,7 @@ export * from "./context/summarize.js";
 export * from "./context/budget.js";
 export * from "./context/window.js";
 export * from "./instructions.js";
+export * from "./diff.js";
 
 /** Every built-in tool: file inspection/editing plus shell execution. */
 export const allTools: Tool[] = [...fileTools, runCommandTool];

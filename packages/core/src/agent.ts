@@ -17,6 +17,7 @@ import {
   toToolSpec,
   type Tool,
   type ToolContext,
+  type ToolPreview,
   type ToolResult,
 } from "./tools/tool.js";
 
@@ -27,6 +28,11 @@ export type ApprovalRequest = {
   summary: string;
   /** Parsed and schema-validated tool input. */
   input: unknown;
+  /**
+   * Side-effect-free preview of the effect (a file diff for edits). Undefined
+   * for tools without a preview or when one cannot be produced.
+   */
+  preview?: ToolPreview;
 };
 
 export type ApprovalDecision = "allow" | "deny";
@@ -261,6 +267,16 @@ export async function* runAgent(
           isError: true,
         };
       } else if (tool.requiresApproval && options.approve) {
+        let preview: ToolPreview | undefined;
+        if (tool.preview) {
+          try {
+            preview = await tool.preview(input, context);
+          } catch {
+            // A preview must never block the call; approval still happens.
+            preview = undefined;
+          }
+        }
+
         let decision: ApprovalDecision = "deny";
         try {
           decision = await options.approve({
@@ -268,6 +284,7 @@ export async function* runAgent(
             toolName: tool.name,
             summary,
             input,
+            preview,
           });
         } catch {
           decision = "deny";

@@ -33,6 +33,8 @@ const BINARY_EXTS = new Set([
 const MAX_LIST_ENTRIES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 48_000;
+/** Above this, an approval preview is skipped rather than rendered. */
+const MAX_PREVIEW_CHARS = 400_000;
 const MAX_SEARCH_FILE_BYTES = 1024 * 1024;
 const MAX_SEARCH_FILES = 5000;
 
@@ -347,6 +349,18 @@ export const writeFileTool: Tool<typeof writeFileSchema> = {
     const suffix = lines.length > 3 ? "\n…" : "";
     return `Write ${input.path} (${input.content.length} chars)\n${preview}${suffix}`;
   },
+  async preview(input, ctx) {
+    if (input.content.length > MAX_PREVIEW_CHARS) return undefined;
+
+    const absolute = resolveInRoot(ctx.root, input.path);
+    const stat = await fs.stat(absolute).catch(() => null);
+    if (stat !== null && (!stat.isFile() || stat.size > MAX_PREVIEW_CHARS)) {
+      return undefined;
+    }
+
+    const before = stat === null ? "" : await fs.readFile(absolute, "utf8");
+    return { kind: "diff", path: input.path, before, after: input.content };
+  },
   async execute(input, ctx) {
     const absolute = resolveInRoot(ctx.root, input.path);
     const bytes = Buffer.byteLength(input.content, "utf8");
@@ -381,6 +395,18 @@ const editFileSchema = z.object({
     ),
 });
 
+function applyEdit(
+  original: string,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean,
+): string {
+  // A function replacement keeps `$&`-style sequences in newString literal.
+  return replaceAll
+    ? original.split(oldString).join(newString)
+    : original.replace(oldString, () => newString);
+}
+
 function countOccurrences(haystack: string, needle: string): number {
   if (needle.length === 0) return 0;
   let count = 0;
@@ -405,6 +431,33 @@ export const editFileTool: Tool<typeof editFileSchema> = {
       `- ${oneLine(input.old_string)}`,
       `+ ${oneLine(input.new_string)}`,
     ].join("\n");
+  },
+  async preview(input, ctx) {
+    if (input.old_string.length === 0) return undefined;
+
+    const absolute = resolveInRoot(ctx.root, input.path);
+    const stat = await fs.stat(absolute).catch(() => null);
+    if (stat === null || !stat.isFile() || stat.size > MAX_PREVIEW_CHARS) {
+      return undefined;
+    }
+
+    const original = await fs.readFile(absolute, "utf8");
+    const count = countOccurrences(original, input.old_string);
+    // No match, or an ambiguous match: execute() will explain the error.
+    if (count === 0) return undefined;
+    if (count > 1 && input.replace_all !== true) return undefined;
+
+    return {
+      kind: "diff",
+      path: input.path,
+      before: original,
+      after: applyEdit(
+        original,
+        input.old_string,
+        input.new_string,
+        input.replace_all === true,
+      ),
+    };
   },
   async execute(input, ctx) {
     if (input.old_string.length === 0) {
@@ -434,10 +487,12 @@ export const editFileTool: Tool<typeof editFileSchema> = {
       );
     }
 
-    const updated =
-      input.replace_all === true
-        ? original.split(input.old_string).join(input.new_string)
-        : original.replace(input.old_string, input.new_string);
+    const updated = applyEdit(
+      original,
+      input.old_string,
+      input.new_string,
+      input.replace_all === true,
+    );
 
     await fs.writeFile(absolute, updated, "utf8");
     return { content: `Replaced ${count} occurrence(s) in ${input.path}` };

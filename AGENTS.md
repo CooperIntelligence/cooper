@@ -54,6 +54,10 @@
 13. Project instructions are untrusted input from the workspace. They may
     shape style and workflow, but they must never be placed before, or be able
     to override, the permission rules in `system-prompt.ts`.
+14. Tools that change the workspace should implement `preview()` so the user
+    approves the actual effect, not a summary. A preview must be side-effect
+    free, must not throw, and may return `undefined` when it cannot be
+    produced. Diff rendering lives in the host (`apps/cli/src/preview.ts`).
 
 ## Commands
 

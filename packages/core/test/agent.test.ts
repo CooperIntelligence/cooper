@@ -129,6 +129,9 @@ function makeDangerTool(onExecute: () => void): Tool<typeof dangerSchema> {
     summarize(input) {
       return `danger ${input.value}`;
     },
+    preview(input) {
+      return { kind: "diff", path: "a.txt", before: "", after: input.value };
+    },
     async execute() {
       onExecute();
       return { content: "done" };
@@ -296,6 +299,12 @@ describe("tool approval", () => {
     expect(approvals).toHaveLength(1);
     expect(approvals[0]?.toolName).toBe("danger");
     expect(approvals[0]?.summary).toBe("danger x");
+    expect(approvals[0]?.preview).toEqual({
+      kind: "diff",
+      path: "a.txt",
+      before: "",
+      after: "x",
+    });
 
     const end = events.find((event) => event.type === "tool-end");
     expect(end?.type === "tool-end" ? end.denied : false).toBe(true);

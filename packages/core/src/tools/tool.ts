@@ -11,6 +11,15 @@ export type ToolResult = {
   isError?: boolean;
 };
 
+/**
+ * A side-effect-free description of what a call will do, shown to the user
+ * before they approve it. Carrying the before/after text (rather than a
+ * pre-rendered diff) keeps the rendering decision in the host.
+ */
+export type ToolPreview =
+  | { kind: "diff"; path: string; before: string; after: string }
+  | { kind: "text"; title: string; text: string };
+
 export type Tool<S extends z.ZodType = z.ZodType> = {
   name: string;
   description: string;
@@ -19,6 +28,14 @@ export type Tool<S extends z.ZodType = z.ZodType> = {
   requiresApproval?: boolean;
   /** Short, human-readable description of a call, shown in approvals and the UI. */
   summarize?(input: z.infer<S>): string;
+  /**
+   * Optional preview of the effect. Must not modify anything, and may return
+   * undefined when a preview would be misleading or too expensive.
+   */
+  preview?(
+    input: z.infer<S>,
+    ctx: ToolContext,
+  ): Promise<ToolPreview | undefined> | ToolPreview | undefined;
   execute(input: z.infer<S>, ctx: ToolContext): Promise<ToolResult>;
 };
 

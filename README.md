@@ -1,6 +1,6 @@
 # Cooper
 
-一个 TUI 形式的 Coding Agent。当前处于**阶段 1**：完整编码闭环——读写文件、执行命令、审批控制。
+一个 Coding Agent，早期阶段以 TUI 为主要形式（后续可能扩展 desktop / server 等其他形态）。当前处于**阶段 1**：完整编码闭环——读写文件、执行命令、审批控制。
 
 ## 目录结构
 
@@ -14,6 +14,7 @@ packages/core/
   src/tools/paths.ts                 工作区路径逃逸防护
   src/tools/fs.ts                    list_dir / read_file / grep / write_file / edit_file
   src/tools/shell.ts                 run_command
+  src/diff.ts                        行级 diff（供审批预览）
   src/context/estimator.ts           token 估算（CJK 感知）+ 真实 usage 校准
   src/context/groups.ts              消息分组与安全压缩边界
   src/context/prune.ts               L1：旧工具输出剪枝
@@ -26,6 +27,7 @@ apps/cli/
   src/args.ts                        命令行参数解析（纯函数，可单测）
   src/app.tsx                        Ink + React TUI + 审批面板
   src/headless.ts                    无头单次运行（stdout=回复，stderr=工具活动）
+  src/preview.ts                     审批面板的 diff 行构造
   src/system-prompt.ts               系统提示（两种界面共用）
   src/stream-lines.ts                流式文本按行切分
   src/config.ts                      .env 配置读取
@@ -123,6 +125,8 @@ npm run dev                  # ask
 npm run dev -- --mode plan   # 只读规划
 COOPER_MODE=auto npm run dev # 也可用环境变量
 ```
+
+`write_file` / `edit_file` 的审批面板会显示**真实 diff**：带 3 行上下文，`+` 绿色、`-` 红色，最多 18 行，超出部分折叠成计数。工具通过可选的 `preview()` 提供 `before` / `after`，diff 在宿主侧计算，所以未来的 desktop / server 界面可以换一种渲染方式。
 
 审批面板按键：
 
