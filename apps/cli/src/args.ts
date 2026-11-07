@@ -7,6 +7,8 @@ export type ParsedArgs = {
   cwd: string | undefined;
   /** Prompt for a non-interactive run. "-" means read stdin. null starts the TUI. */
   prompt: string | null;
+  /** Stream the model's reasoning summary instead of just an indicator. */
+  showReasoning: boolean;
   help: boolean;
 };
 
@@ -35,6 +37,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     mode: undefined,
     cwd: undefined,
     prompt: null,
+    showReasoning: false,
     help: false,
   };
 
@@ -86,6 +89,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
         }
         if (value.trim() === "") throw new Error("--cwd requires a directory.");
         parsed.cwd = value;
+        break;
+      }
+
+      case "--show-reasoning": {
+        parsed.showReasoning = true;
         break;
       }
 

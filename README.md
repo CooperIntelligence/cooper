@@ -134,6 +134,17 @@ COOPER_MODE=auto npm run dev # 也可用环境变量
 - `a` 本次会话内始终允许该工具
 - `n` / `Esc` 拒绝（模型会收到拒绝结果并继续解释）
 
+## 推理内容
+
+支持 `reasoning_content` / `reasoning` 字段的端点（DeepSeek、Kimi、Qwen、OpenRouter 等）会额外返回模型的推理摘要。
+
+- **默认**：不显示文本，只在运行时显示 `reasoning 12.3k chars` 的进度提示；端点报告推理 token 数时，每轮结束留一行 `· reasoned 1.2k tokens`
+- **`--show-reasoning`**（或 `COOPER_SHOW_REASONING=1`）：按完整行以暗灰色提交到滚动区；无头模式写到 stderr，stdout 仍然只有答案
+
+**推理内容永远不进入对话历史**，也不会被将来的会话持久化保存。三个原因：DeepSeek 明确要求 `reasoning_content` 不能回传；回传只会白白消耗上下文；推理摘要未必忠实反映模型的实际计算，让它变成后续轮次的上下文会污染判断。
+
+不是所有端点都返回推理文本——OpenAI 的推理模型通过 chat completions 只给 token 计数，Anthropic 返回的是摘要。所以这是"有就显示、没有就沉默"的能力，不能当成核心功能依赖。
+
 ## 上下文管理
 
 长会话不会撞上下文上限：每次请求前估算 token 数，超阈值就按"最便宜的先做"分三层处理。

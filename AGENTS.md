@@ -58,6 +58,10 @@
     approves the actual effect, not a summary. A preview must be side-effect
     free, must not throw, and may return `undefined` when it cannot be
     produced. Diff rendering lives in the host (`apps/cli/src/preview.ts`).
+15. Reasoning/thinking text is display-only. It must never be appended to
+    `messages` or persisted: DeepSeek rejects `reasoning_content` being sent
+    back, and unfaithful reasoning must not become context for later turns.
+    It also must never reach headless stdout, which stays answer-only.
 
 ## Commands
 

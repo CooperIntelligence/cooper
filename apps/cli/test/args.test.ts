@@ -7,6 +7,7 @@ describe("parseArgs", () => {
       mode: undefined,
       cwd: undefined,
       prompt: null,
+      showReasoning: false,
       help: false,
     });
   });
@@ -53,6 +54,11 @@ describe("parseArgs", () => {
 
   it("rejects unknown flags", () => {
     expect(() => parseArgs(["--nope"])).toThrow(/Unknown argument/);
+  });
+
+  it("enables reasoning output with --show-reasoning", () => {
+    expect(parseArgs(["--show-reasoning"]).showReasoning).toBe(true);
+    expect(parseArgs(["-p", "hi"]).showReasoning).toBe(false);
   });
 
   it("recognises help", () => {

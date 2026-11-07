@@ -15,10 +15,18 @@ export type ChatRequest = {
 export type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
+  /** Output tokens spent on reasoning, when the provider breaks them out. */
+  reasoningTokens?: number;
 };
 
 export type ProviderEvent =
   | { type: "text"; delta: string }
+  /**
+   * A reasoning/thinking summary. Never part of the conversation history:
+   * providers such as DeepSeek reject `reasoning_content` being sent back,
+   * and unfaithful reasoning must not become context for later turns.
+   */
+  | { type: "reasoning"; delta: string }
   | {
       type: "done";
       message: AssistantMessage;

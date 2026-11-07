@@ -96,6 +96,49 @@ describe("OpenAICompatibleProvider", () => {
     expect(done?.type === "done" ? done.message.content : "").toBe("Hello");
   });
 
+  it("surfaces reasoning deltas without mixing them into the answer", async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(sse(chunk({ reasoning_content: "think " })));
+      response.write(sse(chunk({ reasoning_content: "hard" })));
+      response.write(sse(chunk({ content: "answer" })));
+      response.end(sse(chunk({}, "stop")) + "data: [DONE]\n\n");
+    });
+    servers.push(server);
+
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("failed to start mock server");
+    }
+
+    const provider = new OpenAICompatibleProvider({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+    });
+
+    const events: ProviderEvent[] = [];
+    for await (const event of provider.stream({
+      model: "test-model",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    })) {
+      events.push(event);
+    }
+
+    const reasoning = events
+      .filter((event) => event.type === "reasoning")
+      .map((event) => (event.type === "reasoning" ? event.delta : ""))
+      .join("");
+    expect(reasoning).toBe("think hard");
+
+    const done = events.find((event) => event.type === "done");
+    expect(done?.type === "done" ? done.message.content : "").toBe("answer");
+  });
+
   it("reports token usage from the final chunk", async () => {
     const server = createServer((request, response) => {
       request.resume();

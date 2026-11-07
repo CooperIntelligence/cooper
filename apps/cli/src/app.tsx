@@ -21,6 +21,7 @@ type ToolStatus = "running" | "ok" | "error" | "denied";
 type UiItem =
   | { id: number; kind: "user"; text: string }
   | { id: number; kind: "assistant-line"; text: string; first: boolean }
+  | { id: number; kind: "reasoning-line"; text: string }
   | {
       id: number;
       kind: "tool";
@@ -39,6 +40,10 @@ function truncate(text: string, max: number): string {
 
 function formatTokens(tokens: number): string {
   return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+}
+
+function formatCount(count: number): string {
+  return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
 }
 
 function previewLines(text: string, maxLines = 6): string[] {
@@ -71,6 +76,16 @@ function ItemRow({ item }: { item: UiItem }) {
           </Text>
         ) : null}
         <Text wrap="wrap">{item.text.length > 0 ? item.text : " "}</Text>
+      </Box>
+    );
+  }
+
+  if (item.kind === "reasoning-line") {
+    return (
+      <Box>
+        <Text color="gray" dimColor wrap="wrap">
+          {`· ${item.text}`}
+        </Text>
       </Box>
     );
   }
@@ -194,11 +209,13 @@ export function App({
   root,
   mode,
   instructions,
+  showReasoning,
 }: {
   config: Config;
   root: string;
   mode: ApprovalMode;
   instructions: LoadedInstructions;
+  showReasoning: boolean;
 }) {
   const { exit } = useApp();
   const [provider] = useState(
@@ -247,6 +264,9 @@ export function App({
   const [live, setLive] = useState<UiItem | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reasoningHint, setReasoningHint] = useState<string | null>(null);
+  // Tail of the reasoning line that has not been committed yet.
+  const [liveReasoning, setLiveReasoning] = useState<string | null>(null);
 
   const resolveApproval = (decision: ApprovalDecision) => {
     const resolver = approvalResolver.current;
@@ -317,6 +337,11 @@ export function App({
     let liveLineId: number | null = null;
     let sawText = false;
 
+    // Reasoning is display-only: it never enters the conversation history.
+    let reasoningBuffer = "";
+    let reasoningChars = 0;
+    let lastHintAt = 0;
+
     const commitLine = (line: string) => {
       push({
         id: nextId.current++,
@@ -375,6 +400,52 @@ export function App({
       sawText = false;
     };
 
+    const showLiveReasoning = () => {
+      if (!showReasoning || reasoningBuffer.length === 0) {
+        setLiveReasoning(null);
+        return;
+      }
+      // The live region stays one row; the full line is committed on flush.
+      const preview =
+        reasoningBuffer.length > 240
+          ? `…${reasoningBuffer.slice(-240)}`
+          : reasoningBuffer;
+      setLiveReasoning(preview);
+    };
+
+    const flushReasoning = () => {
+      if (!showReasoning) return;
+      if (reasoningBuffer.length > 0) {
+        push({
+          id: nextId.current++,
+          kind: "reasoning-line",
+          text: reasoningBuffer,
+        });
+        reasoningBuffer = "";
+      }
+      setLiveReasoning(null);
+    };
+
+    const handleReasoning = (delta: string) => {
+      reasoningChars += delta.length;
+
+      if (showReasoning) {
+        const split = splitCompletedLines(reasoningBuffer, delta);
+        reasoningBuffer = split.buffer;
+        for (const line of split.lines) {
+          push({ id: nextId.current++, kind: "reasoning-line", text: line });
+        }
+        showLiveReasoning();
+      }
+
+      // Throttle: reasoning arrives in many small deltas.
+      const now = Date.now();
+      if (now - lastHintAt >= 120) {
+        lastHintAt = now;
+        setReasoningHint(`reasoning ${formatCount(reasoningChars)} chars`);
+      }
+    };
+
     try {
       for await (const event of runAgent({
         provider,
@@ -401,12 +472,35 @@ export function App({
             break;
 
           case "text-delta":
+            // Any pending reasoning belongs before the answer, not after it.
+            flushReasoning();
             appendText(event.delta);
             break;
 
-          case "assistant-done":
-            flushText(event.content);
+          case "reasoning-delta":
+            handleReasoning(event.delta);
             break;
+
+          case "assistant-done": {
+            flushReasoning();
+
+            const reasoningTokens = event.usage?.reasoningTokens;
+            if (
+              !showReasoning &&
+              reasoningTokens !== undefined &&
+              reasoningTokens > 0
+            ) {
+              push({
+                id: nextId.current++,
+                kind: "reasoning-line",
+                text: `reasoned ${formatTokens(reasoningTokens)} tokens`,
+              });
+            }
+
+            flushText(event.content);
+            setReasoningHint(null);
+            break;
+          }
 
           case "tool-start": {
             const toolItemId = nextId.current++;
@@ -482,6 +576,8 @@ export function App({
       abortRef.current = null;
       busyRef.current = false;
       setBusy(false);
+      setReasoningHint(null);
+      setLiveReasoning(null);
     }
   };
 
@@ -490,6 +586,14 @@ export function App({
       <Static items={committed} style={{ width: "100%" }}>
         {(item) => <ItemRow key={item.id} item={item} />}
       </Static>
+
+      {liveReasoning !== null ? (
+        <Box>
+          <Text color="gray" dimColor wrap="truncate-end">
+            {`· ${liveReasoning}`}
+          </Text>
+        </Box>
+      ) : null}
 
       {live ? <ItemRow item={live} /> : null}
       {pendingApproval ? <ApprovalPanel request={pendingApproval} /> : null}
@@ -500,7 +604,9 @@ export function App({
             <Text color="yellow">
               <Spinner type="dots" />
             </Text>
-            <Text dimColor>{"  working — esc to interrupt"}</Text>
+            <Text dimColor>
+              {`  ${reasoningHint ?? "working"} — esc to interrupt`}
+            </Text>
           </Text>
         ) : (
           <Box>

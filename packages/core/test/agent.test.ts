@@ -201,6 +201,59 @@ class ContextLimitProvider implements Provider {
   }
 }
 
+class ReasoningProvider implements Provider {
+  readonly requests: ChatRequest[] = [];
+
+  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
+    this.requests.push(request);
+    yield { type: "reasoning", delta: "secret reasoning" };
+    yield { type: "text", delta: "done" };
+    yield {
+      type: "done",
+      message: { content: "done", toolCalls: [] },
+      finishReason: "stop",
+      usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 42 },
+    };
+  }
+}
+
+describe("reasoning", () => {
+  it("streams reasoning without adding it to the conversation", async () => {
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const provider = new ReasoningProvider();
+    const events: AgentEvent[] = [];
+
+    for await (const event of runAgent({
+      provider,
+      model: "test-model",
+      tools: [],
+      messages,
+      context: { root: process.cwd() },
+      contextBudget: false,
+    })) {
+      events.push(event);
+    }
+
+    const reasoning = events.filter(
+      (event) => event.type === "reasoning-delta",
+    );
+    expect(reasoning).toHaveLength(1);
+
+    // The history must not contain the reasoning text: DeepSeek rejects it
+    // being sent back, and it is not part of the conversation.
+    expect(
+      messages.every((message) => !message.content.includes("secret")),
+    ).toBe(true);
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "done",
+    });
+
+    const done = events.find((event) => event.type === "assistant-done");
+    expect(done?.type === "assistant-done" ? done.usage?.reasoningTokens : 0).toBe(42);
+  });
+});
+
 describe("context budget", () => {
   it("compacts and retries when the real window is smaller than assumed", async () => {
     const messages: Message[] = [

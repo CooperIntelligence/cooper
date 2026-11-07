@@ -119,6 +119,9 @@ export class OpenAICompatibleProvider implements Provider {
         usage = {
           inputTokens: chunk.usage.prompt_tokens,
           outputTokens: chunk.usage.completion_tokens,
+          reasoningTokens:
+            chunk.usage.completion_tokens_details?.reasoning_tokens ??
+            undefined,
         };
       }
 
@@ -126,6 +129,17 @@ export class OpenAICompatibleProvider implements Provider {
       if (!choice) continue;
 
       const delta = choice.delta;
+      // Non-standard fields: DeepSeek/Kimi/Qwen use `reasoning_content`,
+      // OpenRouter normalizes to `reasoning`. Neither is in the SDK types.
+      const reasoningDelta = delta as
+        | { reasoning_content?: string; reasoning?: string }
+        | undefined;
+      const reasoning =
+        reasoningDelta?.reasoning_content ?? reasoningDelta?.reasoning;
+      if (typeof reasoning === "string" && reasoning.length > 0) {
+        yield { type: "reasoning", delta: reasoning };
+      }
+
       if (typeof delta?.content === "string" && delta.content.length > 0) {
         content += delta.content;
         yield { type: "text", delta: delta.content };

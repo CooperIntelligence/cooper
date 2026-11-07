@@ -56,6 +56,8 @@ export type Config = {
   context: ContextSettings;
   /** True when the model was not recognised and a default window was assumed. */
   contextWindowAssumed: boolean;
+  /** Stream reasoning text instead of showing only an indicator. */
+  showReasoning: boolean;
 };
 
 function positiveInt(value: string | undefined, fallback: number): number {
@@ -114,5 +116,6 @@ export function loadConfig(): Config {
     model,
     context,
     contextWindowAssumed: resolved.assumed,
+    showReasoning: envFlag(process.env.COOPER_SHOW_REASONING, false),
   };
 }

@@ -18,6 +18,8 @@ export type HeadlessOptions = {
   prompt: string;
   provider: Provider;
   instructions: LoadedInstructions;
+  /** Write the reasoning summary to stderr (stdout stays answer-only). */
+  showReasoning: boolean;
   /** Assistant text. Kept clean so it can be piped or redirected. */
   out: Writer;
   /** Tool activity, warnings, and errors. */
@@ -50,6 +52,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     prompt,
     provider,
     instructions,
+    showReasoning,
     out,
     err,
     signal,
@@ -87,6 +90,38 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
   let wroteText = false;
   let sawDelta = false;
 
+  // Reasoning is display-only and never enters the conversation history.
+  // It streams to stderr in real time: buffering to completed lines would
+  // reorder short, newline-free reasoning until after the answer.
+  let reasoningOpen = false;
+  let reasoningLineStart = true;
+
+  const writeReasoning = (delta: string) => {
+    if (!reasoningOpen) {
+      endTextLine();
+      reasoningOpen = true;
+      reasoningLineStart = true;
+    }
+    const parts = delta.split("\n");
+    for (let index = 0; index < parts.length; index += 1) {
+      if (reasoningLineStart) {
+        err.write("⋯ ");
+        reasoningLineStart = false;
+      }
+      err.write(parts[index] ?? "");
+      if (index < parts.length - 1) {
+        err.write("\n");
+        reasoningLineStart = true;
+      }
+    }
+  };
+
+  const closeReasoning = () => {
+    if (!reasoningOpen) return;
+    if (!reasoningLineStart) err.write("\n");
+    reasoningOpen = false;
+  };
+
   const writeText = (delta: string) => {
     if (delta.length === 0) return;
     out.write(delta);
@@ -121,12 +156,20 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
         }
 
         case "text-delta": {
+          // Reasoning for this turn is over once the answer starts.
+          closeReasoning();
           sawDelta = true;
           writeText(event.delta);
           break;
         }
 
+        case "reasoning-delta": {
+          if (showReasoning) writeReasoning(event.delta);
+          break;
+        }
+
         case "assistant-done": {
+          closeReasoning();
           // Some providers report text only in the completion, with no deltas.
           if (!sawDelta) writeText(event.content);
           break;
@@ -165,6 +208,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       }
     }
   } catch (error) {
+    closeReasoning();
     endTextLine();
     if (signal?.aborted) {
       err.write("Interrupted.\n");

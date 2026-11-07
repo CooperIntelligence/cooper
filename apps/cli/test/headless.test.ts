@@ -17,6 +17,7 @@ const config: Config = {
   model: "test-model",
   context: { window: 200_000 },
   contextWindowAssumed: false,
+  showReasoning: false,
 };
 
 const noInstructions: LoadedInstructions = { text: "", sources: [] };
@@ -46,6 +47,18 @@ class NoDeltaProvider implements Provider {
       type: "done",
       message: { content: "from completion", toolCalls: [] },
       finishReason: null,
+    };
+  }
+}
+
+class ReasoningProvider implements Provider {
+  async *stream(): AsyncIterable<ProviderEvent> {
+    yield { type: "reasoning", delta: "let me think\n" };
+    yield { type: "text", delta: "answer" };
+    yield {
+      type: "done",
+      message: { content: "answer", toolCalls: [] },
+      finishReason: "stop",
     };
   }
 }
@@ -104,6 +117,7 @@ describe("runHeadless", () => {
       config,
       root,
       instructions: noInstructions,
+      showReasoning: false,
       mode: "auto",
       prompt: "hi",
       provider: new ScriptedProvider([{ content: "Hello\nworld", toolCalls: [] }]),
@@ -124,6 +138,7 @@ describe("runHeadless", () => {
       config,
       root,
       instructions: noInstructions,
+      showReasoning: false,
       mode: "auto",
       prompt: "hi",
       provider: new NoDeltaProvider(),
@@ -144,6 +159,7 @@ describe("runHeadless", () => {
       config,
       root,
       instructions: noInstructions,
+      showReasoning: false,
       mode: "auto",
       prompt: "write it",
       provider: new ScriptedProvider([
@@ -170,6 +186,7 @@ describe("runHeadless", () => {
       config,
       root,
       instructions: noInstructions,
+      showReasoning: false,
       mode: "ask",
       prompt: "write it",
       provider: new ScriptedProvider([
@@ -195,6 +212,7 @@ describe("runHeadless", () => {
       config,
       root,
       instructions: noInstructions,
+      showReasoning: false,
       mode: "plan",
       prompt: "write it",
       provider: new ScriptedProvider([
@@ -210,6 +228,49 @@ describe("runHeadless", () => {
     expect(err.text).toContain("⊘");
   });
 
+  it("keeps reasoning out of stdout and shows it on stderr when enabled", async () => {
+    const root = await makeWorkspace();
+    const out = collector();
+    const err = collector();
+
+    const code = await runHeadless({
+      config,
+      root,
+      instructions: noInstructions,
+      showReasoning: true,
+      mode: "auto",
+      prompt: "hi",
+      provider: new ReasoningProvider(),
+      out,
+      err,
+    });
+
+    expect(code).toBe(0);
+    expect(out.text).toBe("answer\n");
+    expect(err.text).toContain("⋯ let me think");
+  });
+
+  it("stays silent about reasoning by default", async () => {
+    const root = await makeWorkspace();
+    const out = collector();
+    const err = collector();
+
+    await runHeadless({
+      config,
+      root,
+      instructions: noInstructions,
+      showReasoning: false,
+      mode: "auto",
+      prompt: "hi",
+      provider: new ReasoningProvider(),
+      out,
+      err,
+    });
+
+    expect(out.text).toBe("answer\n");
+    expect(err.text).not.toContain("let me think");
+  });
+
   it("returns 1 and reports provider failures", async () => {
     const root = await makeWorkspace();
     const err = collector();
@@ -218,6 +279,7 @@ describe("runHeadless", () => {
       config,
       root,
       instructions: noInstructions,
+      showReasoning: false,
       mode: "auto",
       prompt: "hi",
       provider: new FailingProvider(),

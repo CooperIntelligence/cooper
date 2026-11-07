@@ -1,5 +1,5 @@
 import type { Message, ToolCall } from "./types.js";
-import type { Provider } from "./provider/types.js";
+import type { Provider, TokenUsage } from "./provider/types.js";
 import {
   DEFAULT_CONTEXT_CONFIG,
   estimateContextTokens,
@@ -40,7 +40,14 @@ export type ApprovalDecision = "allow" | "deny";
 export type AgentEvent =
   | { type: "turn-start"; turn: number }
   | { type: "text-delta"; delta: string }
-  | { type: "assistant-done"; content: string; toolCalls: ToolCall[] }
+  /** Ephemeral reasoning summary. Never added to `messages`. */
+  | { type: "reasoning-delta"; delta: string }
+  | {
+      type: "assistant-done";
+      content: string;
+      toolCalls: ToolCall[];
+      usage?: TokenUsage;
+    }
   | { type: "tool-start"; call: ToolCall; summary: string }
   | {
       type: "tool-end";
@@ -165,12 +172,14 @@ export async function* runAgent(
 
     let content = "";
     let toolCalls: ToolCall[] = [];
+    let usage: TokenUsage | undefined;
     let emittedText = false;
     let retried = false;
 
     for (;;) {
       content = "";
       toolCalls = [];
+      usage = undefined;
       emittedText = false;
 
       const estimated = estimateContextTokens(messages, specs, calibration);
@@ -186,9 +195,12 @@ export async function* runAgent(
             emittedText = true;
             content += event.delta;
             yield { type: "text-delta", delta: event.delta };
+          } else if (event.type === "reasoning") {
+            yield { type: "reasoning-delta", delta: event.delta };
           } else if (event.type === "done") {
             content = event.message.content;
             toolCalls = event.message.toolCalls;
+            usage = event.usage;
             if (event.usage?.inputTokens) {
               calibration = updateCalibration(
                 calibration,
@@ -230,7 +242,7 @@ export async function* runAgent(
         ? { role: "assistant", content, toolCalls }
         : { role: "assistant", content },
     );
-    yield { type: "assistant-done", content, toolCalls };
+    yield { type: "assistant-done", content, toolCalls, usage };
 
     if (toolCalls.length === 0) return;
 

@@ -29,6 +29,8 @@ Options:
   -m, --mode <mode>   ask (default) | auto | plan
   -C, --cwd <dir>     workspace directory (default: current directory)
   -p, --print [text]  non-interactive; omit text or use "-" for stdin
+      --show-reasoning
+                      stream the model's reasoning summary (dim, display-only)
   -h, --help          show this help
 
 Modes:
@@ -44,6 +46,8 @@ Environment:
   COOPER_BASE_URL   OpenAI-compatible endpoint
   COOPER_MODEL      Model name
   COOPER_MODE       Default approval mode (flag wins)
+  COOPER_SHOW_REASONING
+                    Set to 1 to show reasoning summaries by default
 
 .env is read from the workspace, then from the directory next to Cooper.
 `;
@@ -106,6 +110,8 @@ async function main(): Promise<void> {
     fail(error);
   }
 
+  const showReasoning = args.showReasoning || config.showReasoning;
+
   if (args.prompt !== null) {
     const prompt = (
       args.prompt === "-" ? await readStdin() : args.prompt
@@ -127,6 +133,7 @@ async function main(): Promise<void> {
       prompt,
       provider,
       instructions,
+      showReasoning,
       out: process.stdout,
       err: process.stderr,
       signal: controller.signal,
@@ -136,7 +143,13 @@ async function main(): Promise<void> {
   }
 
   const { waitUntilExit } = render(
-    <App config={config} root={root} mode={mode} instructions={instructions} />,
+    <App
+      config={config}
+      root={root}
+      mode={mode}
+      instructions={instructions}
+      showReasoning={showReasoning}
+    />,
     { exitOnCtrlC: false },
   );
   await waitUntilExit();
