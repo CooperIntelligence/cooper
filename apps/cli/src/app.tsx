@@ -8,11 +8,12 @@ import {
   runAgent,
   type ApprovalDecision,
   type ApprovalRequest,
+  type LoadedInstructions,
   type Message,
 } from "@cooper/core";
 import type { ApprovalMode, Config } from "./config.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
-import { buildSystemPrompt } from "./system-prompt.js";
+import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 
 type ToolStatus = "running" | "ok" | "error" | "denied";
 
@@ -153,10 +154,12 @@ export function App({
   config,
   root,
   mode,
+  instructions,
 }: {
   config: Config;
   root: string;
   mode: ApprovalMode;
+  instructions: LoadedInstructions;
 }) {
   const { exit } = useApp();
   const [provider] = useState(
@@ -169,7 +172,12 @@ export function App({
   const history = useRef<Message[]>([
     {
       role: "system",
-      content: buildSystemPrompt({ root, mode, interactive: true }),
+      content: buildSystemPrompt({
+        root,
+        mode,
+        interactive: true,
+        instructions: instructions.text,
+      }),
     },
   ]);
   const abortRef = useRef<AbortController | null>(null);
@@ -193,7 +201,8 @@ export function App({
       text:
         `Cooper ready · ${config.model} · ${root}\n` +
         `Mode: ${mode}${mode === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.\n` +
-        `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%`,
+        `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
+        `Instructions: ${describeInstructions(instructions.sources, root)}`,
     },
   ]);
   const [live, setLive] = useState<UiItem | null>(null);

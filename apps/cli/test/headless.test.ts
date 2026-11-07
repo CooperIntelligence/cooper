@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   AssistantMessage,
+  LoadedInstructions,
   Provider,
   ProviderEvent,
 } from "@cooper/core";
@@ -17,6 +18,8 @@ const config: Config = {
   context: { window: 200_000 },
   contextWindowAssumed: false,
 };
+
+const noInstructions: LoadedInstructions = { text: "", sources: [] };
 
 class ScriptedProvider implements Provider {
   private index = 0;
@@ -100,6 +103,7 @@ describe("runHeadless", () => {
     const code = await runHeadless({
       config,
       root,
+      instructions: noInstructions,
       mode: "auto",
       prompt: "hi",
       provider: new ScriptedProvider([{ content: "Hello\nworld", toolCalls: [] }]),
@@ -119,6 +123,7 @@ describe("runHeadless", () => {
     const code = await runHeadless({
       config,
       root,
+      instructions: noInstructions,
       mode: "auto",
       prompt: "hi",
       provider: new NoDeltaProvider(),
@@ -138,6 +143,7 @@ describe("runHeadless", () => {
     const code = await runHeadless({
       config,
       root,
+      instructions: noInstructions,
       mode: "auto",
       prompt: "write it",
       provider: new ScriptedProvider([
@@ -163,6 +169,7 @@ describe("runHeadless", () => {
     const code = await runHeadless({
       config,
       root,
+      instructions: noInstructions,
       mode: "ask",
       prompt: "write it",
       provider: new ScriptedProvider([
@@ -187,6 +194,7 @@ describe("runHeadless", () => {
     const code = await runHeadless({
       config,
       root,
+      instructions: noInstructions,
       mode: "plan",
       prompt: "write it",
       provider: new ScriptedProvider([
@@ -209,6 +217,7 @@ describe("runHeadless", () => {
     const code = await runHeadless({
       config,
       root,
+      instructions: noInstructions,
       mode: "auto",
       prompt: "hi",
       provider: new FailingProvider(),

@@ -1,11 +1,12 @@
 import {
   allTools,
   runAgent,
+  type LoadedInstructions,
   type Message,
   type Provider,
 } from "@cooper/core";
 import type { ApprovalMode, Config } from "./config.js";
-import { buildSystemPrompt } from "./system-prompt.js";
+import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 
 /** Minimal sink so tests can capture output without real streams. */
 export type Writer = { write(chunk: string): unknown };
@@ -16,6 +17,7 @@ export type HeadlessOptions = {
   mode: ApprovalMode;
   prompt: string;
   provider: Provider;
+  instructions: LoadedInstructions;
   /** Assistant text. Kept clean so it can be piped or redirected. */
   out: Writer;
   /** Tool activity, warnings, and errors. */
@@ -41,7 +43,23 @@ function formatTokens(tokens: number): string {
  * `auto` allows approval-gated tools; `ask` and `plan` deny them.
  */
 export async function runHeadless(options: HeadlessOptions): Promise<number> {
-  const { config, root, mode, prompt, provider, out, err, signal } = options;
+  const {
+    config,
+    root,
+    mode,
+    prompt,
+    provider,
+    instructions,
+    out,
+    err,
+    signal,
+  } = options;
+
+  if (instructions.sources.length > 0) {
+    err.write(
+      `instructions: ${describeInstructions(instructions.sources, root)}\n`,
+    );
+  }
 
   if (mode === "ask") {
     err.write(
@@ -55,7 +73,12 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
   const messages: Message[] = [
     {
       role: "system",
-      content: buildSystemPrompt({ root, mode, interactive: false }),
+      content: buildSystemPrompt({
+        root,
+        mode,
+        interactive: false,
+        instructions: instructions.text,
+      }),
     },
     { role: "user", content: prompt },
   ];

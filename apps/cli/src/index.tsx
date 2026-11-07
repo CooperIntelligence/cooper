@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import React from "react";
 import { render } from "ink";
-import { OpenAICompatibleProvider } from "@cooper/core";
+import {
+  OpenAICompatibleProvider,
+  loadProjectInstructions,
+  type LoadedInstructions,
+} from "@cooper/core";
 import { App } from "./app.js";
 import { parseArgs, resolveMode, type ParsedArgs } from "./args.js";
 import {
@@ -88,6 +92,7 @@ async function main(): Promise<void> {
   let root: string;
   let config: Config;
   let mode: ApprovalMode;
+  let instructions: LoadedInstructions;
   try {
     root = resolveRoot(args.cwd);
     // One workspace root for everything: .env lookup, tool paths, and child
@@ -96,6 +101,7 @@ async function main(): Promise<void> {
     loadEnvFiles();
     config = loadConfig();
     mode = resolveMode(args.mode, process.env.COOPER_MODE);
+    instructions = await loadProjectInstructions(root);
   } catch (error) {
     fail(error);
   }
@@ -120,6 +126,7 @@ async function main(): Promise<void> {
       mode,
       prompt,
       provider,
+      instructions,
       out: process.stdout,
       err: process.stderr,
       signal: controller.signal,
@@ -129,7 +136,7 @@ async function main(): Promise<void> {
   }
 
   const { waitUntilExit } = render(
-    <App config={config} root={root} mode={mode} />,
+    <App config={config} root={root} mode={mode} instructions={instructions} />,
     { exitOnCtrlC: false },
   );
   await waitUntilExit();

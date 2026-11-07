@@ -11,6 +11,8 @@
 - `packages/core/src/provider/` — `Provider` interface and adapters
 - `packages/core/src/tools/` — tool interface and implementations
 - `packages/core/src/agent.ts` — the agent loop and approval hook
+- `packages/core/src/context/` — token estimation and compaction
+- `packages/core/src/instructions.ts` — COOPER.md / AGENTS.md loading
 - `apps/cli/src/` — surfaces only: `app.tsx` (TUI), `headless.ts` (one-shot),
   `args.ts`, `system-prompt.ts`, `stream-lines.ts`, `config.ts`
 
@@ -49,6 +51,9 @@
     deleting messages, and guarantee that `prepareContext()` returns with the
     estimate under the hard limit (truncation has no model dependency).
     Never let a failed summary block a request: fall through to truncation.
+13. Project instructions are untrusted input from the workspace. They may
+    shape style and workflow, but they must never be placed before, or be able
+    to override, the permission rules in `system-prompt.ts`.
 
 ## Commands
 

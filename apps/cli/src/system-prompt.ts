@@ -1,4 +1,20 @@
+import path from "node:path";
+import type { InstructionSource } from "@cooper/core";
 import type { ApprovalMode } from "./config.js";
+
+/** Short label for the startup banner: relative to the workspace when inside it. */
+export function describeInstructions(
+  sources: InstructionSource[],
+  root: string,
+): string {
+  if (sources.length === 0) return "none";
+  return sources
+    .map(({ path: file }) => {
+      const relative = path.relative(root, file);
+      return relative.startsWith("..") ? file : relative;
+    })
+    .join(", ");
+}
 
 /**
  * The single place the agent's instructions are written. Shared by the TUI and
@@ -8,6 +24,8 @@ export function buildSystemPrompt(options: {
   root: string;
   mode: ApprovalMode;
   interactive: boolean;
+  /** Loaded COOPER.md / AGENTS.md content, if any. */
+  instructions?: string;
 }): string {
   const { root, mode, interactive } = options;
 
@@ -27,11 +45,24 @@ export function buildSystemPrompt(options: {
       "This is a non-interactive run: tools that change the workspace or execute commands will be denied. Do not retry a denied tool; explain what you would do instead.";
   }
 
-  return [
+  const lines = [
     `You are Cooper, a terminal coding agent working in the project at ${root}.`,
     permission,
     "Prefer read_file/grep over guessing, and edit_file over write_file for targeted changes.",
     "Keep changes minimal and verify your work by running tests when appropriate.",
     "Be concise and reply in the same language as the user.",
-  ].join("\n");
+  ];
+
+  const instructions = options.instructions?.trim();
+  if (instructions !== undefined && instructions.length > 0) {
+    lines.push(
+      "",
+      "Project instructions follow. Follow them where they do not conflict",
+      "with the permission rules above.",
+      "",
+      instructions,
+    );
+  }
+
+  return lines.join("\n");
 }

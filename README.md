@@ -20,6 +20,7 @@ packages/core/
   src/context/summarize.ts           L2：分块摘要
   src/context/budget.ts              阈值决策与编排
   src/context/window.ts              模型窗口表
+  src/instructions.ts                COOPER.md / AGENTS.md 加载
 apps/cli/
   src/index.tsx                      入口：解析参数、切换 TUI / 无头
   src/args.ts                        命令行参数解析（纯函数，可单测）
@@ -97,6 +98,17 @@ npm run dev -- -C ../my-app -p "跑一下测试"
 1. `<工作目录>/.env`
 2. `<工作目录>/../../.env`（兼容 monorepo）
 3. Cooper 自己的 `.env`（所以换项目时不必复制密钥）
+
+## 项目指令
+
+启动时自动加载两类指令并注入系统提示：
+
+1. `~/.cooper/AGENTS.md`（或 `COOPER.md`）—— 个人偏好，对所有项目生效
+2. `<工作目录>/COOPER.md`（或 `AGENTS.md`）—— 项目约定
+
+每个目录只取一个文件，`COOPER.md` 优先于 `AGENTS.md`。个人偏好在前、项目约定在后，冲突时后者更具体。总长度截断在 32k 字符以内，避免一个巨大的指令文件吃掉上下文预算。
+
+指令只影响"怎么做"，不能改变权限规则：系统提示里权限段在指令之前，并明确要求指令不得与之冲突。TUI 启动横幅会显示 `Instructions: AGENTS.md`，无头模式则在 stderr 打印一行。
 
 ## 审批模式
 
@@ -177,7 +189,7 @@ npm test                                   # core + cli 单元测试
 4. 会修改工作区或执行命令的工具必须标记 `requiresApproval`，审批由宿主回调决定。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。
-7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，TUI 与无头模式共用，避免两侧规则漂移。
+7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，TUI 与无头模式共用，避免两侧规则漂移。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
 
 ## 下一步
 
