@@ -1,0 +1,234 @@
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import {
+  runAgent,
+  type AgentEvent,
+  type ApprovalRequest,
+} from "../src/agent.js";
+import type {
+  ChatRequest,
+  Provider,
+  ProviderEvent,
+} from "../src/provider/types.js";
+import { readFileTool } from "../src/tools/fs.js";
+import type { Tool } from "../src/tools/tool.js";
+import type { Message } from "../src/types.js";
+
+const echoSchema = z.object({ text: z.string() });
+
+const echoTool: Tool<typeof echoSchema> = {
+  name: "echo",
+  description: "Echoes the given text.",
+  inputSchema: echoSchema,
+  async execute(input) {
+    return { content: `echo: ${input.text}` };
+  },
+};
+
+class ScriptedProvider implements Provider {
+  private calls = 0;
+
+  async *stream(_request: ChatRequest): AsyncIterable<ProviderEvent> {
+    this.calls += 1;
+
+    if (this.calls === 1) {
+      yield {
+        type: "done",
+        message: {
+          content: "",
+          toolCalls: [{ id: "call_1", name: "echo", arguments: '{"text":"hi"}' }],
+        },
+        finishReason: "tool_calls",
+      };
+      return;
+    }
+
+    yield { type: "text", delta: "All done." };
+    yield {
+      type: "done",
+      message: { content: "All done.", toolCalls: [] },
+      finishReason: "stop",
+    };
+  }
+}
+
+describe("runAgent", () => {
+  it("executes tool calls and feeds results back to the model", async () => {
+    const messages: Message[] = [
+      { role: "system", content: "test" },
+      { role: "user", content: "say hi" },
+    ];
+    const events: AgentEvent[] = [];
+    let approvalCalls = 0;
+
+    for await (const event of runAgent({
+      provider: new ScriptedProvider(),
+      model: "test-model",
+      tools: [echoTool],
+      messages,
+      context: { root: process.cwd() },
+      approve: () => {
+        approvalCalls += 1;
+        return "allow";
+      },
+    })) {
+      events.push(event);
+    }
+
+    // Read-only tools must never ask for approval.
+    expect(approvalCalls).toBe(0);
+
+    const toolEnd = events.find((event) => event.type === "tool-end");
+    expect(toolEnd).toBeDefined();
+    expect(
+      toolEnd?.type === "tool-end" ? toolEnd.result.content : "",
+    ).toBe("echo: hi");
+    expect(toolEnd?.type === "tool-end" ? toolEnd.isError : true).toBe(false);
+
+    expect(
+      events.some(
+        (event) => event.type === "assistant-done" && event.content === "All done.",
+      ),
+    ).toBe(true);
+
+    expect(messages).toHaveLength(5);
+    expect(messages[2]).toMatchObject({ role: "assistant" });
+    expect(messages[3]).toMatchObject({
+      role: "tool",
+      toolCallId: "call_1",
+      content: "echo: hi",
+    });
+    expect(messages[4]).toMatchObject({ role: "assistant", content: "All done." });
+  });
+});
+
+describe("read_file", () => {
+  it("rejects paths outside the workspace root", async () => {
+    await expect(
+      readFileTool.execute({ path: "../outside.txt" }, { root: process.cwd() }),
+    ).rejects.toThrow(/outside the workspace/);
+  });
+
+  it("returns numbered lines for a real file", async () => {
+    const result = await readFileTool.execute(
+      { path: "package.json", limit: 3 },
+      { root: process.cwd() },
+    );
+    expect(result.content).toMatch(/^\s*1 \| \{/);
+  });
+});
+
+const dangerSchema = z.object({ value: z.string() });
+
+function makeDangerTool(onExecute: () => void): Tool<typeof dangerSchema> {
+  return {
+    name: "danger",
+    description: "Dangerous tool.",
+    inputSchema: dangerSchema,
+    requiresApproval: true,
+    summarize(input) {
+      return `danger ${input.value}`;
+    },
+    async execute() {
+      onExecute();
+      return { content: "done" };
+    },
+  };
+}
+
+class ApprovalProvider implements Provider {
+  private calls = 0;
+
+  async *stream(_request: ChatRequest): AsyncIterable<ProviderEvent> {
+    this.calls += 1;
+
+    if (this.calls === 1) {
+      yield {
+        type: "done",
+        message: {
+          content: "",
+          toolCalls: [
+            { id: "call_d", name: "danger", arguments: '{"value":"x"}' },
+          ],
+        },
+        finishReason: "tool_calls",
+      };
+      return;
+    }
+
+    yield {
+      type: "done",
+      message: { content: "Understood.", toolCalls: [] },
+      finishReason: "stop",
+    };
+  }
+}
+
+describe("tool approval", () => {
+  it("asks before running approval-gated tools and blocks denials", async () => {
+    let executed = false;
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const approvals: ApprovalRequest[] = [];
+    const events: AgentEvent[] = [];
+
+    for await (const event of runAgent({
+      provider: new ApprovalProvider(),
+      model: "test-model",
+      tools: [
+        makeDangerTool(() => {
+          executed = true;
+        }),
+      ],
+      messages,
+      context: { root: process.cwd() },
+      approve: (request) => {
+        approvals.push(request);
+        return "deny";
+      },
+    })) {
+      events.push(event);
+    }
+
+    expect(executed).toBe(false);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]?.toolName).toBe("danger");
+    expect(approvals[0]?.summary).toBe("danger x");
+
+    const end = events.find((event) => event.type === "tool-end");
+    expect(end?.type === "tool-end" ? end.denied : false).toBe(true);
+    expect(end?.type === "tool-end" ? end.result.isError : false).toBe(true);
+
+    expect(messages).toHaveLength(4);
+    expect(messages[2]?.content).toMatch(/Permission denied/);
+    expect(messages[3]).toMatchObject({
+      role: "assistant",
+      content: "Understood.",
+    });
+  });
+
+  it("runs the tool when approved", async () => {
+    let executed = false;
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const events: AgentEvent[] = [];
+
+    for await (const event of runAgent({
+      provider: new ApprovalProvider(),
+      model: "test-model",
+      tools: [
+        makeDangerTool(() => {
+          executed = true;
+        }),
+      ],
+      messages,
+      context: { root: process.cwd() },
+      approve: () => "allow",
+    })) {
+      events.push(event);
+    }
+
+    expect(executed).toBe(true);
+    const end = events.find((event) => event.type === "tool-end");
+    expect(end?.type === "tool-end" ? end.denied : true).toBe(false);
+    expect(end?.type === "tool-end" ? end.result.content : "").toBe("done");
+  });
+});

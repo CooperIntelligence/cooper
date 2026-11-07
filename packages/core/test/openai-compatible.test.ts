@@ -1,0 +1,98 @@
+import { createServer, type Server } from "node:http";
+import { afterEach, describe, expect, it } from "vitest";
+import { OpenAICompatibleProvider } from "../src/provider/openai-compatible.js";
+import type { ProviderEvent } from "../src/provider/types.js";
+
+function sse(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+function chunk(delta: unknown, finishReason: string | null = null) {
+  return {
+    id: "chatcmpl-test",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: "test-model",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+describe("OpenAICompatibleProvider", () => {
+  const servers: Server[] = [];
+
+  afterEach(async () => {
+    for (const server of servers.splice(0)) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("normalizes streamed text and split tool-call deltas", async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(sse(chunk({ role: "assistant", content: "Hel" })));
+      response.write(sse(chunk({ content: "lo" })));
+      response.write(
+        sse(
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_1",
+                type: "function",
+                function: { name: "echo", arguments: '{"text":' },
+              },
+            ],
+          }),
+        ),
+      );
+      response.write(
+        sse(
+          chunk({
+            tool_calls: [
+              { index: 0, function: { arguments: '"hi"}' } },
+            ],
+          }),
+        ),
+      );
+      response.write(sse(chunk({}, "tool_calls")));
+      response.end("data: [DONE]\n\n");
+    });
+    servers.push(server);
+
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("failed to start mock server");
+    }
+
+    const provider = new OpenAICompatibleProvider({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+    });
+
+    const events: ProviderEvent[] = [];
+    for await (const event of provider.stream({
+      model: "test-model",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    })) {
+      events.push(event);
+    }
+
+    const text = events
+      .filter((event) => event.type === "text")
+      .map((event) => (event.type === "text" ? event.delta : ""))
+      .join("");
+    expect(text).toBe("Hello");
+
+    const done = events.find((event) => event.type === "done");
+    expect(done?.type === "done" ? done.message.toolCalls : []).toEqual([
+      { id: "call_1", name: "echo", arguments: '{"text":"hi"}' },
+    ]);
+    expect(done?.type === "done" ? done.message.content : "").toBe("Hello");
+  });
+});

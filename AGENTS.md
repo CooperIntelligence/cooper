@@ -1,0 +1,48 @@
+# Cooper — Agent Guidelines
+
+## Stack
+
+- TypeScript, Node.js 20+, npm workspaces
+- `apps/cli`: Ink 8 + React 19 TUI
+- `packages/core`: provider abstraction, agent loop, tools
+
+## Layout
+
+- `packages/core/src/provider/` — `Provider` interface and adapters
+- `packages/core/src/tools/` — tool interface and implementations
+- `packages/core/src/agent.ts` — the agent loop and approval hook
+- `apps/cli/src/` — TUI shell only (`app.tsx`, `stream-lines.ts`, `config.ts`)
+
+## Hard rules
+
+1. `packages/core` must not import Ink/React, write to stdout, or read stdin.
+   UI-facing output travels as `AgentEvent` from `runAgent()`.
+2. Relative imports use explicit `.js` extensions (NodeNext resolution).
+3. New tools implement the `Tool` type with a zod `inputSchema`, and are
+   re-exported through `packages/core/src/index.ts`.
+4. New providers implement `Provider` and normalize into the shared
+   `ProviderEvent` shape; the agent loop must stay vendor-agnostic.
+5. Tools must resolve every path through their workspace root and reject
+   paths outside it.
+6. Run `npm run typecheck` and `npm test` before finishing any change.
+7. Streaming output must be append-only on complete lines: commit each
+   finished line to `<Static>` exactly once, and keep only the unfinished
+   trailing line in the live region. Ink cannot erase rows that already
+   scrolled into scrollback, so rendering the whole growing message live
+   duplicates content in terminal history (especially on Windows). The live
+   region must never hold more than a line or two.
+8. Any tool that mutates the workspace or executes a command must set
+   `requiresApproval: true`. The agent loop only invokes the host's `approve`
+   callback; never execute such a tool without it.
+9. Implement `summarize()` on every tool — it is what the user sees in the
+   approval panel instead of raw JSON arguments.
+10. `plan` mode is enforced by the host: it denies every approval-gated tool
+    and never silently downgrades to `ask`.
+
+## Commands
+
+```bash
+npm run dev         # start the TUI from the repo root
+npm run typecheck
+npm test
+```
