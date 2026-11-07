@@ -32,6 +32,7 @@ const BINARY_EXTS = new Set([
 
 const MAX_LIST_ENTRIES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_OUTPUT_CHARS = 48_000;
 const MAX_SEARCH_FILE_BYTES = 1024 * 1024;
 const MAX_SEARCH_FILES = 5000;
 
@@ -208,11 +209,25 @@ export const readFileTool: Tool<typeof readFileSchema> = {
     if (slice.length === 0) return { content: "(no content in requested range)" };
 
     const end = start + slice.length;
-    const truncated = end < lines.length;
+    const notes: string[] = [];
+    if (end < lines.length) {
+      notes.push(`[truncated: lines ${start + 1}-${end} of ${lines.length}]`);
+    }
+
+    // A few "lines" can still be megabytes (minified output, long data lines),
+    // and one oversized tool result can exceed the whole context window. Cap
+    // the rendered output so a single call can never dominate the budget.
+    let content = body;
+    if (content.length > MAX_OUTPUT_CHARS) {
+      const boundary = content.lastIndexOf("\n", MAX_OUTPUT_CHARS);
+      content = content.slice(0, boundary > 0 ? boundary : MAX_OUTPUT_CHARS);
+      notes.push(
+        `[output capped at ${MAX_OUTPUT_CHARS} characters; use offset/limit to read further]`,
+      );
+    }
+
     return {
-      content: truncated
-        ? `${body}\n\n[truncated: lines ${start + 1}-${end} of ${lines.length}]`
-        : body,
+      content: notes.length > 0 ? `${content}\n\n${notes.join("\n")}` : content,
     };
   },
 };

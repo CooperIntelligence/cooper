@@ -12,9 +12,20 @@ export type ChatRequest = {
   signal?: AbortSignal;
 };
 
+export type TokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
 export type ProviderEvent =
   | { type: "text"; delta: string }
-  | { type: "done"; message: AssistantMessage; finishReason: string | null };
+  | {
+      type: "done";
+      message: AssistantMessage;
+      finishReason: string | null;
+      /** Present when the endpoint reports usage; used to calibrate estimates. */
+      usage?: TokenUsage;
+    };
 
 /**
  * Minimal streaming chat interface. Every provider (OpenAI-compatible,

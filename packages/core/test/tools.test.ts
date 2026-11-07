@@ -2,7 +2,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { editFileTool, writeFileTool } from "../src/tools/fs.js";
+import {
+  editFileTool,
+  readFileTool,
+  writeFileTool,
+} from "../src/tools/fs.js";
 import { runCommandTool } from "../src/tools/shell.js";
 
 let root: string;
@@ -13,6 +17,17 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("read_file", () => {
+  it("caps a single line that would otherwise blow the context window", async () => {
+    await fs.writeFile(path.join(root, "minified.js"), "x".repeat(200_000), "utf8");
+
+    const result = await readFileTool.execute({ path: "minified.js" }, { root });
+
+    expect(result.content.length).toBeLessThan(48_100);
+    expect(result.content).toContain("output capped at 48000 characters");
+  });
 });
 
 describe("write_file", () => {

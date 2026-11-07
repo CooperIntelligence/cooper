@@ -35,6 +35,10 @@ function truncate(text: string, max: number): string {
   return singleLine.length > max ? `${singleLine.slice(0, max - 1)}…` : singleLine;
 }
 
+function formatTokens(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+}
+
 function previewLines(text: string, maxLines = 6): string[] {
   const lines = text.split(/\r?\n/);
   const shown = lines.slice(0, maxLines).map((line) => truncate(line, 160));
@@ -188,7 +192,8 @@ export function App({
       tone: "info",
       text:
         `Cooper ready · ${config.model} · ${root}\n` +
-        `Mode: ${mode}${mode === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.`,
+        `Mode: ${mode}${mode === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.\n` +
+        `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%`,
     },
   ]);
   const [live, setLive] = useState<UiItem | null>(null);
@@ -329,6 +334,7 @@ export function App({
         tools: allTools,
         messages: history.current,
         context: { root },
+        contextBudget: config.context,
         signal: controller.signal,
         approve: (request) => {
           if (mode === "auto") return "allow";
@@ -383,6 +389,15 @@ export function App({
             });
             break;
           }
+
+          case "context-compacted":
+            push({
+              id: nextId.current++,
+              kind: "notice",
+              tone: "info",
+              text: `⤓ context ${formatTokens(event.before)} → ${formatTokens(event.after)} tokens (${event.action})`,
+            });
+            break;
 
           case "max-turns":
             push({

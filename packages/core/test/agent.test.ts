@@ -164,6 +164,109 @@ class ApprovalProvider implements Provider {
   }
 }
 
+class ContextLimitProvider implements Provider {
+  mainCalls = 0;
+
+  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
+    const system = request.messages[0];
+    const isSummary =
+      system?.role === "system" &&
+      system.content.includes("compress the transcript");
+
+    if (isSummary) {
+      const summary = "- goal: finish the test\n- state: mid-way";
+      yield { type: "text", delta: summary };
+      yield {
+        type: "done",
+        message: { content: summary, toolCalls: [] },
+        finishReason: "stop",
+      };
+      return;
+    }
+
+    this.mainCalls += 1;
+    if (this.mainCalls === 1) {
+      throw new Error("This model's maximum context length is 8000 tokens.");
+    }
+
+    yield { type: "text", delta: "Recovered." };
+    yield {
+      type: "done",
+      message: { content: "Recovered.", toolCalls: [] },
+      finishReason: "stop",
+    };
+  }
+}
+
+describe("context budget", () => {
+  it("compacts and retries when the real window is smaller than assumed", async () => {
+    const messages: Message[] = [
+      { role: "system", content: "You are a test agent." },
+      { role: "user", content: "goal" },
+    ];
+    for (let index = 0; index < 30; index += 1) {
+      messages.push({ role: "user", content: "u".repeat(1000) });
+      messages.push({ role: "assistant", content: "a".repeat(1000) });
+    }
+    const originalLength = messages.length;
+    const provider = new ContextLimitProvider();
+    const events: AgentEvent[] = [];
+
+    for await (const event of runAgent({
+      provider,
+      model: "test-model",
+      tools: [],
+      messages,
+      context: { root: process.cwd() },
+    })) {
+      events.push(event);
+    }
+
+    expect(provider.mainCalls).toBe(2);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "assistant-done" && event.content === "Recovered.",
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.type === "context-compacted")).toBe(true);
+    expect(messages.length).toBeLessThan(originalLength);
+    expect(messages[1]?.content).toContain("Earlier conversation summary");
+  });
+
+  it("can be turned off per run", async () => {
+    const messages: Message[] = [
+      { role: "user", content: "u".repeat(20_000) },
+    ];
+    const events: AgentEvent[] = [];
+    const answer: Provider = {
+      async *stream() {
+        yield { type: "text", delta: "ok" };
+        yield {
+          type: "done",
+          message: { content: "ok", toolCalls: [] },
+          finishReason: "stop",
+        };
+      },
+    };
+
+    for await (const event of runAgent({
+      provider: answer,
+      model: "test-model",
+      tools: [],
+      messages,
+      context: { root: process.cwd() },
+      contextBudget: false,
+    })) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === "context-compacted")).toBe(
+      false,
+    );
+  });
+});
+
 describe("tool approval", () => {
   it("asks before running approval-gated tools and blocks denials", async () => {
     let executed = false;

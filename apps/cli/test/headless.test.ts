@@ -10,7 +10,13 @@ import type {
 import type { Config } from "../src/config.js";
 import { runHeadless } from "../src/headless.js";
 
-const config: Config = { apiKey: "test-key", baseURL: undefined, model: "test-model" };
+const config: Config = {
+  apiKey: "test-key",
+  baseURL: undefined,
+  model: "test-model",
+  context: { window: 200_000 },
+  contextWindowAssumed: false,
+};
 
 class ScriptedProvider implements Provider {
   private index = 0;

@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  resolveContextWindow,
+  type ContextSettings,
+} from "@cooper/core";
 
 let envLoaded = false;
 
@@ -48,7 +53,28 @@ export type Config = {
   apiKey: string;
   baseURL: string | undefined;
   model: string;
+  context: ContextSettings;
+  /** True when the model was not recognised and a default window was assumed. */
+  contextWindowAssumed: boolean;
 };
+
+function positiveInt(value: string | undefined, fallback: number): number {
+  const trimmed = value?.trim();
+  if (trimmed === undefined || trimmed === "") return fallback;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Expected a positive number, got "${trimmed}".`);
+  }
+  return Math.floor(parsed);
+}
+
+function envFlag(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === undefined || normalized === "") return fallback;
+  if (["0", "false", "off", "no"].includes(normalized)) return false;
+  if (["1", "true", "on", "yes"].includes(normalized)) return true;
+  return fallback;
+}
 
 export function loadConfig(): Config {
   loadEnvFiles();
@@ -65,5 +91,28 @@ export function loadConfig(): Config {
   const model =
     process.env.COOPER_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
-  return { apiKey, baseURL, model };
+  const windowOverride = process.env.COOPER_CONTEXT_WINDOW?.trim();
+  const resolved =
+    windowOverride !== undefined && windowOverride !== ""
+      ? { window: positiveInt(windowOverride, DEFAULT_CONTEXT_WINDOW), assumed: false }
+      : resolveContextWindow(model);
+
+  const context: ContextSettings = {
+    window: resolved.window,
+    reserveOutputTokens: positiveInt(
+      process.env.COOPER_CONTEXT_RESERVE,
+      16_384,
+    ),
+    summaryModel:
+      process.env.COOPER_SUMMARY_MODEL?.trim() || undefined,
+    enabled: envFlag(process.env.COOPER_CONTEXT_COMPACT, true),
+  };
+
+  return {
+    apiKey,
+    baseURL,
+    model,
+    context,
+    contextWindowAssumed: resolved.assumed,
+  };
 }

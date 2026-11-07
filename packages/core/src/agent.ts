@@ -1,6 +1,19 @@
 import type { Message, ToolCall } from "./types.js";
 import type { Provider } from "./provider/types.js";
 import {
+  DEFAULT_CONTEXT_CONFIG,
+  estimateContextTokens,
+  prepareContext,
+  resolveContextConfig,
+  type ContextAction,
+  type ContextSettings,
+} from "./context/budget.js";
+import {
+  INITIAL_CALIBRATION,
+  updateCalibration,
+  type Calibration,
+} from "./context/estimator.js";
+import {
   toToolSpec,
   type Tool,
   type ToolContext,
@@ -32,6 +45,13 @@ export type AgentEvent =
       denied: boolean;
       durationMs: number;
     }
+  | {
+      type: "context-compacted";
+      action: ContextAction["action"];
+      /** Estimated tokens in the conversation before and after compaction. */
+      before: number;
+      after: number;
+    }
   | { type: "max-turns"; turns: number };
 
 export type RunAgentOptions = {
@@ -44,6 +64,11 @@ export type RunAgentOptions = {
   maxTurns?: number;
   signal?: AbortSignal;
   /**
+   * Context budgeting for the conversation. Defaults to a 200k window; pass
+   * `false` to send history untouched (tests, or a host with its own policy).
+   */
+  contextBudget?: ContextSettings | false;
+  /**
    * Called before executing a tool with requiresApproval. Returning "deny"
    * feeds a denial result back to the model instead of running the tool.
    * When omitted, approval-gated tools run without asking.
@@ -55,6 +80,14 @@ export type RunAgentOptions = {
 
 const DENIED_MESSAGE =
   "Permission denied by the user. The tool was not executed. Do not retry the same call; explain what you wanted to do and ask how to proceed.";
+
+const CONTEXT_ERROR_PATTERN =
+  /context.{0,24}(length|window)|maximum context|prompt is too long|reduce the length|too many tokens|exceeds the maximum/i;
+
+function isContextLengthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return CONTEXT_ERROR_PATTERN.test(message);
+}
 
 function summarize(tool: Tool, input: unknown, call: ToolCall): string {
   try {
@@ -94,24 +127,95 @@ export async function* runAgent(
   const specs = tools.map(toToolSpec);
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
 
+  const contextConfig =
+    options.contextBudget === false
+      ? null
+      : resolveContextConfig(
+          options.contextBudget ?? { window: DEFAULT_CONTEXT_CONFIG.window },
+        );
+  let calibration: Calibration = INITIAL_CALIBRATION;
+
+  const compact = (force: boolean, budgetOverride?: number) =>
+    prepareContext({
+      messages,
+      tools: specs,
+      provider,
+      model,
+      config: contextConfig ?? DEFAULT_CONTEXT_CONFIG,
+      calibration,
+      signal: options.signal,
+      force,
+      budgetOverride,
+    });
+
   for (let turn = 1; turn <= maxTurns; turn += 1) {
     yield { type: "turn-start", turn };
 
+    if (contextConfig) {
+      for (const action of await compact(false)) {
+        yield { type: "context-compacted", ...action };
+      }
+    }
+
     let content = "";
     let toolCalls: ToolCall[] = [];
+    let emittedText = false;
+    let retried = false;
 
-    for await (const event of provider.stream({
-      model,
-      messages,
-      tools: specs,
-      signal: options.signal,
-    })) {
-      if (event.type === "text") {
-        content += event.delta;
-        yield { type: "text-delta", delta: event.delta };
-      } else if (event.type === "done") {
-        content = event.message.content;
-        toolCalls = event.message.toolCalls;
+    for (;;) {
+      content = "";
+      toolCalls = [];
+      emittedText = false;
+
+      const estimated = estimateContextTokens(messages, specs, calibration);
+
+      try {
+        for await (const event of provider.stream({
+          model,
+          messages,
+          tools: specs,
+          signal: options.signal,
+        })) {
+          if (event.type === "text") {
+            emittedText = true;
+            content += event.delta;
+            yield { type: "text-delta", delta: event.delta };
+          } else if (event.type === "done") {
+            content = event.message.content;
+            toolCalls = event.message.toolCalls;
+            if (event.usage?.inputTokens) {
+              calibration = updateCalibration(
+                calibration,
+                event.usage.inputTokens,
+                estimated,
+              );
+            }
+          }
+        }
+        break;
+      } catch (error) {
+        // The window we assumed may be larger than the real one. Compact hard
+        // and retry once; only safe before any text reached the user.
+        if (
+          !retried &&
+          !emittedText &&
+          contextConfig &&
+          isContextLengthError(error)
+        ) {
+          retried = true;
+          // The rejected request was `estimated` tokens, so the real window is
+          // smaller than that. Compact to half of it and try again.
+          const actions = await compact(
+            true,
+            Math.max(2048, Math.floor(estimated / 2)),
+          );
+          if (actions.length === 0) throw error;
+          for (const action of actions) {
+            yield { type: "context-compacted", ...action };
+          }
+          continue;
+        }
+        throw error;
       }
     }
 

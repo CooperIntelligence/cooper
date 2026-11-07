@@ -43,6 +43,12 @@
     allows approval-gated tools. Never default headless to `auto`, and keep
     `system-prompt.ts` as the single source of the permission instructions
     shared by `app.tsx` and `headless.ts`.
+12. Context compaction lives in `packages/core/src/context/`. It must never
+    separate an `assistant` tool call from its `tool` results — compact only
+    at `groupMessages()` boundaries, stub tool output in place instead of
+    deleting messages, and guarantee that `prepareContext()` returns with the
+    estimate under the hard limit (truncation has no model dependency).
+    Never let a failed summary block a request: fall through to truncation.
 
 ## Commands
 

@@ -14,6 +14,12 @@ packages/core/
   src/tools/paths.ts                 工作区路径逃逸防护
   src/tools/fs.ts                    list_dir / read_file / grep / write_file / edit_file
   src/tools/shell.ts                 run_command
+  src/context/estimator.ts           token 估算（CJK 感知）+ 真实 usage 校准
+  src/context/groups.ts              消息分组与安全压缩边界
+  src/context/prune.ts               L1：旧工具输出剪枝
+  src/context/summarize.ts           L2：分块摘要
+  src/context/budget.ts              阈值决策与编排
+  src/context/window.ts              模型窗口表
 apps/cli/
   src/index.tsx                      入口：解析参数、切换 TUI / 无头
   src/args.ts                        命令行参数解析（纯函数，可单测）
@@ -112,6 +118,31 @@ COOPER_MODE=auto npm run dev # 也可用环境变量
 - `a` 本次会话内始终允许该工具
 - `n` / `Esc` 拒绝（模型会收到拒绝结果并继续解释）
 
+## 上下文管理
+
+长会话不会撞上下文上限：每次请求前估算 token 数，超阈值就按"最便宜的先做"分三层处理。
+
+| 层级 | 触发 | 动作 | 成本 |
+|---|---|---|---|
+| L1 剪枝 | 可用预算的 65% | 旧工具输出换成存根，保留最近 8 条原文 | 本地，无模型调用 |
+| L2 摘要 | 80% | 把较早的对话总结成一条消息，压到 45% | 一次模型调用 |
+| L3 截断 | 92% | 丢弃最旧的完整消息组 | 本地，必定成功 |
+
+"可用预算" = 窗口 − 预留输出（默认 16384）。剪枝放第一位，因为工具输出是最大的浪费源；摘要压到 45% 而不是刚好过线，避免下一轮马上又触发。任何一层都不会把 `assistant.tool_calls` 和对应的 `tool` 结果拆开。
+
+**窗口大小**按模型名查表（Claude / GPT / Gemini / DeepSeek / Kimi / Qwen / GLM 等），识别不了时假设 **200k**，与 Claude Code 对未知模型的处理一致。TUI 启动横幅会标明这个值是不是假设的。猜大了不会致命：如果 API 以 `context length` 之类的错误拒绝请求，Cooper 会压到上次请求大小的一半再重试一次。
+
+**token 估算**不依赖 tokenizer：CJK 按约 1.1 token/字符、其余按 3.6 字符/token，再加上消息结构开销和工具 schema。端点返回 `usage` 时用真实值做指数滑动平均修正；不支持的端点会自动降级（`stream_options` 被拒后重试一次并记住）。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `COOPER_CONTEXT_WINDOW` | 按模型表，否则 200000 | 窗口大小 |
+| `COOPER_CONTEXT_RESERVE` | 16384 | 预留给回复的 token |
+| `COOPER_CONTEXT_COMPACT` | `on` | `off` 时只发送、不压缩 |
+| `COOPER_SUMMARY_MODEL` | 同主模型 | 摘要用更便宜的模型 |
+
+压缩发生时界面会显示 `⤓ context 92.4k → 18.1k tokens (summarize)`。摘要用英文生成：同样的信息量，中文的成本约为英文的三倍。
+
 ## 可用工具
 
 只读：
@@ -150,7 +181,7 @@ npm test                                   # core + cli 单元测试
 
 ## 下一步
 
-- 上下文 token 计数、超限裁剪与压缩
 - 会话持久化与 `--resume`
+- 权限系统重构（两轴预设 × fail-closed 审批结果）
 - Anthropic 原生适配器、MCP 客户端
 - 自动格式化 / linter 集成，测试失败自动回灌

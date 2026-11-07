@@ -4,7 +4,12 @@ import type {
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
 import type { Message, ToolCall } from "../types.js";
-import type { ChatRequest, Provider, ProviderEvent } from "./types.js";
+import type {
+  ChatRequest,
+  Provider,
+  ProviderEvent,
+  TokenUsage,
+} from "./types.js";
 
 export type OpenAICompatibleOptions = {
   apiKey: string;
@@ -44,12 +49,21 @@ function toOpenAIMessages(messages: Message[]): ChatCompletionMessageParam[] {
   });
 }
 
+/** Some OpenAI-compatible endpoints reject unknown request fields. */
+function rejectsStreamOptions(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = (error as { status?: number }).status;
+  if (status !== undefined && status !== 400 && status !== 422) return false;
+  return /stream_options|include_usage/i.test(error.message);
+}
+
 /**
  * Works with OpenAI and any endpoint that implements the OpenAI chat
  * completions streaming protocol (DeepSeek, Moonshot, GLM, OpenRouter...).
  */
 export class OpenAICompatibleProvider implements Provider {
   private readonly client: OpenAI;
+  private usageSupported = true;
 
   constructor(options: OpenAICompatibleOptions) {
     this.client = new OpenAI({
@@ -60,8 +74,8 @@ export class OpenAICompatibleProvider implements Provider {
     });
   }
 
-  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
-    const stream = await this.client.chat.completions.create(
+  private create(request: ChatRequest, includeUsage: boolean) {
+    return this.client.chat.completions.create(
       {
         model: request.model,
         messages: toOpenAIMessages(request.messages),
@@ -77,15 +91,37 @@ export class OpenAICompatibleProvider implements Provider {
               }))
             : undefined,
         stream: true,
+        ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
       },
       { signal: request.signal },
     );
+  }
+
+  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
+    let stream;
+    try {
+      stream = await this.create(request, this.usageSupported);
+    } catch (error) {
+      // Usage reporting is a nicety (it calibrates estimates); never let an
+      // endpoint that does not understand stream_options break the agent.
+      if (!this.usageSupported || !rejectsStreamOptions(error)) throw error;
+      this.usageSupported = false;
+      stream = await this.create(request, false);
+    }
 
     const pending = new Map<number, ToolCall>();
     let content = "";
     let finishReason: string | null = null;
+    let usage: TokenUsage | undefined;
 
     for await (const chunk of stream) {
+      if (chunk.usage) {
+        usage = {
+          inputTokens: chunk.usage.prompt_tokens,
+          outputTokens: chunk.usage.completion_tokens,
+        };
+      }
+
       const choice = chunk.choices[0];
       if (!choice) continue;
 
@@ -117,6 +153,6 @@ export class OpenAICompatibleProvider implements Provider {
         arguments: call.arguments || "{}",
       }));
 
-    yield { type: "done", message: { content, toolCalls }, finishReason };
+    yield { type: "done", message: { content, toolCalls }, finishReason, usage };
   }
 }

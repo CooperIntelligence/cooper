@@ -30,6 +30,10 @@ function oneLine(text: string, max = 140): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+function formatTokens(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+}
+
 /**
  * Runs one prompt without the TUI and returns a process exit code.
  *
@@ -83,6 +87,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       tools: allTools,
       messages,
       context: { root },
+      contextBudget: config.context,
       signal,
       approve: () => (mode === "auto" ? "allow" : "deny"),
     })) {
@@ -118,6 +123,14 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
               ? ICONS.error
               : ICONS.ok;
           err.write(`  ${icon} ${event.durationMs}ms\n`);
+          break;
+        }
+
+        case "context-compacted": {
+          endTextLine();
+          err.write(
+            `⤓ context ${formatTokens(event.before)} → ${formatTokens(event.after)} tokens (${event.action})\n`,
+          );
           break;
         }
 
