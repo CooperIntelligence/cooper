@@ -1,0 +1,17 @@
+# Normalize every text file to LF in the object store, and check them out
+# with LF everywhere. Keeps diffs clean across Windows/macOS/Linux.
+* text=auto eol=lf
+
+# Windows-only scripts get CRLF on checkout so cmd.exe is happy.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binaries: never convert, never merge.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.lockb binary
