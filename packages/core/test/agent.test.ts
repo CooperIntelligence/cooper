@@ -10,9 +10,16 @@ import type {
   Provider,
   ProviderEvent,
 } from "../src/provider/types.js";
+import { PermissionPolicy } from "../src/permissions.js";
 import { readFileTool } from "../src/tools/fs.js";
 import type { Tool } from "../src/tools/tool.js";
 import type { Message } from "../src/types.js";
+
+/** Read-only tools never prompt, so a non-interactive policy is enough. */
+const nonInteractive = new PermissionPolicy({
+  preset: "ask",
+  interactive: false,
+});
 
 const echoSchema = z.object({ text: z.string() });
 
@@ -20,6 +27,7 @@ const echoTool: Tool<typeof echoSchema> = {
   name: "echo",
   description: "Echoes the given text.",
   inputSchema: echoSchema,
+  capabilities: ["read"],
   async execute(input) {
     return { content: `echo: ${input.text}` };
   },
@@ -67,6 +75,7 @@ describe("runAgent", () => {
       tools: [echoTool],
       messages,
       context: { root: process.cwd() },
+      permissions: nonInteractive,
       approve: () => {
         approvalCalls += 1;
         return "allow";
@@ -125,7 +134,7 @@ function makeDangerTool(onExecute: () => void): Tool<typeof dangerSchema> {
     name: "danger",
     description: "Dangerous tool.",
     inputSchema: dangerSchema,
-    requiresApproval: true,
+    capabilities: ["write"],
     summarize(input) {
       return `danger ${input.value}`;
     },
@@ -162,6 +171,38 @@ class ApprovalProvider implements Provider {
     yield {
       type: "done",
       message: { content: "Understood.", toolCalls: [] },
+      finishReason: "stop",
+    };
+  }
+}
+
+/** Calls the same gated tool twice before answering. */
+class TwoCallProvider implements Provider {
+  private calls = 0;
+
+  async *stream(_request: ChatRequest): AsyncIterable<ProviderEvent> {
+    this.calls += 1;
+    if (this.calls <= 2) {
+      yield {
+        type: "done",
+        message: {
+          content: "",
+          toolCalls: [
+            {
+              id: `call_${this.calls}`,
+              name: "danger",
+              arguments: '{"value":"x"}',
+            },
+          ],
+        },
+        finishReason: "tool_calls",
+      };
+      return;
+    }
+
+    yield {
+      type: "done",
+      message: { content: "Finished.", toolCalls: [] },
       finishReason: "stop",
     };
   }
@@ -229,6 +270,7 @@ describe("reasoning", () => {
       tools: [],
       messages,
       context: { root: process.cwd() },
+      permissions: nonInteractive,
       contextBudget: false,
     })) {
       events.push(event);
@@ -274,6 +316,7 @@ describe("context budget", () => {
       tools: [],
       messages,
       context: { root: process.cwd() },
+      permissions: nonInteractive,
     })) {
       events.push(event);
     }
@@ -312,6 +355,7 @@ describe("context budget", () => {
       tools: [],
       messages,
       context: { root: process.cwd() },
+      permissions: nonInteractive,
       contextBudget: false,
     })) {
       events.push(event);
@@ -329,6 +373,10 @@ describe("tool approval", () => {
     const messages: Message[] = [{ role: "user", content: "go" }];
     const approvals: ApprovalRequest[] = [];
     const events: AgentEvent[] = [];
+    const permissions = new PermissionPolicy({
+      preset: "ask",
+      interactive: true,
+    });
 
     for await (const event of runAgent({
       provider: new ApprovalProvider(),
@@ -340,6 +388,7 @@ describe("tool approval", () => {
       ],
       messages,
       context: { root: process.cwd() },
+      permissions,
       approve: (request) => {
         approvals.push(request);
         return "deny";
@@ -375,6 +424,10 @@ describe("tool approval", () => {
     let executed = false;
     const messages: Message[] = [{ role: "user", content: "go" }];
     const events: AgentEvent[] = [];
+    const permissions = new PermissionPolicy({
+      preset: "ask",
+      interactive: true,
+    });
 
     for await (const event of runAgent({
       provider: new ApprovalProvider(),
@@ -386,6 +439,7 @@ describe("tool approval", () => {
       ],
       messages,
       context: { root: process.cwd() },
+      permissions,
       approve: () => "allow",
     })) {
       events.push(event);
@@ -395,5 +449,104 @@ describe("tool approval", () => {
     const end = events.find((event) => event.type === "tool-end");
     expect(end?.type === "tool-end" ? end.denied : true).toBe(false);
     expect(end?.type === "tool-end" ? end.result.content : "").toBe("done");
+  });
+
+  it("fails closed when the surface has no approver", async () => {
+    let executed = false;
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const events: AgentEvent[] = [];
+    const permissions = new PermissionPolicy({
+      preset: "ask",
+      interactive: false,
+    });
+
+    for await (const event of runAgent({
+      provider: new ApprovalProvider(),
+      model: "test-model",
+      tools: [
+        makeDangerTool(() => {
+          executed = true;
+        }),
+      ],
+      messages,
+      context: { root: process.cwd() },
+      permissions,
+    })) {
+      events.push(event);
+    }
+
+    expect(executed).toBe(false);
+    const end = events.find((event) => event.type === "tool-end");
+    expect(end?.type === "tool-end" ? end.denied : false).toBe(true);
+    expect(messages[2]?.content).toMatch(/no interactive approver/);
+  });
+
+  it("plan mode denies without consulting the approver", async () => {
+    let executed = false;
+    let approvals = 0;
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const events: AgentEvent[] = [];
+    const permissions = new PermissionPolicy({
+      preset: "plan",
+      interactive: true,
+    });
+
+    for await (const event of runAgent({
+      provider: new ApprovalProvider(),
+      model: "test-model",
+      tools: [
+        makeDangerTool(() => {
+          executed = true;
+        }),
+      ],
+      messages,
+      context: { root: process.cwd() },
+      permissions,
+      approve: () => {
+        approvals += 1;
+        return "allow";
+      },
+    })) {
+      events.push(event);
+    }
+
+    expect(approvals).toBe(0);
+    expect(executed).toBe(false);
+    const end = events.find((event) => event.type === "tool-end");
+    expect(end?.type === "tool-end" ? end.denied : false).toBe(true);
+    expect(messages[2]?.content).toMatch(/plan mode is read-only/);
+  });
+
+  it("remembers allow-session for the rest of the process", async () => {
+    let executed = 0;
+    let approvals = 0;
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const permissions = new PermissionPolicy({
+      preset: "ask",
+      interactive: true,
+    });
+
+    for await (const _event of runAgent({
+      provider: new TwoCallProvider(),
+      model: "test-model",
+      tools: [
+        makeDangerTool(() => {
+          executed += 1;
+        }),
+      ],
+      messages,
+      context: { root: process.cwd() },
+      permissions,
+      approve: () => {
+        approvals += 1;
+        return "allow-session";
+      },
+    })) {
+      // Drain.
+    }
+
+    expect(executed).toBe(2);
+    expect(approvals).toBe(1);
+    expect(permissions.isSessionAllowed("danger")).toBe(true);
   });
 });

@@ -142,7 +142,7 @@ export const runCommandTool: Tool<typeof runCommandSchema> = {
   description:
     "Run a shell command in the workspace (builds, tests, git, scripts). Returns combined output and the exit code. Commands require user approval.",
   inputSchema: runCommandSchema,
-  requiresApproval: true,
+  capabilities: ["execute"],
   summarize(input) {
     const where = input.cwd ? `  (in ${input.cwd})` : "";
     return `$ ${input.command}${where}`;

@@ -20,6 +20,11 @@ import {
   type ToolPreview,
   type ToolResult,
 } from "./tools/tool.js";
+import type {
+  ApprovalOutcome,
+  PermissionPolicy,
+  ToolCapability,
+} from "./permissions.js";
 
 export type ApprovalRequest = {
   call: ToolCall;
@@ -28,14 +33,14 @@ export type ApprovalRequest = {
   summary: string;
   /** Parsed and schema-validated tool input. */
   input: unknown;
+  /** What the tool is allowed to do (read / write / execute). */
+  capabilities: readonly ToolCapability[];
   /**
    * Side-effect-free preview of the effect (a file diff for edits). Undefined
    * for tools without a preview or when one cannot be produced.
    */
   preview?: ToolPreview;
 };
-
-export type ApprovalDecision = "allow" | "deny";
 
 export type AgentEvent =
   | { type: "turn-start"; turn: number }
@@ -74,6 +79,12 @@ export type RunAgentOptions = {
   /** Conversation history, appended to in place. The caller owns it across turns. */
   messages: Message[];
   context: ToolContext;
+  /**
+   * Required: every surface must state its policy explicitly. The policy is
+   * fail-closed, so forgetting an approver denies gated tools instead of
+   * running them unattended.
+   */
+  permissions: PermissionPolicy;
   maxTurns?: number;
   signal?: AbortSignal;
   /**
@@ -82,17 +93,34 @@ export type RunAgentOptions = {
    */
   contextBudget?: ContextSettings | false;
   /**
-   * Called before executing a tool with requiresApproval. Returning "deny"
-   * feeds a denial result back to the model instead of running the tool.
-   * When omitted, approval-gated tools run without asking.
+   * Called only when the permission policy returns "prompt". Returning
+   * "deny" feeds a denial result back to the model instead of running the
+   * tool; "allow-session" grants the tool for the rest of this process.
+   * When omitted, prompted tools are denied (fail closed).
    */
   approve?: (
     request: ApprovalRequest,
-  ) => Promise<ApprovalDecision> | ApprovalDecision;
+  ) => Promise<ApprovalOutcome> | ApprovalOutcome;
 };
 
-const DENIED_MESSAGE =
-  "Permission denied by the user. The tool was not executed. Do not retry the same call; explain what you wanted to do and ask how to proceed.";
+const NO_RETRY =
+  "Do not retry the same call; explain what you wanted to do and ask how to proceed.";
+
+const USER_DENIED_MESSAGE =
+  `Permission denied by the user. The tool was not executed. ${NO_RETRY}`;
+
+const NO_APPROVER_MESSAGE =
+  `Permission denied: this run has no interactive approver, so the tool was not executed. ${NO_RETRY}`;
+
+function policyDeniedMessage(policy: PermissionPolicy): string {
+  if (policy.preset === "plan") {
+    return (
+      "Permission denied: plan mode is read-only, so tools that change the " +
+      `workspace or execute commands are not allowed. ${NO_RETRY}`
+    );
+  }
+  return NO_APPROVER_MESSAGE;
+}
 
 const CONTEXT_ERROR_PATTERN =
   /context.{0,24}(length|window)|maximum context|prompt is too long|reduce the length|too many tokens|exceeds the maximum/i;
@@ -278,38 +306,57 @@ export async function* runAgent(
           content: `Error: ${invalid?.message ?? "Unknown tool"}`,
           isError: true,
         };
-      } else if (tool.requiresApproval && options.approve) {
-        let preview: ToolPreview | undefined;
-        if (tool.preview) {
-          try {
-            preview = await tool.preview(input, context);
-          } catch {
-            // A preview must never block the call; approval still happens.
-            preview = undefined;
-          }
-        }
+      } else {
+        const decision = options.permissions.decide(tool);
 
-        let decision: ApprovalDecision = "deny";
-        try {
-          decision = await options.approve({
-            call,
-            toolName: tool.name,
-            summary,
-            input,
-            preview,
-          });
-        } catch {
-          decision = "deny";
-        }
-
-        if (decision === "allow") {
+        if (decision === "deny") {
+          denied = true;
+          result = {
+            content: policyDeniedMessage(options.permissions),
+            isError: true,
+          };
+        } else if (decision === "allow") {
           result = await executeTool(tool, input, context);
         } else {
-          denied = true;
-          result = { content: DENIED_MESSAGE, isError: true };
+          let preview: ToolPreview | undefined;
+          if (tool.preview) {
+            try {
+              preview = await tool.preview(input, context);
+            } catch {
+              // A preview must never block the call; approval still happens.
+              preview = undefined;
+            }
+          }
+
+          let outcome: ApprovalOutcome | null = null;
+          if (options.approve) {
+            try {
+              outcome = await options.approve({
+                call,
+                toolName: tool.name,
+                summary,
+                input,
+                capabilities: tool.capabilities,
+                preview,
+              });
+            } catch {
+              outcome = "deny";
+            }
+          }
+
+          if (outcome === null) {
+            denied = true;
+            result = { content: NO_APPROVER_MESSAGE, isError: true };
+          } else if (outcome === "allow" || outcome === "allow-session") {
+            if (outcome === "allow-session") {
+              options.permissions.grantSession(tool.name);
+            }
+            result = await executeTool(tool, input, context);
+          } else {
+            denied = true;
+            result = { content: USER_DENIED_MESSAGE, isError: true };
+          }
         }
-      } else {
-        result = await executeTool(tool, input, context);
       }
 
       const durationMs = Date.now() - startedAt;

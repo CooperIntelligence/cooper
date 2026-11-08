@@ -1,6 +1,5 @@
 import path from "node:path";
-import type { InstructionSource } from "@cooper/core";
-import type { ApprovalMode } from "./config.js";
+import type { InstructionSource, PermissionPolicy } from "@cooper/core";
 
 /** Short label for the startup banner: relative to the workspace when inside it. */
 export function describeInstructions(
@@ -22,21 +21,24 @@ export function describeInstructions(
  */
 export function buildSystemPrompt(options: {
   root: string;
-  mode: ApprovalMode;
-  interactive: boolean;
+  /**
+   * The same policy the agent loop enforces. Deriving the text from it keeps
+   * the instructions and the actual permission decisions from drifting.
+   */
+  permissions: PermissionPolicy;
   /** Loaded COOPER.md / AGENTS.md content, if any. */
   instructions?: string;
 }): string {
-  const { root, mode, interactive } = options;
+  const { root, permissions } = options;
 
   let permission: string;
-  if (mode === "plan") {
+  if (permissions.preset === "plan") {
     permission =
       "You are in plan mode: inspect files only. Do not modify files or run commands. Produce a plan for the user to approve.";
-  } else if (mode === "auto") {
+  } else if (permissions.preset === "auto") {
     permission =
       "You may inspect files, edit files, and run shell commands. Tool calls are approved automatically, so choose carefully before acting.";
-  } else if (interactive) {
+  } else if (permissions.interactive) {
     permission =
       "You may inspect files, edit files, and run shell commands. Tools that change the workspace or execute commands require user approval.";
   } else {

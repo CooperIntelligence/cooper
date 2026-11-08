@@ -5,8 +5,9 @@ import Spinner from "ink-spinner";
 import {
   allTools,
   OpenAICompatibleProvider,
+  PermissionPolicy,
   runAgent,
-  type ApprovalDecision,
+  type ApprovalOutcome,
   type ApprovalRequest,
   type LoadedInstructions,
   type LoadedSession,
@@ -218,13 +219,17 @@ export function App({
         baseURL: config.baseURL,
       }),
   );
+  // The TUI is interactive by definition; the policy is the single source of
+  // both the permission decisions and the system prompt text.
+  const [permissions] = useState(
+    () => new PermissionPolicy({ preset: mode, interactive: true }),
+  );
   const history = useRef<Message[]>([
     {
       role: "system",
       content: buildSystemPrompt({
         root,
-        mode,
-        interactive: true,
+        permissions,
         instructions: instructions.text,
       }),
     },
@@ -234,11 +239,9 @@ export function App({
   const busyRef = useRef(false);
   const sessionFailureShown = useRef(false);
 
-  const approvalResolver = useRef<((decision: ApprovalDecision) => void) | null>(
+  const approvalResolver = useRef<((decision: ApprovalOutcome) => void) | null>(
     null,
   );
-  const approvalRequest = useRef<ApprovalRequest | null>(null);
-  const allowedTools = useRef(new Set<string>());
 
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(
     null,
@@ -263,7 +266,7 @@ export function App({
       tone: "info",
       text:
         `Cooper ready · ${config.model} · ${root}\n` +
-        `Mode: ${mode}${mode === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.\n` +
+        `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.\n` +
         `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
         `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
         sessionLine,
@@ -283,10 +286,9 @@ export function App({
   // Tail of the reasoning line that has not been committed yet.
   const [liveReasoning, setLiveReasoning] = useState<string | null>(null);
 
-  const resolveApproval = (decision: ApprovalDecision) => {
+  const resolveApproval = (decision: ApprovalOutcome) => {
     const resolver = approvalResolver.current;
     approvalResolver.current = null;
-    approvalRequest.current = null;
     setPendingApproval(null);
     resolver?.(decision);
   };
@@ -308,9 +310,7 @@ export function App({
       } else if (choice === "n") {
         resolveApproval("deny");
       } else if (choice === "a") {
-        const request = approvalRequest.current;
-        if (request) allowedTools.current.add(request.toolName);
-        resolveApproval("allow");
+        resolveApproval("allow-session");
       }
       return;
     }
@@ -484,19 +484,14 @@ export function App({
         tools: allTools,
         messages: history.current,
         context: { root },
+        permissions,
         contextBudget: config.context,
         signal: controller.signal,
-        approve: (request) => {
-          if (mode === "auto") return "allow";
-          if (mode === "plan") return "deny";
-          if (allowedTools.current.has(request.toolName)) return "allow";
-
-          return new Promise<ApprovalDecision>((resolve) => {
+        approve: (request) =>
+          new Promise<ApprovalOutcome>((resolve) => {
             approvalResolver.current = resolve;
-            approvalRequest.current = request;
             setPendingApproval(request);
-          });
-        },
+          }),
       })) {
         switch (event.type) {
           case "turn-start":

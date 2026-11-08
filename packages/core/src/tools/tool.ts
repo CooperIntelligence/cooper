@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ToolCapability } from "../permissions.js";
 import type { ToolSpec } from "../types.js";
 
 export type ToolContext = {
@@ -24,8 +25,12 @@ export type Tool<S extends z.ZodType = z.ZodType> = {
   name: string;
   description: string;
   inputSchema: S;
-  /** If true, the host asks the user for permission before execution. */
-  requiresApproval?: boolean;
+  /**
+   * What the tool is allowed to do. Tools that include "write" or "execute"
+   * are approval-gated; read-only tools run without asking. The permission
+   * policy treats missing capabilities as dangerous (fail closed).
+   */
+  capabilities: readonly ToolCapability[];
   /** Short, human-readable description of a call, shown in approvals and the UI. */
   summarize?(input: z.infer<S>): string;
   /**

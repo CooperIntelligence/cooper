@@ -6,6 +6,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   resolveContextWindow,
   type ContextSettings,
+  type PermissionPreset,
 } from "@cooper/core";
 
 let envLoaded = false;
@@ -47,7 +48,7 @@ export function loadEnvFiles(): void {
 }
 
 /** ask: prompt before writes/commands · auto: allow everything · plan: read-only */
-export type ApprovalMode = "ask" | "auto" | "plan";
+export type ApprovalMode = PermissionPreset;
 
 export type Config = {
   apiKey: string;

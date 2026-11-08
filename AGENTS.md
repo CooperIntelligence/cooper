@@ -11,6 +11,7 @@
 - `packages/core/src/provider/` — `Provider` interface and adapters
 - `packages/core/src/tools/` — tool interface and implementations
 - `packages/core/src/agent.ts` — the agent loop and approval hook
+- `packages/core/src/permissions.ts` — presets, tool capabilities, fail-closed decisions
 - `packages/core/src/context/` — token estimation and compaction
 - `packages/core/src/instructions.ts` — COOPER.md / AGENTS.md loading
 - `packages/core/src/session.ts` — append-only session files and `--resume`
@@ -36,17 +37,19 @@
    scrolled into scrollback, so rendering the whole growing message live
    duplicates content in terminal history (especially on Windows). The live
    region must never hold more than a line or two.
-8. Any tool that mutates the workspace or executes a command must set
-   `requiresApproval: true`. The agent loop only invokes the host's `approve`
-   callback; never execute such a tool without it.
+8. Every tool must declare `capabilities` (`read` / `write` / `execute`).
+   Writes and commands are approval-gated by `PermissionPolicy`; the agent
+   loop must never execute a gated tool without an explicit allow outcome.
+   Missing capabilities are treated as dangerous.
 9. Implement `summarize()` on every tool — it is what the user sees in the
    approval panel instead of raw JSON arguments.
-10. `plan` mode is enforced by the host: it denies every approval-gated tool
-    and never silently downgrades to `ask`.
-11. Headless (`-p`) runs have no approver and must fail closed: only `auto`
-    allows approval-gated tools. Never default headless to `auto`, and keep
-    `system-prompt.ts` as the single source of the permission instructions
-    shared by `app.tsx` and `headless.ts`.
+10. `plan` mode is enforced by `PermissionPolicy`: it denies every
+    write/execute tool without consulting the approver, and never silently
+    downgrades to `ask`.
+11. Headless (`-p`) runs have no approver and must fail closed: build a
+    non-interactive policy where `ask` denies gated tools. Only `auto` allows
+    them; never default headless to `auto`. `system-prompt.ts` derives the
+    permission text from the same policy instance the loop enforces.
 12. Context compaction lives in `packages/core/src/context/`. It must never
     separate an `assistant` tool call from its `tool` results — compact only
     at `groupMessages()` boundaries, stub tool output in place instead of

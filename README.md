@@ -10,6 +10,7 @@ packages/core/
   src/provider/types.ts              Provider 流式接口（与厂商无关）
   src/provider/openai-compatible.ts  OpenAI 兼容协议实现
   src/agent.ts                       Agent loop + 审批钩子（无 UI 依赖）
+  src/permissions.ts                 权限预设、工具能力与 fail-closed 决策
   src/tools/tool.ts                  工具接口 + zod → JSON Schema
   src/tools/paths.ts                 工作区路径逃逸防护
   src/tools/fs.ts                    list_dir / read_file / grep / write_file / edit_file
@@ -148,6 +149,14 @@ npm run dev -- --mode plan   # 只读规划
 COOPER_MODE=auto npm run dev # 也可用环境变量
 ```
 
+权限决策由 `packages/core/src/permissions.ts` 统一执行，宿主只负责界面：
+
+- 每个工具声明 `capabilities`：`read` / `write` / `execute`。含写或执行能力的工具进入审批流程；缺少声明按最高风险处理。
+- 预设决定默认决策：`plan` 直接拒绝；`ask` 在交互界面询问、在无头模式拒绝；`auto` 放行。
+- 审批结果有三种：`allow`（本次）、`allow-session`（本进程内该工具不再询问，不落盘）、`deny`。
+- 核心层 **fail-closed**：策略要求询问但没有 `approve` 回调时，工具不会执行。plan 模式根本不调用审批回调，宿主无法把它降级成 `ask`。
+- 系统提示的权限段由同一个策略实例生成，界面和执行不会各写一套。
+
 `write_file` / `edit_file` 的审批面板会显示**真实 diff**：带 3 行上下文，`+` 绿色、`-` 红色，最多 18 行，超出部分折叠成计数。工具通过可选的 `preview()` 提供 `before` / `after`，diff 在宿主侧计算，所以未来的 desktop / server 界面可以换一种渲染方式。
 
 审批面板按键：
@@ -226,13 +235,12 @@ npm test                                   # core + cli 单元测试
 1. `packages/core` 不依赖 Ink/React，也不直接写 stdout。它只产出 `AgentEvent`。
 2. 每种界面（TUI / 未来的 desktop、server）都是事件的消费者。
 3. 工具统一实现 `Tool` 接口，输入用 zod 定义，自动转成 JSON Schema 交给模型。
-4. 会修改工作区或执行命令的工具必须标记 `requiresApproval`，审批由宿主回调决定。
+4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。
-7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，TUI 与无头模式共用，避免两侧规则漂移。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
+7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，权限段从 `PermissionPolicy` 实例派生，TUI 与无头模式共用。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
 
 ## 下一步
 
-- 权限系统重构（两轴预设 × fail-closed 审批结果）
 - Anthropic 原生适配器、MCP 客户端
 - 自动格式化 / linter 集成，测试失败自动回灌

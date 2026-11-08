@@ -1,5 +1,6 @@
 import {
   allTools,
+  PermissionPolicy,
   runAgent,
   type LoadedInstructions,
   type LoadedSession,
@@ -81,6 +82,13 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     err.write("plan mode: writes and commands will be denied.\n");
   }
 
+  // Nobody can answer an approval prompt here. The non-interactive policy
+  // turns ask into a denial instead of relying on a dummy approve callback.
+  const permissions = new PermissionPolicy({
+    preset: mode,
+    interactive: false,
+  });
+
   let sessionWarned = false;
   const warnSession = (error: Error | null) => {
     if (error === null || sessionWarned) return;
@@ -111,8 +119,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       role: "system",
       content: buildSystemPrompt({
         root,
-        mode,
-        interactive: false,
+        permissions,
         instructions: instructions.text,
       }),
     },
@@ -179,9 +186,9 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       tools: allTools,
       messages,
       context: { root },
+      permissions,
       contextBudget: config.context,
       signal,
-      approve: () => (mode === "auto" ? "allow" : "deny"),
     })) {
       switch (event.type) {
         case "turn-start": {

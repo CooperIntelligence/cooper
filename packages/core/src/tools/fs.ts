@@ -137,6 +137,7 @@ export const listDirTool: Tool<typeof listDirSchema> = {
   description:
     "List files and directories in the workspace. Directories end with '/'. Common build and dependency directories are skipped.",
   inputSchema: listDirSchema,
+  capabilities: ["read"],
   summarize(input) {
     return `List ${input.path ?? "."} (depth ${input.depth ?? 2})`;
   },
@@ -178,6 +179,7 @@ export const readFileTool: Tool<typeof readFileSchema> = {
   description:
     "Read a text file from the workspace. Output lines are prefixed with their 1-based line number.",
   inputSchema: readFileSchema,
+  capabilities: ["read"],
   summarize(input) {
     const from = input.offset ? ` from line ${input.offset + 1}` : "";
     return `Read ${input.path}${from}`;
@@ -262,6 +264,7 @@ export const grepTool: Tool<typeof grepSchema> = {
   description:
     "Search file contents in the workspace with a regular expression. Returns file:line: content matches.",
   inputSchema: grepSchema,
+  capabilities: ["read"],
   summarize(input) {
     const scope = input.include ? ` in ${input.include}` : "";
     return `Search /${input.pattern}/${scope}`;
@@ -342,7 +345,7 @@ export const writeFileTool: Tool<typeof writeFileSchema> = {
   description:
     "Create or overwrite a file with the given content. Parent directories are created automatically. Prefer edit_file for small changes to existing files.",
   inputSchema: writeFileSchema,
-  requiresApproval: true,
+  capabilities: ["write"],
   summarize(input) {
     const lines = input.content.split(/\r?\n/);
     const preview = lines.slice(0, 3).join("\n");
@@ -423,7 +426,7 @@ export const editFileTool: Tool<typeof editFileSchema> = {
   description:
     "Replace an exact string in an existing file. old_string must match exactly and be unique unless replace_all is true. Prefer this over write_file for targeted changes.",
   inputSchema: editFileSchema,
-  requiresApproval: true,
+  capabilities: ["write"],
   summarize(input) {
     const flag = input.replace_all ? " (all occurrences)" : "";
     return [
