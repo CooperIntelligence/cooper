@@ -9,6 +9,12 @@ export type ParsedArgs = {
   prompt: string | null;
   /** Stream the model's reasoning summary instead of just an indicator. */
   showReasoning: boolean;
+  /** Session id to continue. null starts a fresh conversation. */
+  resume: string | null;
+  /** Persist this run to a session file. `--no-session` turns it off. */
+  session: boolean;
+  /** List sessions for the workspace and exit. */
+  sessions: boolean;
   help: boolean;
 };
 
@@ -38,6 +44,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
     cwd: undefined,
     prompt: null,
     showReasoning: false,
+    resume: null,
+    session: true,
+    sessions: false,
     help: false,
   };
 
@@ -46,6 +55,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
     if (value === undefined) throw new Error(`${flag} requires a value.`);
     return value;
   };
+
+  // A bare `-p` means "read stdin", but a positional prompt after intervening
+  // flags (`-p --resume <id> "follow up"`) should win instead of being
+  // rejected as a second prompt.
+  let barePrint = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -97,6 +111,35 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       }
 
+      case "--resume":
+      case "-r": {
+        let value = inline;
+        if (value === undefined) {
+          const next = argv[index + 1];
+          // Session ids never start with a dash; that keeps `--resume -p`
+          // from silently swallowing the next flag as an id.
+          if (next !== undefined && !next.startsWith("-")) {
+            value = next;
+            index += 1;
+          }
+        }
+        if (value === undefined || value.trim() === "") {
+          throw new Error(`${name} requires a session id.`);
+        }
+        parsed.resume = value.trim();
+        break;
+      }
+
+      case "--sessions": {
+        parsed.sessions = true;
+        break;
+      }
+
+      case "--no-session": {
+        parsed.session = false;
+        break;
+      }
+
       case "--print":
       case "-p": {
         let value = inline;
@@ -113,6 +156,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
           throw new Error("Only one prompt can be given.");
         }
         parsed.prompt = value ?? "-";
+        barePrint = value === undefined;
         break;
       }
 
@@ -121,12 +165,24 @@ export function parseArgs(argv: string[]): ParsedArgs {
           throw new Error(`Unknown argument: ${arg}. Try --help.`);
         }
         if (parsed.prompt !== null) {
+          if (barePrint) {
+            parsed.prompt = arg;
+            barePrint = false;
+            break;
+          }
           throw new Error(`Unexpected extra argument: ${arg}. Try --help.`);
         }
         parsed.prompt = arg;
         break;
       }
     }
+  }
+
+  if (parsed.resume !== null && !parsed.session) {
+    throw new Error("--resume cannot be combined with --no-session.");
+  }
+  if (parsed.sessions && (parsed.prompt !== null || parsed.resume !== null)) {
+    throw new Error("--sessions lists sessions and cannot run a prompt.");
   }
 
   return parsed;

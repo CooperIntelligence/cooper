@@ -5,8 +5,13 @@ import React from "react";
 import { render } from "ink";
 import {
   OpenAICompatibleProvider,
+  SessionWriter,
+  listSessions,
   loadProjectInstructions,
+  resumeSession,
+  sessionsDir,
   type LoadedInstructions,
+  type LoadedSession,
 } from "@cooper/core";
 import { App } from "./app.js";
 import { parseArgs, resolveMode, type ParsedArgs } from "./args.js";
@@ -29,6 +34,9 @@ Options:
   -m, --mode <mode>   ask (default) | auto | plan
   -C, --cwd <dir>     workspace directory (default: current directory)
   -p, --print [text]  non-interactive; omit text or use "-" for stdin
+  -r, --resume <id>   continue a saved session
+      --sessions      list saved sessions for this workspace and exit
+      --no-session    do not save this run's conversation
       --show-reasoning
                       stream the model's reasoning summary (dim, display-only)
   -h, --help          show this help
@@ -48,8 +56,10 @@ Environment:
   COOPER_MODE       Default approval mode (flag wins)
   COOPER_SHOW_REASONING
                     Set to 1 to show reasoning summaries by default
+  COOPER_HOME       Data directory (default: ~/.cooper)
 
 .env is read from the workspace, then from the directory next to Cooper.
+Sessions are saved by default; use --no-session to keep a run ephemeral.
 `;
 
 function fail(error: unknown): never {
@@ -80,6 +90,25 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+function printSessions(root: string): void {
+  const dir = sessionsDir(root);
+  const sessions = listSessions(dir);
+  if (sessions.length === 0) {
+    console.log(`No saved sessions for ${root}.`);
+    return;
+  }
+
+  console.log(`Sessions for ${root}`);
+  console.log(dir);
+  for (const entry of sessions) {
+    const when = new Date(entry.updatedAt).toLocaleString();
+    console.log(
+      `${entry.id}  ${when}  ${entry.model}  ${entry.preview}`,
+    );
+  }
+  console.log("\nResume with: cooper --resume <id>");
+}
+
 async function main(): Promise<void> {
   let args: ParsedArgs;
   try {
@@ -94,18 +123,37 @@ async function main(): Promise<void> {
   }
 
   let root: string;
+  try {
+    root = resolveRoot(args.cwd);
+    // One workspace root for everything: .env lookup, tool paths, session
+    // buckets, and child processes all resolve against the same directory.
+    process.chdir(root);
+  } catch (error) {
+    fail(error);
+  }
+
+  if (args.sessions) {
+    printSessions(root);
+    return;
+  }
+
   let config: Config;
   let mode: ApprovalMode;
   let instructions: LoadedInstructions;
+  let session: SessionWriter | null = null;
+  let resumed: LoadedSession | null = null;
   try {
-    root = resolveRoot(args.cwd);
-    // One workspace root for everything: .env lookup, tool paths, and child
-    // processes all resolve against the same directory.
-    process.chdir(root);
     loadEnvFiles();
     config = loadConfig();
     mode = resolveMode(args.mode, process.env.COOPER_MODE);
     instructions = await loadProjectInstructions(root);
+
+    if (args.resume !== null) {
+      resumed = resumeSession({ cwd: root, id: args.resume });
+      session = args.session ? SessionWriter.from(resumed) : null;
+    } else if (args.session) {
+      session = SessionWriter.create({ cwd: root, model: config.model });
+    }
   } catch (error) {
     fail(error);
   }
@@ -137,6 +185,8 @@ async function main(): Promise<void> {
       out: process.stdout,
       err: process.stderr,
       signal: controller.signal,
+      session,
+      resumed,
     });
     process.exitCode = code;
     return;
@@ -149,6 +199,8 @@ async function main(): Promise<void> {
       mode={mode}
       instructions={instructions}
       showReasoning={showReasoning}
+      session={session}
+      resumed={resumed}
     />,
     { exitOnCtrlC: false },
   );

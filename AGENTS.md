@@ -13,8 +13,10 @@
 - `packages/core/src/agent.ts` — the agent loop and approval hook
 - `packages/core/src/context/` — token estimation and compaction
 - `packages/core/src/instructions.ts` — COOPER.md / AGENTS.md loading
+- `packages/core/src/session.ts` — append-only session files and `--resume`
 - `apps/cli/src/` — surfaces only: `app.tsx` (TUI), `headless.ts` (one-shot),
-  `args.ts`, `system-prompt.ts`, `stream-lines.ts`, `config.ts`
+  `args.ts`, `system-prompt.ts`, `stream-lines.ts`, `session-view.ts`,
+  `config.ts`
 
 ## Hard rules
 
@@ -62,6 +64,11 @@
     `messages` or persisted: DeepSeek rejects `reasoning_content` being sent
     back, and unfaithful reasoning must not become context for later turns.
     It also must never reach headless stdout, which stays answer-only.
+16. Session files are append-only JSONL under Cooper's home directory. Never
+    persist reasoning (rule 15) or in-session "always allow" state. Write a
+    checkpoint after compaction so resume starts from the effective history,
+    and repair an incomplete trailing tool-call group on load instead of
+    replaying it (the chat protocol requires every call to have its results).
 
 ## Commands
 

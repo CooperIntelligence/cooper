@@ -22,12 +22,14 @@ packages/core/
   src/context/budget.ts              阈值决策与编排
   src/context/window.ts              模型窗口表
   src/instructions.ts                COOPER.md / AGENTS.md 加载
+  src/session.ts                     会话持久化（JSONL、checkpoint、恢复）
 apps/cli/
   src/index.tsx                      入口：解析参数、切换 TUI / 无头
   src/args.ts                        命令行参数解析（纯函数，可单测）
   src/app.tsx                        Ink + React TUI + 审批面板
   src/headless.ts                    无头单次运行（stdout=回复，stderr=工具活动）
   src/preview.ts                     审批面板的 diff 行构造
+  src/session-view.ts                恢复会话时重建滚动区
   src/system-prompt.ts               系统提示（两种界面共用）
   src/stream-lines.ts                流式文本按行切分
   src/config.ts                      .env 配置读取
@@ -100,6 +102,26 @@ npm run dev -- -C ../my-app -p "跑一下测试"
 1. `<工作目录>/.env`
 2. `<工作目录>/../../.env`（兼容 monorepo）
 3. Cooper 自己的 `.env`（所以换项目时不必复制密钥）
+
+## 会话持久化
+
+TUI 和 `-p` 默认都会把对话写到磁盘，退出后可以接着聊：
+
+```bash
+npm run dev -- --sessions           # 列出当前工作区的会话
+npm run dev -- --resume <id>        # 继续某个会话
+npm run dev -- -p --resume <id> "接着改"
+npm run dev -- --no-session         # 本次不落盘
+```
+
+- 存储位置：`~/.cooper/projects/<工作区标识>/sessions/<id>.jsonl`。工作区标识由路径生成，同一工作区共享；`COOPER_HOME` 可以换根目录。
+- 每个会话是一个 **JSONL 追加文件**，崩溃时最多丢最后一行。恢复时会忽略损坏的行，并丢弃缺少工具结果的残缺尾部（否则下一次请求会被 API 拒绝）。
+- TUI 横幅和无头模式的 stderr 都会打印会话 id。
+- 会话绑定工作目录：在别的工作区 `--resume` 会报错，不会把路径错配到另一个项目。
+- 上下文压缩后会追加一条 **checkpoint**（压缩后的消息快照）。恢复时以最后一个 checkpoint 为基底再回放后续消息，既保持与退出时一致的上下文，也避免恢复时再花一次摘要调用。
+- **推理内容不落盘**（规则 15）。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
+- system 提示不落盘，恢复时按当前模式、指令和工作目录重新生成。切换项目指令或权限模式后继续旧会话是安全的。
+- 无头模式仍然保持 stdout 只有答案；会话 id、恢复提示和“未保存”告警都走 stderr。
 
 ## 项目指令
 
@@ -192,6 +214,9 @@ COOPER_MODE=auto npm run dev # 也可用环境变量
 npm run dev                                # 启动 TUI（从仓库根目录运行）
 npm run dev -- -p "..." [--mode auto]      # 无头单次运行
 npm run dev -- --cwd ../other-project      # 在别的工作区启动
+npm run dev -- --sessions                  # 列出本工作区保存的会话
+npm run dev -- --resume <id>               # 继续某个会话
+npm run dev -- --no-session                # 本次不保存会话
 npm run typecheck                          # 全仓库类型检查
 npm test                                   # core + cli 单元测试
 ```
@@ -208,7 +233,6 @@ npm test                                   # core + cli 单元测试
 
 ## 下一步
 
-- 会话持久化与 `--resume`
 - 权限系统重构（两轴预设 × fail-closed 审批结果）
 - Anthropic 原生适配器、MCP 客户端
 - 自动格式化 / linter 集成，测试失败自动回灌

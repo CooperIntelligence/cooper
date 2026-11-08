@@ -9,29 +9,16 @@ import {
   type ApprovalDecision,
   type ApprovalRequest,
   type LoadedInstructions,
+  type LoadedSession,
   type Message,
+  type SessionWriter,
 } from "@cooper/core";
 import { buildPreviewRows } from "./preview.js";
 import type { ApprovalMode, Config } from "./config.js";
+import { buildResumeView } from "./session-view.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
-
-type ToolStatus = "running" | "ok" | "error" | "denied";
-
-type UiItem =
-  | { id: number; kind: "user"; text: string }
-  | { id: number; kind: "assistant-line"; text: string; first: boolean }
-  | { id: number; kind: "reasoning-line"; text: string }
-  | {
-      id: number;
-      kind: "tool";
-      name: string;
-      summary: string;
-      status: ToolStatus;
-      output?: string;
-      durationMs?: number;
-    }
-  | { id: number; kind: "notice"; text: string; tone: "info" | "error" };
+import type { UiItem } from "./ui-types.js";
 
 function truncate(text: string, max: number): string {
   const singleLine = text.replace(/\s+/g, " ").trim();
@@ -210,12 +197,18 @@ export function App({
   mode,
   instructions,
   showReasoning,
+  session,
+  resumed,
 }: {
   config: Config;
   root: string;
   mode: ApprovalMode;
   instructions: LoadedInstructions;
   showReasoning: boolean;
+  /** Writes this conversation; null with `--no-session`. */
+  session: SessionWriter | null;
+  /** Previously saved conversation to restore, if `--resume` was used. */
+  resumed: LoadedSession | null;
 }) {
   const { exit } = useApp();
   const [provider] = useState(
@@ -235,10 +228,11 @@ export function App({
         instructions: instructions.text,
       }),
     },
+    ...(resumed?.messages ?? []),
   ]);
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
-  const nextId = useRef(1);
+  const sessionFailureShown = useRef(false);
 
   const approvalResolver = useRef<((decision: ApprovalDecision) => void) | null>(
     null,
@@ -249,8 +243,21 @@ export function App({
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(
     null,
   );
-  const [committed, setCommitted] = useState<UiItem[]>([
-    {
+  const sessionLine =
+    resumed !== null
+      ? `Resumed session ${resumed.header.id} · ${resumed.messages.length} message(s)` +
+        (resumed.repaired > 0
+          ? ` · repaired ${resumed.repaired} invalid row(s)`
+          : "")
+      : session !== null
+        ? `Session ${session.id} · resume with: cooper --resume ${session.id}`
+        : "Session: not saved (--no-session)";
+
+  // Replayed history and the banner are committed once, before the live
+  // region exists, so resumed rows scroll into history exactly like live ones.
+  const [initial] = useState(() => {
+    const firstId = 1;
+    const banner: UiItem = {
       id: 0,
       kind: "notice",
       tone: "info",
@@ -258,9 +265,17 @@ export function App({
         `Cooper ready · ${config.model} · ${root}\n` +
         `Mode: ${mode}${mode === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.\n` +
         `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
-        `Instructions: ${describeInstructions(instructions.sources, root)}`,
-    },
-  ]);
+        `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
+        sessionLine,
+    };
+    const view =
+      resumed !== null
+        ? buildResumeView(resumed, firstId)
+        : { items: [] as UiItem[], nextId: firstId };
+    return { items: [banner, ...view.items], nextId: view.nextId };
+  });
+  const [committed, setCommitted] = useState<UiItem[]>(initial.items);
+  const nextId = useRef(initial.nextId);
   const [live, setLive] = useState<UiItem | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -324,10 +339,26 @@ export function App({
     const push = (item: UiItem) =>
       setCommitted((previous) => [...previous, item]);
 
+    // A failed session write must never take down the conversation; tell the
+    // user once and keep working.
+    const warnSession = (error: Error | null) => {
+      if (error === null || sessionFailureShown.current) return;
+      sessionFailureShown.current = true;
+      push({
+        id: nextId.current++,
+        kind: "notice",
+        tone: "error",
+        text: `Session not saved: ${error.message}`,
+      });
+    };
+
     setInput("");
     setBusy(true);
     push({ id: nextId.current++, kind: "user", text });
     history.current.push({ role: "user", content: text });
+    warnSession(
+      session?.appendMessage({ role: "user", content: text }) ?? null,
+    );
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -549,6 +580,16 @@ export function App({
               text: `Stopped after ${event.turns} turns.`,
             });
             break;
+        }
+
+        // Persist only messages (and compaction snapshots); text/reasoning
+        // deltas are ephemeral and never enter the conversation history.
+        if (
+          event.type === "assistant-done" ||
+          event.type === "tool-end" ||
+          event.type === "context-compacted"
+        ) {
+          warnSession(session?.recordEvent(event, history.current) ?? null);
         }
       }
     } catch (error) {

@@ -8,6 +8,9 @@ describe("parseArgs", () => {
       cwd: undefined,
       prompt: null,
       showReasoning: false,
+      resume: null,
+      session: true,
+      sessions: false,
       help: false,
     });
   });
@@ -52,6 +55,12 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["-p", "a", "b"])).toThrow(/extra argument/);
   });
 
+  it("accepts a positional prompt after intervening flags", () => {
+    const parsed = parseArgs(["-p", "--resume", "abc", "follow up"]);
+    expect(parsed.prompt).toBe("follow up");
+    expect(parsed.resume).toBe("abc");
+  });
+
   it("rejects unknown flags", () => {
     expect(() => parseArgs(["--nope"])).toThrow(/Unknown argument/);
   });
@@ -64,6 +73,38 @@ describe("parseArgs", () => {
   it("recognises help", () => {
     expect(parseArgs(["--help"]).help).toBe(true);
     expect(parseArgs(["-h"]).help).toBe(true);
+  });
+
+  it("reads --resume and -r", () => {
+    expect(parseArgs(["--resume", "abc123"]).resume).toBe("abc123");
+    expect(parseArgs(["--resume=abc123"]).resume).toBe("abc123");
+    expect(parseArgs(["-r", "abc123"]).resume).toBe("abc123");
+  });
+
+  it("requires an explicit session id", () => {
+    expect(() => parseArgs(["--resume"])).toThrow(/requires a session id/);
+    expect(() => parseArgs(["--resume= "])).toThrow(/requires a session id/);
+    expect(() => parseArgs(["--resume", "-p", "hi"])).toThrow(
+      /requires a session id/,
+    );
+  });
+
+  it("disables persistence with --no-session", () => {
+    expect(parseArgs(["--no-session"]).session).toBe(false);
+    expect(parseArgs(["hi"]).session).toBe(true);
+    expect(() => parseArgs(["--resume", "abc", "--no-session"])).toThrow(
+      /cannot be combined/,
+    );
+  });
+
+  it("lists sessions with --sessions", () => {
+    expect(parseArgs(["--sessions"]).sessions).toBe(true);
+    expect(() => parseArgs(["--sessions", "-p", "hi"])).toThrow(
+      /cannot run a prompt/,
+    );
+    expect(() => parseArgs(["--sessions", "--resume", "abc"])).toThrow(
+      /cannot run a prompt/,
+    );
   });
 });
 

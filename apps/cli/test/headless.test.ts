@@ -2,11 +2,14 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type {
-  AssistantMessage,
-  LoadedInstructions,
-  Provider,
-  ProviderEvent,
+import {
+  SessionWriter,
+  createSession,
+  loadSession,
+  type AssistantMessage,
+  type LoadedInstructions,
+  type Provider,
+  type ProviderEvent,
 } from "@cooper/core";
 import type { Config } from "../src/config.js";
 import { runHeadless } from "../src/headless.js";
@@ -269,6 +272,61 @@ describe("runHeadless", () => {
 
     expect(out.text).toBe("answer\n");
     expect(err.text).not.toContain("let me think");
+  });
+
+  it("saves a headless turn and resumes it in a later run", async () => {
+    const root = await makeWorkspace();
+    const home = await makeWorkspace();
+    const writer = createSession({ cwd: root, model: config.model, home });
+    const err = collector();
+
+    const first = await runHeadless({
+      config,
+      root,
+      instructions: noInstructions,
+      showReasoning: false,
+      mode: "auto",
+      prompt: "first",
+      provider: new ScriptedProvider([{ content: "one", toolCalls: [] }]),
+      out: collector(),
+      err,
+      session: writer,
+    });
+
+    expect(first).toBe(0);
+    expect(err.text).toContain(`session ${writer.id}`);
+
+    const saved = loadSession(writer.file);
+    expect(saved.messages).toEqual([
+      { role: "user", content: "first" },
+      { role: "assistant", content: "one" },
+    ]);
+
+    const resumedErr = collector();
+    const second = await runHeadless({
+      config,
+      root,
+      instructions: noInstructions,
+      showReasoning: false,
+      mode: "auto",
+      prompt: "second",
+      provider: new ScriptedProvider([{ content: "two", toolCalls: [] }]),
+      out: collector(),
+      err: resumedErr,
+      session: SessionWriter.from(saved),
+      resumed: saved,
+    });
+
+    expect(second).toBe(0);
+    expect(resumedErr.text).toContain(
+      `resumed session ${writer.id} (2 message(s))`,
+    );
+    expect(loadSession(writer.file).messages).toEqual([
+      { role: "user", content: "first" },
+      { role: "assistant", content: "one" },
+      { role: "user", content: "second" },
+      { role: "assistant", content: "two" },
+    ]);
   });
 
   it("returns 1 and reports provider failures", async () => {

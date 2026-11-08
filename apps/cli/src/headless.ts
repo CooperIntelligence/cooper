@@ -2,8 +2,10 @@ import {
   allTools,
   runAgent,
   type LoadedInstructions,
+  type LoadedSession,
   type Message,
   type Provider,
+  type SessionWriter,
 } from "@cooper/core";
 import type { ApprovalMode, Config } from "./config.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
@@ -25,6 +27,10 @@ export type HeadlessOptions = {
   /** Tool activity, warnings, and errors. */
   err: Writer;
   signal?: AbortSignal;
+  /** Persists the conversation. Omitted by tests and `--no-session` runs. */
+  session?: SessionWriter | null;
+  /** Conversation to continue, when `--resume` was used. */
+  resumed?: LoadedSession | null;
 };
 
 const ICONS = { ok: "✓", error: "✗", denied: "⊘" } as const;
@@ -56,6 +62,8 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     out,
     err,
     signal,
+    session,
+    resumed,
   } = options;
 
   if (instructions.sources.length > 0) {
@@ -73,6 +81,31 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     err.write("plan mode: writes and commands will be denied.\n");
   }
 
+  let sessionWarned = false;
+  const warnSession = (error: Error | null) => {
+    if (error === null || sessionWarned) return;
+    sessionWarned = true;
+    err.write(`session not saved: ${error.message}\n`);
+  };
+
+  if (resumed) {
+    err.write(
+      `resumed session ${resumed.header.id} (${resumed.messages.length} message(s))\n`,
+    );
+    if (resumed.repaired > 0) {
+      err.write(`repaired ${resumed.repaired} invalid session row(s)\n`);
+    }
+  } else if (session) {
+    err.write(
+      `session ${session.id} · resume with: cooper --resume ${session.id}\n`,
+    );
+  }
+
+  // The system prompt is regenerated, never restored: mode, cwd, and project
+  // instructions may all have changed since the session was saved.
+  const userMessage: Message = { role: "user", content: prompt };
+  if (session) warnSession(session.appendMessage(userMessage));
+
   const messages: Message[] = [
     {
       role: "system",
@@ -83,7 +116,8 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
         instructions: instructions.text,
       }),
     },
-    { role: "user", content: prompt },
+    ...(resumed?.messages ?? []),
+    userMessage,
   ];
 
   let atLineStart = true;
@@ -205,6 +239,16 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
           err.write(`Stopped after ${event.turns} turns without finishing.\n`);
           return 1;
         }
+      }
+
+      // Reasoning and text deltas are display-only; the durable assistant
+      // message and tool results arrive as whole events.
+      if (
+        event.type === "assistant-done" ||
+        event.type === "tool-end" ||
+        event.type === "context-compacted"
+      ) {
+        warnSession(session?.recordEvent(event, messages) ?? null);
       }
     }
   } catch (error) {
