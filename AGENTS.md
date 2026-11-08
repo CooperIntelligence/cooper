@@ -8,7 +8,7 @@
 
 ## Layout
 
-- `packages/core/src/provider/` — `Provider` interface and adapters
+- `packages/core/src/provider/` — `Provider` interface and adapters (OpenAI-compatible, Anthropic)
 - `packages/core/src/tools/` — tool interface and implementations
 - `packages/core/src/agent.ts` — the agent loop and approval hook
 - `packages/core/src/permissions.ts` — presets, tool capabilities, fail-closed decisions
@@ -17,7 +17,7 @@
 - `packages/core/src/session.ts` — append-only session files and `--resume`
 - `apps/cli/src/` — surfaces only: `app.tsx` (TUI), `headless.ts` (one-shot),
   `args.ts`, `system-prompt.ts`, `stream-lines.ts`, `session-view.ts`,
-  `config.ts`
+  `provider.ts` (adapter factory), `config.ts`
 
 ## Hard rules
 
@@ -67,11 +67,17 @@
     `messages` or persisted: DeepSeek rejects `reasoning_content` being sent
     back, and unfaithful reasoning must not become context for later turns.
     It also must never reach headless stdout, which stays answer-only.
+    Narrow exception: provider-required signed continuation blocks (Anthropic
+    thinking blocks) live in `Message.providerData`, are replayed only to the
+    provider that produced them, are never rendered as conversation history,
+    and are never sent to a different provider.
 16. Session files are append-only JSONL under Cooper's home directory. Never
-    persist reasoning (rule 15) or in-session "always allow" state. Write a
-    checkpoint after compaction so resume starts from the effective history,
-    and repair an incomplete trailing tool-call group on load instead of
-    replaying it (the chat protocol requires every call to have its results).
+    persist user-facing reasoning or in-session "always allow" state. Signed
+    provider continuation blocks in `providerData` are protocol data and may
+    be persisted so a resumed session can replay them. Write a checkpoint
+    after compaction so resume starts from the effective history, and repair
+    an incomplete trailing tool-call group on load instead of replaying it
+    (the chat protocol requires every call to have its results).
 
 ## Commands
 

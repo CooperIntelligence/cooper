@@ -109,6 +109,49 @@ describe("runAgent", () => {
     });
     expect(messages[4]).toMatchObject({ role: "assistant", content: "All done." });
   });
+
+  it("carries opaque provider continuation data into history and events", async () => {
+    const providerData = {
+      anthropic: {
+        thinking: [
+          { type: "thinking", thinking: "plan", signature: "sig-1" },
+        ],
+      },
+    };
+    const provider: Provider = {
+      async *stream() {
+        yield {
+          type: "done",
+          message: { content: "answer", toolCalls: [], providerData },
+          finishReason: "end_turn",
+        };
+      },
+    };
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const events: AgentEvent[] = [];
+
+    for await (const event of runAgent({
+      provider,
+      model: "test-model",
+      tools: [],
+      messages,
+      context: { root: process.cwd() },
+      permissions: nonInteractive,
+      contextBudget: false,
+    })) {
+      events.push(event);
+    }
+
+    expect(messages[1]).toEqual({
+      role: "assistant",
+      content: "answer",
+      providerData,
+    });
+    const done = events.find((event) => event.type === "assistant-done");
+    expect(done?.type === "assistant-done" ? done.providerData : null).toEqual(
+      providerData,
+    );
+  });
 });
 
 describe("read_file", () => {

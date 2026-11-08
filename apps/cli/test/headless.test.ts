@@ -15,9 +15,11 @@ import type { Config } from "../src/config.js";
 import { runHeadless } from "../src/headless.js";
 
 const config: Config = {
+  provider: "openai",
   apiKey: "test-key",
   baseURL: undefined,
   model: "test-model",
+  maxOutputTokens: 64_000,
   context: { window: 200_000 },
   contextWindowAssumed: false,
   showReasoning: false,

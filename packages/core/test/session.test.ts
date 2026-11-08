@@ -210,6 +210,32 @@ describe("SessionWriter", () => {
     ]);
   });
 
+  it("round-trips opaque provider continuation data", () => {
+    const { home, cwd } = makeWorkspace();
+    const writer = createSession({ cwd, model: "test-model", home });
+    const providerData = {
+      anthropic: {
+        thinking: [
+          { type: "thinking", thinking: "plan", signature: "sig-1" },
+        ],
+      },
+    };
+
+    writer.recordEvent(
+      {
+        type: "assistant-done",
+        content: "answer",
+        toolCalls: [],
+        providerData,
+      },
+      [],
+    );
+
+    expect(loadSession(writer.file).messages).toEqual([
+      { role: "assistant", content: "answer", providerData },
+    ]);
+  });
+
   it("records a tool result with its display summary", () => {
     const { home, cwd } = makeWorkspace();
     const writer = createSession({ cwd, model: "test-model", home });

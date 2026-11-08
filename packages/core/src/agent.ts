@@ -1,4 +1,4 @@
-import type { Message, ToolCall } from "./types.js";
+import type { Message, ProviderData, ToolCall } from "./types.js";
 import type { Provider, TokenUsage } from "./provider/types.js";
 import {
   DEFAULT_CONTEXT_CONFIG,
@@ -52,6 +52,8 @@ export type AgentEvent =
       content: string;
       toolCalls: ToolCall[];
       usage?: TokenUsage;
+      /** Opaque provider data that must be replayed to the same provider. */
+      providerData?: ProviderData;
     }
   | { type: "tool-start"; call: ToolCall; summary: string }
   | {
@@ -201,6 +203,7 @@ export async function* runAgent(
     let content = "";
     let toolCalls: ToolCall[] = [];
     let usage: TokenUsage | undefined;
+    let providerData: ProviderData | undefined;
     let emittedText = false;
     let retried = false;
 
@@ -208,6 +211,7 @@ export async function* runAgent(
       content = "";
       toolCalls = [];
       usage = undefined;
+      providerData = undefined;
       emittedText = false;
 
       const estimated = estimateContextTokens(messages, specs, calibration);
@@ -229,6 +233,7 @@ export async function* runAgent(
             content = event.message.content;
             toolCalls = event.message.toolCalls;
             usage = event.usage;
+            providerData = event.message.providerData;
             if (event.usage?.inputTokens) {
               calibration = updateCalibration(
                 calibration,
@@ -267,10 +272,25 @@ export async function* runAgent(
 
     messages.push(
       toolCalls.length > 0
-        ? { role: "assistant", content, toolCalls }
-        : { role: "assistant", content },
+        ? {
+            role: "assistant",
+            content,
+            toolCalls,
+            ...(providerData !== undefined ? { providerData } : {}),
+          }
+        : {
+            role: "assistant",
+            content,
+            ...(providerData !== undefined ? { providerData } : {}),
+          },
     );
-    yield { type: "assistant-done", content, toolCalls, usage };
+    yield {
+      type: "assistant-done",
+      content,
+      toolCalls,
+      usage,
+      ...(providerData !== undefined ? { providerData } : {}),
+    };
 
     if (toolCalls.length === 0) return;
 

@@ -7,6 +7,7 @@ export * from "./agent.js";
 export * from "./permissions.js";
 export * from "./provider/types.js";
 export * from "./provider/openai-compatible.js";
+export * from "./provider/anthropic.js";
 export * from "./tools/tool.js";
 export * from "./tools/paths.js";
 export * from "./tools/fs.js";

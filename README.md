@@ -9,6 +9,7 @@ packages/core/
   src/types.ts                       消息 / 工具调用类型
   src/provider/types.ts              Provider 流式接口（与厂商无关）
   src/provider/openai-compatible.ts  OpenAI 兼容协议实现
+  src/provider/anthropic.ts          Anthropic Messages API 实现
   src/agent.ts                       Agent loop + 审批钩子（无 UI 依赖）
   src/permissions.ts                 权限预设、工具能力与 fail-closed 决策
   src/tools/tool.ts                  工具接口 + zod → JSON Schema
@@ -33,6 +34,7 @@ apps/cli/
   src/session-view.ts                恢复会话时重建滚动区
   src/system-prompt.ts               系统提示（两种界面共用）
   src/stream-lines.ts                流式文本按行切分
+  src/provider.ts                    根据配置构造 Provider
   src/config.ts                      .env 配置读取
 ```
 
@@ -47,6 +49,13 @@ cp .env.example .env        # Windows PowerShell: Copy-Item .env.example .env
 npm run dev
 ```
 
+`COOPER_PROVIDER` **显式**选择协议，默认 `openai`（不按模型名猜测，因为 Claude 也可能通过 OpenAI 兼容网关提供）：
+
+| 协议 | 配置 | 默认模型 |
+|---|---|---|
+| OpenAI 兼容（默认） | `COOPER_API_KEY` 或 `OPENAI_API_KEY` | `gpt-4o-mini` |
+| Anthropic 原生 | `COOPER_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` | `claude-opus-5-5` |
+
 `COOPER_BASE_URL` 支持任何 OpenAI 兼容端点，例如：
 
 | 供应商 | COOPER_BASE_URL | COOPER_MODEL |
@@ -54,6 +63,8 @@ npm run dev
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
 | Moonshot | `https://api.moonshot.cn/v1` | `kimi-k2-0711-preview` |
+
+Anthropic 原生协议使用 `ANTHROPIC_BASE_URL`（可选），输出上限由 `COOPER_MAX_OUTPUT_TOKENS` 控制（默认 64000）。同时设置时，`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` 优先于通用的 `COOPER_BASE_URL`，避免切换提供商时被旧的端点配置带偏。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
 
 ## 运行方式
 
@@ -120,7 +131,7 @@ npm run dev -- --no-session         # 本次不落盘
 - TUI 横幅和无头模式的 stderr 都会打印会话 id。
 - 会话绑定工作目录：在别的工作区 `--resume` 会报错，不会把路径错配到另一个项目。
 - 上下文压缩后会追加一条 **checkpoint**（压缩后的消息快照）。恢复时以最后一个 checkpoint 为基底再回放后续消息，既保持与退出时一致的上下文，也避免恢复时再花一次摘要调用。
-- **推理内容不落盘**（规则 15）。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
+- **面向用户的推理内容不落盘**（规则 15）。Anthropic 的签名 thinking 块是协议续传数据，作为 `providerData` 随消息保存；它不会显示，也不会发往其他厂商。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
 - system 提示不落盘，恢复时按当前模式、指令和工作目录重新生成。切换项目指令或权限模式后继续旧会话是安全的。
 - 无头模式仍然保持 stdout 只有答案；会话 id、恢复提示和“未保存”告警都走 stderr。
 
@@ -173,6 +184,8 @@ COOPER_MODE=auto npm run dev # 也可用环境变量
 - **`--show-reasoning`**（或 `COOPER_SHOW_REASONING=1`）：按完整行以暗灰色提交到滚动区；无头模式写到 stderr，stdout 仍然只有答案
 
 **推理内容永远不进入对话历史**，也不会被将来的会话持久化保存。三个原因：DeepSeek 明确要求 `reasoning_content` 不能回传；回传只会白白消耗上下文；推理摘要未必忠实反映模型的实际计算，让它变成后续轮次的上下文会污染判断。
+
+唯一例外是 Anthropic 的**签名 thinking 块**：带工具调用时 API 要求原样回传。适配器把它们作为不透明协议数据保存在 assistant 的 `providerData` 中，只回传 Anthropic，不渲染进历史、不混入文本、不发往其他厂商；恢复 Anthropic 会话时也会一并保存，否则下一次请求可能被拒绝。
 
 不是所有端点都返回推理文本——OpenAI 的推理模型通过 chat completions 只给 token 计数，Anthropic 返回的是摘要。所以这是"有就显示、没有就沉默"的能力，不能当成核心功能依赖。
 
@@ -237,10 +250,10 @@ npm test                                   # core + cli 单元测试
 3. 工具统一实现 `Tool` 接口，输入用 zod 定义，自动转成 JSON Schema 交给模型。
 4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
-6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。
+6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。Anthropic 的签名 thinking 块存放在 `providerData`，只回传给 Anthropic。
 7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，权限段从 `PermissionPolicy` 实例派生，TUI 与无头模式共用。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
 
 ## 下一步
 
-- Anthropic 原生适配器、MCP 客户端
+- MCP 客户端
 - 自动格式化 / linter 集成，测试失败自动回灌

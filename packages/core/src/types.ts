@@ -9,10 +9,23 @@ export type ToolCall = {
   arguments: string;
 };
 
+/**
+ * Opaque per-provider continuation data. Anthropic, for example, requires its
+ * signed thinking blocks to be replayed with tool results. This data is never
+ * rendered as conversation content and is only read by the provider that
+ * produced it.
+ */
+export type ProviderData = Record<string, unknown>;
+
 export type Message =
   | { role: "system"; content: string }
   | { role: "user"; content: string }
-  | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
+  | {
+      role: "assistant";
+      content: string;
+      toolCalls?: ToolCall[];
+      providerData?: ProviderData;
+    }
   | { role: "tool"; toolCallId: string; content: string };
 
 export type ToolSpec = {

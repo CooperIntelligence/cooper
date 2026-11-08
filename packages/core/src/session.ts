@@ -209,9 +209,17 @@ function parseMessage(value: unknown): Message | null {
       if (!isString(value.content)) return null;
       const toolCalls = parseToolCalls(value.toolCalls);
       if (toolCalls === null) return null;
-      return toolCalls.length > 0
-        ? { role: "assistant", content: value.content, toolCalls }
-        : { role: "assistant", content: value.content };
+      // Opaque provider continuation data (e.g. signed Anthropic thinking
+      // blocks) is preserved verbatim so a resumed session can replay it.
+      const providerData = isRecord(value.providerData)
+        ? value.providerData
+        : undefined;
+      return {
+        role: "assistant",
+        content: value.content,
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(providerData !== undefined ? { providerData } : {}),
+      };
     }
 
     case "tool":
@@ -572,8 +580,17 @@ export class SessionWriter {
                 role: "assistant",
                 content: event.content,
                 toolCalls: event.toolCalls,
+                ...(event.providerData !== undefined
+                  ? { providerData: event.providerData }
+                  : {}),
               }
-            : { role: "assistant", content: event.content };
+            : {
+                role: "assistant",
+                content: event.content,
+                ...(event.providerData !== undefined
+                  ? { providerData: event.providerData }
+                  : {}),
+              };
         return this.appendMessage(message, undefined, now);
       }
 

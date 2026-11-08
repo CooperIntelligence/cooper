@@ -4,7 +4,6 @@ import path from "node:path";
 import React from "react";
 import { render } from "ink";
 import {
-  OpenAICompatibleProvider,
   SessionWriter,
   listSessions,
   loadProjectInstructions,
@@ -22,6 +21,7 @@ import {
   type Config,
 } from "./config.js";
 import { runHeadless } from "./headless.js";
+import { createProvider } from "./provider.js";
 
 const HELP = `Cooper — a terminal coding agent
 
@@ -50,9 +50,12 @@ Modes:
   commands; pass --mode auto for unattended edits.
 
 Environment:
-  COOPER_API_KEY    API key (falls back to OPENAI_API_KEY)
-  COOPER_BASE_URL   OpenAI-compatible endpoint
-  COOPER_MODEL      Model name
+  COOPER_PROVIDER   openai (default) | anthropic
+  COOPER_API_KEY    API key (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)
+  COOPER_BASE_URL   Endpoint override (provider-specific env wins)
+  COOPER_MODEL      Model name (default: gpt-4o-mini or claude-opus-5-5)
+  COOPER_MAX_OUTPUT_TOKENS
+                    Anthropic max_tokens (default 64000)
   COOPER_MODE       Default approval mode (flag wins)
   COOPER_SHOW_REASONING
                     Set to 1 to show reasoning summaries by default
@@ -159,6 +162,7 @@ async function main(): Promise<void> {
   }
 
   const showReasoning = args.showReasoning || config.showReasoning;
+  const provider = createProvider(config);
 
   if (args.prompt !== null) {
     const prompt = (
@@ -168,11 +172,6 @@ async function main(): Promise<void> {
 
     const controller = new AbortController();
     process.once("SIGINT", () => controller.abort());
-
-    const provider = new OpenAICompatibleProvider({
-      apiKey: config.apiKey,
-      baseURL: config.baseURL,
-    });
 
     const code = await runHeadless({
       config,
@@ -199,6 +198,7 @@ async function main(): Promise<void> {
       mode={mode}
       instructions={instructions}
       showReasoning={showReasoning}
+      provider={provider}
       session={session}
       resumed={resumed}
     />,

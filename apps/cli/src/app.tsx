@@ -4,7 +4,6 @@ import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import {
   allTools,
-  OpenAICompatibleProvider,
   PermissionPolicy,
   runAgent,
   type ApprovalOutcome,
@@ -12,6 +11,7 @@ import {
   type LoadedInstructions,
   type LoadedSession,
   type Message,
+  type Provider,
   type SessionWriter,
 } from "@cooper/core";
 import { buildPreviewRows } from "./preview.js";
@@ -198,6 +198,7 @@ export function App({
   mode,
   instructions,
   showReasoning,
+  provider,
   session,
   resumed,
 }: {
@@ -206,19 +207,14 @@ export function App({
   mode: ApprovalMode;
   instructions: LoadedInstructions;
   showReasoning: boolean;
+  /** Built once by the entry point so every surface uses the same adapter. */
+  provider: Provider;
   /** Writes this conversation; null with `--no-session`. */
   session: SessionWriter | null;
   /** Previously saved conversation to restore, if `--resume` was used. */
   resumed: LoadedSession | null;
 }) {
   const { exit } = useApp();
-  const [provider] = useState(
-    () =>
-      new OpenAICompatibleProvider({
-        apiKey: config.apiKey,
-        baseURL: config.baseURL,
-      }),
-  );
   // The TUI is interactive by definition; the policy is the single source of
   // both the permission decisions and the system prompt text.
   const [permissions] = useState(

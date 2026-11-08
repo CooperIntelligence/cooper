@@ -1,8 +1,10 @@
-import type { Message, ToolCall, ToolSpec } from "../types.js";
+import type { Message, ProviderData, ToolCall, ToolSpec } from "../types.js";
 
 export type AssistantMessage = {
   content: string;
   toolCalls: ToolCall[];
+  /** Opaque continuation data (e.g. Anthropic signed thinking blocks). */
+  providerData?: ProviderData;
 };
 
 export type ChatRequest = {
