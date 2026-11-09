@@ -1,5 +1,6 @@
 import type { Message, ToolSpec } from "../types.js";
 import type { Provider } from "../provider/types.js";
+import { latestRuntimeNotice } from "../runtime-notice.js";
 import {
   INITIAL_CALIBRATION,
   applyCalibration,
@@ -119,6 +120,9 @@ export async function prepareContext(
   const { messages, tools, config, force = false } = options;
   if (!config.enabled) return [];
 
+  // The latest mode notice must survive compaction: the model needs to know
+  // whether it is in plan/ask/auto even after its original turn is summarized.
+  const retainedRuntimeNotice = latestRuntimeNotice(messages);
   const calibration = options.calibration ?? INITIAL_CALIBRATION;
   // Never reserve more than a quarter of the window: with a small local model
   // the 16k default would otherwise eat half the usable budget.
@@ -253,6 +257,17 @@ export async function prepareContext(
       messages.splice(0, messages.length, ...original);
       current = before;
     }
+  }
+
+  // Summaries and truncation can remove the group that carried the notice.
+  // Re-append the exact same message so the mode stays model-visible without
+  // perturbing the remaining history.
+  if (
+    retainedRuntimeNotice !== undefined &&
+    !messages.includes(retainedRuntimeNotice)
+  ) {
+    messages.push(retainedRuntimeNotice);
+    current = estimate();
   }
 
   return actions;

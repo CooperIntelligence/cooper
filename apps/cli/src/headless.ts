@@ -1,6 +1,7 @@
 import {
   allTools,
   PermissionPolicy,
+  permissionModeNotice,
   runAgent,
   type LoadedInstructions,
   type LoadedSession,
@@ -38,6 +39,8 @@ export type HeadlessOptions = {
   tools?: Tool[];
   /** MCP startup status and warnings for stderr. */
   mcp?: McpReport;
+  /** Restored/refused mode information for stderr. */
+  modeNotice?: string;
 };
 
 const ICONS = { ok: "✓", error: "✗", denied: "⊘" } as const;
@@ -72,8 +75,13 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     session,
     resumed,
     mcp,
+    modeNotice,
   } = options;
   const tools = options.tools ?? allTools;
+
+  if (modeNotice !== undefined) {
+    err.write(`mode: ${modeNotice}\n`);
+  }
 
   if (instructions.sources.length > 0) {
     err.write(
@@ -134,10 +142,17 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     );
   }
 
-  // The system prompt is regenerated, never restored: mode, cwd, and project
-  // instructions may all have changed since the session was saved.
+  // The system prompt is regenerated, never restored: cwd and project
+  // instructions may have changed since the session was saved. The mode is
+  // carried by a runtime notice appended after the resumed history so the
+  // provider's cached prefix stays intact.
   const userMessage: Message = { role: "user", content: prompt };
-  if (session) warnSession(session.appendMessage(userMessage));
+  const modeMessage = permissionModeNotice(mode);
+  if (session) {
+    warnSession(session.appendPolicy(mode));
+    warnSession(session.appendMessage(modeMessage));
+    warnSession(session.appendMessage(userMessage));
+  }
 
   const messages: Message[] = [
     {
@@ -149,6 +164,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       }),
     },
     ...(resumed?.messages ?? []),
+    modeMessage,
     userMessage,
   ];
 

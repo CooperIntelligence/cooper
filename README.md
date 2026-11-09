@@ -12,6 +12,7 @@ packages/core/
   src/provider/anthropic.ts          Anthropic Messages API 实现
   src/agent.ts                       Agent loop + 审批钩子（无 UI 依赖）
   src/permissions.ts                 权限预设、工具能力与 fail-closed 决策
+  src/runtime-notice.ts              权限模式的 runtime notice
   src/tools/tool.ts                  工具接口 + zod → JSON Schema
   src/tools/paths.ts                 工作区路径逃逸防护
   src/tools/fs.ts                    list_dir / read_file / grep / write_file / edit_file
@@ -33,6 +34,7 @@ packages/core/
 apps/cli/
   src/index.tsx                      入口：解析参数、切换 TUI / 无头
   src/args.ts                        命令行参数解析（纯函数，可单测）
+  src/commands.ts                    TUI slash 命令解析（纯函数，可单测）
   src/app.tsx                        Ink + React TUI + 审批面板
   src/headless.ts                    无头单次运行（stdout=回复，stderr=工具活动）
   src/preview.ts                     审批面板的 diff 行构造
@@ -138,7 +140,9 @@ npm run dev -- --no-session         # 本次不落盘
 - 会话绑定工作目录：在别的工作区 `--resume` 会报错，不会把路径错配到另一个项目。
 - 上下文压缩后会追加一条 **checkpoint**（压缩后的消息快照）。恢复时以最后一个 checkpoint 为基底再回放后续消息，既保持与退出时一致的上下文，也避免恢复时再花一次摘要调用。
 - **面向用户的推理内容不落盘**（规则 15）。Anthropic 的签名 thinking 块是协议续传数据，作为 `providerData` 随消息保存；它不会显示，也不会发往其他厂商。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
-- system 提示不落盘，恢复时按当前模式、指令和工作目录重新生成。切换项目指令或权限模式后继续旧会话是安全的。
+- system 提示不落盘，恢复时按工作目录和项目指令重新生成；它不包含当前模式，保持字节稳定以复用 provider 的 prompt cache。
+- 当前模式作为 `policy` 记录追加到会话；模型看到的模式说明是带 `runtime: "permission-mode"` 的 `<cooper-runtime>` 消息，TUI 和恢复视图会过滤它，不把它显示成用户输入。
+- 恢复会话时按 `--mode` > `COOPER_MODE` > 会话记录的 `plan`/`ask` > 默认 `ask` 的顺序决定模式；**已保存的 `auto` 不会隐式恢复**，必须显式 `--mode auto` 或在 TUI 里 `/auto`。
 - 无头模式仍然保持 stdout 只有答案；会话 id、恢复提示和“未保存”告警都走 stderr。
 
 ## 项目指令
@@ -166,13 +170,27 @@ npm run dev -- --mode plan   # 只读规划
 COOPER_MODE=auto npm run dev # 也可用环境变量
 ```
 
+TUI 空闲时可以直接切换：
+
+| 命令 | 作用 |
+|---|---|
+| `/plan` | 只读规划模式 |
+| `/ask` | 写/命令逐次审批 |
+| `/auto` | 所有工具自动放行（会显示 warning） |
+| `/help` | 列出命令和当前模式 |
+
+- 命令不发给模型，也不写 message 记录；模式变化只追加 `policy` 记录和一条 runtime notice。
+- 当前轮次进行中（包括等待审批）不能切换，等轮次结束或按 `Esc`。
+- 切换是 **cache-first** 的：不改系统提示、不改更早的消息，只在对话尾部追加模式通知；provider 的旧前缀继续命中缓存。
+- runtime notice 只是行为提示，不是授权凭证；伪造它不能绕过 `PermissionPolicy`。
+
 权限决策由 `packages/core/src/permissions.ts` 统一执行，宿主只负责界面：
 
 - 每个工具声明 `capabilities`：`read` / `write` / `execute`。含写或执行能力的工具进入审批流程；缺少声明按最高风险处理。
 - 预设决定默认决策：`plan` 直接拒绝；`ask` 在交互界面询问、在无头模式拒绝；`auto` 放行。
 - 审批结果有三种：`allow`（本次）、`allow-session`（本进程内该工具不再询问，不落盘）、`deny`。
 - 核心层 **fail-closed**：策略要求询问但没有 `approve` 回调时，工具不会执行。plan 模式根本不调用审批回调，宿主无法把它降级成 `ask`。
-- 系统提示的权限段由同一个策略实例生成，界面和执行不会各写一套。
+- 系统提示描述权限机制，但不写死当前模式；模式由 runtime notice 提供，策略实例仍是唯一执行边界。
 
 `write_file` / `edit_file` 的审批面板会显示**真实 diff**：带 3 行上下文，`+` 绿色、`-` 红色，最多 18 行，超出部分折叠成计数。工具通过可选的 `preview()` 提供 `before` / `after`，diff 在宿主侧计算，所以未来的 desktop / server 界面可以换一种渲染方式。
 
@@ -314,7 +332,7 @@ npm test                                   # core + cli 单元测试
 4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。MCP 服务器暴露的 tools 一律声明 `execute`，不信任服务器标注；Cooper 自己的 MCP resources 适配器是 `read`。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。Anthropic 的签名 thinking 块存放在 `providerData`，只回传给 Anthropic。
-7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，权限段从 `PermissionPolicy` 实例派生，TUI 与无头模式共用。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
+7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，描述权限机制但不写死当前模式，TUI 与无头模式共用。当前模式作为追加的 `<cooper-runtime>` 通知进入对话，避免切换模式时让 provider 的 prompt cache 整体失效。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
 
 ## 下一步
 

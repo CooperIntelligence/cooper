@@ -13,13 +13,14 @@
 - `packages/core/src/mcp/` — MCP config, client, resource tools, and tool adapter
 - `packages/core/src/agent.ts` — the agent loop and approval hook
 - `packages/core/src/permissions.ts` — presets, tool capabilities, fail-closed decisions
+- `packages/core/src/runtime-notice.ts` — host-authored permission-mode notices
 - `packages/core/src/context/` — token estimation and compaction
 - `packages/core/src/instructions.ts` — COOPER.md / AGENTS.md loading
 - `packages/core/src/session.ts` — append-only session files and `--resume`
 - `apps/cli/src/` — surfaces only: `app.tsx` (TUI), `headless.ts` (one-shot),
-  `args.ts`, `system-prompt.ts`, `stream-lines.ts`, `session-view.ts`,
-  `provider.ts` (adapter factory), `mcp.ts` (trusted config + tool assembly),
-  `config.ts`
+  `args.ts`, `commands.ts` (TUI slash commands), `system-prompt.ts`,
+  `stream-lines.ts`, `session-view.ts`, `provider.ts` (adapter factory),
+  `mcp.ts` (trusted config + tool assembly), `config.ts`
 
 ## Hard rules
 
@@ -49,11 +50,15 @@
    approval panel instead of raw JSON arguments.
 10. `plan` mode is enforced by `PermissionPolicy`: it denies every
     write/execute tool without consulting the approver, and never silently
-    downgrades to `ask`.
+    downgrades to `ask`. The TUI may switch the preset at runtime only while
+    idle; the policy instance the loop holds is the source of truth.
 11. Headless (`-p`) runs have no approver and must fail closed: build a
     non-interactive policy where `ask` denies gated tools. Only `auto` allows
-    them; never default headless to `auto`. `system-prompt.ts` derives the
-    permission text from the same policy instance the loop enforces.
+    them; never default headless to `auto`. Resuming a session never restores
+    `auto` implicitly: only explicit `--mode auto` / `COOPER_MODE=auto` does.
+    `system-prompt.ts` describes the permission mechanism from the same policy
+    instance the loop enforces; the current mode itself travels in a runtime
+    notice (rule 18).
 12. Context compaction lives in `packages/core/src/context/`. It must never
     separate an `assistant` tool call from its `tool` results — compact only
     at `groupMessages()` boundaries, stub tool output in place instead of
@@ -78,10 +83,12 @@
 16. Session files are append-only JSONL under Cooper's home directory. Never
     persist user-facing reasoning or in-session "always allow" state. Signed
     provider continuation blocks in `providerData` are protocol data and may
-    be persisted so a resumed session can replay them. Write a checkpoint
-    after compaction so resume starts from the effective history, and repair
-    an incomplete trailing tool-call group on load instead of replaying it
-    (the chat protocol requires every call to have its results).
+    be persisted so a resumed session can replay them. The effective permission
+    preset is persisted as a `policy` record; model-visible runtime notices are
+    persisted with `Message.runtime` and filtered from user-facing views.
+    Write a checkpoint after compaction so resume starts from the effective
+    history, and repair an incomplete trailing tool-call group on load instead
+    of replaying it (the chat protocol requires every call to have its results).
 17. MCP servers execute external code. Load only trusted config: the
     user-level `~/.cooper/mcp.json` and explicit `--mcp-config` files;
     `<workspace>/.cooper/mcp.json` only with `--mcp-project`. Treat every tool
@@ -91,6 +98,11 @@
     `mcp_list_resource_templates`, `mcp_read_resource`) are `read`: they only
     fetch read-only resources from explicitly configured servers, never run
     server tools.
+18. Permission mode changes must preserve the provider prefix cache: never
+    rewrite the system prompt or earlier messages to report a new mode. Append
+    a host-authored `<cooper-runtime>` notice, keep the system prompt
+    mode-neutral, and ensure the latest notice survives compaction. The notice
+    is advisory; `PermissionPolicy` remains the enforcement boundary.
 
 ## Commands
 

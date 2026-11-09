@@ -7,6 +7,10 @@ import type {
 } from "../src/provider/types.js";
 import { estimateConversationTokens } from "../src/context/estimator.js";
 import {
+  isRuntimeNotice,
+  permissionModeNotice,
+} from "../src/runtime-notice.js";
+import {
   prepareContext,
   resolveContextConfig,
 } from "../src/context/budget.js";
@@ -203,6 +207,24 @@ describe("prepareContext", () => {
 
     expect(messages.length).toBeLessThan(originalLength);
     expect(estimateConversationTokens(messages)).toBeLessThan(before);
+  });
+
+  it("keeps the latest runtime notice after compaction", async () => {
+    const notice = permissionModeNotice("plan");
+    const messages = chatHistory(40, 2000);
+    messages.splice(1, 0, notice);
+
+    const actions = await prepareContext({
+      messages,
+      tools: [],
+      provider: new ScriptedProvider("Summary: the goal was X."),
+      model: "test",
+      config: resolveContextConfig({ window: 30_000, reserveOutputTokens: 0 }),
+    });
+
+    expect(actions.length).toBeGreaterThan(0);
+    expect(messages.filter(isRuntimeNotice)).toEqual([notice]);
+    expect(messages.at(-1)).toBe(notice);
   });
 
   it("falls back to truncation when summarization fails", async () => {

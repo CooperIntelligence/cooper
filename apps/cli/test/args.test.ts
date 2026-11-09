@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs, resolveMode } from "../src/args.js";
+import {
+  parseArgs,
+  resolveMode,
+  resolveModeForSession,
+} from "../src/args.js";
 
 describe("parseArgs", () => {
   it("defaults to the interactive TUI", () => {
@@ -136,5 +140,54 @@ describe("resolveMode", () => {
 
   it("rejects an invalid COOPER_MODE", () => {
     expect(() => resolveMode(undefined, "yolo")).toThrow(/COOPER_MODE/);
+  });
+});
+
+describe("resolveModeForSession", () => {
+  it("prefers the flag, then the environment, then the saved mode", () => {
+    expect(resolveModeForSession("auto", "plan", "ask")).toMatchObject({
+      mode: "auto",
+      source: "flag",
+    });
+    expect(resolveModeForSession(undefined, "auto", "plan")).toMatchObject({
+      mode: "auto",
+      source: "env",
+    });
+    expect(resolveModeForSession(undefined, undefined, "plan")).toMatchObject({
+      mode: "plan",
+      source: "session",
+    });
+    expect(resolveModeForSession(undefined, undefined, "ask")).toMatchObject({
+      mode: "ask",
+      source: "session",
+    });
+    expect(resolveModeForSession(undefined, undefined, null)).toMatchObject({
+      mode: "ask",
+      source: "default",
+    });
+  });
+
+  it("never restores a saved auto mode implicitly", () => {
+    expect(resolveModeForSession(undefined, undefined, "auto")).toEqual({
+      mode: "ask",
+      source: "default",
+      sessionAutoIgnored: true,
+    });
+    expect(resolveModeForSession("auto", undefined, "auto")).toMatchObject({
+      mode: "auto",
+      source: "flag",
+      sessionAutoIgnored: false,
+    });
+    expect(resolveModeForSession(undefined, "auto", "auto")).toMatchObject({
+      mode: "auto",
+      source: "env",
+      sessionAutoIgnored: false,
+    });
+  });
+
+  it("rejects an invalid COOPER_MODE when resuming", () => {
+    expect(() =>
+      resolveModeForSession(undefined, "yolo", "ask"),
+    ).toThrow(/COOPER_MODE/);
   });
 });

@@ -13,7 +13,11 @@ import {
   type LoadedSession,
 } from "@cooper/core";
 import { App } from "./app.js";
-import { parseArgs, resolveMode, type ParsedArgs } from "./args.js";
+import {
+  parseArgs,
+  resolveModeForSession,
+  type ParsedArgs,
+} from "./args.js";
 import {
   loadConfig,
   loadEnvFiles,
@@ -146,17 +150,34 @@ async function main(): Promise<void> {
 
   let config: Config;
   let mode: ApprovalMode;
+  let modeNotice: string | undefined;
   let instructions: LoadedInstructions;
   let session: SessionWriter | null = null;
   let resumed: LoadedSession | null = null;
   try {
     loadEnvFiles();
     config = loadConfig();
-    mode = resolveMode(args.mode, process.env.COOPER_MODE);
     instructions = await loadProjectInstructions(root);
 
     if (args.resume !== null) {
       resumed = resumeSession({ cwd: root, id: args.resume });
+    }
+
+    const resolution = resolveModeForSession(
+      args.mode,
+      process.env.COOPER_MODE,
+      resumed?.preset ?? null,
+    );
+    mode = resolution.mode;
+    if (resolution.sessionAutoIgnored) {
+      modeNotice =
+        "Saved session was in auto mode; resumed in ask. " +
+        "Pass --mode auto or run /auto to enable auto-approve.";
+    } else if (resolution.source === "session") {
+      modeNotice = `Restored from session: ${mode}.`;
+    }
+
+    if (args.resume !== null && resumed !== null) {
       session = args.session ? SessionWriter.from(resumed) : null;
     } else if (args.session) {
       session = SessionWriter.create({ cwd: root, model: config.model });
@@ -201,6 +222,7 @@ async function main(): Promise<void> {
         showReasoning,
         tools,
         mcp,
+        modeNotice,
         out: process.stdout,
         err: process.stderr,
         signal: controller.signal,
@@ -225,6 +247,7 @@ async function main(): Promise<void> {
         provider={provider}
         tools={tools}
         mcp={mcp}
+        modeNotice={modeNotice}
         session={session}
         resumed={resumed}
       />,

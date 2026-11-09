@@ -1,4 +1,8 @@
-import { toolCallIndex, type LoadedSession } from "@cooper/core";
+import {
+  isRuntimeNotice,
+  toolCallIndex,
+  type LoadedSession,
+} from "@cooper/core";
 import { splitContent } from "./stream-lines.js";
 import type { ToolStatus, UiItem } from "./ui-types.js";
 
@@ -36,6 +40,7 @@ export function buildResumeView(
     if (message === undefined) continue;
 
     if (message.role === "user") {
+      if (isRuntimeNotice(message)) continue;
       if (isContextStub(message.content)) {
         items.push({
           id: id++,

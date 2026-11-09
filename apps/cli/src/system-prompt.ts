@@ -31,25 +31,18 @@ export function buildSystemPrompt(options: {
 }): string {
   const { root, permissions } = options;
 
-  let permission: string;
-  if (permissions.preset === "plan") {
-    permission =
-      "You are in plan mode: inspect files only. Do not modify files or run commands. Produce a plan for the user to approve.";
-  } else if (permissions.preset === "auto") {
-    permission =
-      "You may inspect files, edit files, and run shell commands. Tool calls are approved automatically, so choose carefully before acting.";
-  } else if (permissions.interactive) {
-    permission =
-      "You may inspect files, edit files, and run shell commands. Tools that change the workspace or execute commands require user approval.";
-  } else {
-    // Non-interactive ask: nobody can answer the prompt, so fail closed.
-    permission =
-      "This is a non-interactive run: tools that change the workspace or execute commands will be denied. Do not retry a denied tool; explain what you would do instead.";
-  }
+  // Keep this section mode-neutral. The current mode arrives in a runtime
+  // notice appended to the conversation; rebuilding this text on every mode
+  // change would invalidate the provider's prompt cache from the system
+  // prompt onward. `interactive` is fixed for the process, so it is safe.
+  const permission = permissions.interactive
+    ? "The host enforces tool permissions. Write and execute tools may require user approval or be denied. The current permission mode is provided in the latest <cooper-runtime> message; earlier notices are superseded. If a tool is denied, do not retry the same call; explain what you intended and ask how to proceed."
+    : "This is a non-interactive run: the host enforces tool permissions and gated tools are denied. The current permission mode is provided in the latest <cooper-runtime> message. Do not retry a denied tool; explain what you would do instead.";
 
   const lines = [
     `You are Cooper, a terminal coding agent working in the project at ${root}.`,
     permission,
+    "Permission mode semantics: plan is read-only; ask requires approval for writes and commands; auto approves all tools.",
     "Prefer read_file/grep over guessing, and edit_file over write_file for targeted changes.",
     "Keep changes minimal and verify your work by running tests when appropriate.",
     "Be concise and reply in the same language as the user.",

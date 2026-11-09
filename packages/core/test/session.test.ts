@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { permissionModeNotice } from "../src/runtime-notice.js";
 import {
   SessionWriter,
   createSession,
@@ -385,6 +386,46 @@ describe("finding and resuming sessions", () => {
     expect(() => resumeSession({ cwd: other, id: "foreign", home })).toThrow(
       /belongs to/,
     );
+  });
+});
+
+describe("policy records and runtime notices", () => {
+  it("restores the last policy and persists runtime notices", () => {
+    const { home, cwd } = makeWorkspace();
+    const writer = createSession({ cwd, model: "m", home });
+
+    writer.appendPolicy("plan");
+    writer.appendMessage(permissionModeNotice("plan"));
+    writer.appendPolicy("ask");
+    writer.appendMessage({ role: "user", content: "hello" });
+
+    const loaded = loadSession(writer.file);
+    expect(loaded.preset).toBe("ask");
+    expect(loaded.messages[0]).toEqual(permissionModeNotice("plan"));
+    expect(loaded.messages[1]).toEqual({ role: "user", content: "hello" });
+  });
+
+  it("ignores malformed policy records", () => {
+    const { home, cwd } = makeWorkspace();
+    const writer = createSession({ cwd, model: "m", home });
+    fs.appendFileSync(
+      writer.file,
+      `${JSON.stringify({ type: "policy", at: "x", preset: "yolo" })}\n`,
+    );
+
+    const loaded = loadSession(writer.file);
+    expect(loaded.preset).toBeNull();
+    expect(loaded.repaired).toBe(1);
+  });
+
+  it("does not use a runtime notice as the session preview", () => {
+    const { home, cwd } = makeWorkspace();
+    const writer = createSession({ cwd, model: "m", home, id: "preview" });
+    writer.appendMessage(permissionModeNotice("plan"));
+    writer.appendMessage({ role: "user", content: "real question" });
+
+    const sessions = listSessions(sessionsDir(cwd, home));
+    expect(sessions[0]?.preview).toBe("real question");
   });
 });
 

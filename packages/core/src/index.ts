@@ -5,6 +5,7 @@ import { runCommandTool } from "./tools/shell.js";
 export * from "./types.js";
 export * from "./agent.js";
 export * from "./permissions.js";
+export * from "./runtime-notice.js";
 export * from "./provider/types.js";
 export * from "./provider/openai-compatible.js";
 export * from "./provider/anthropic.js";
