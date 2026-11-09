@@ -1,10 +1,10 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import {
-  allTools,
   PermissionPolicy,
+  permissionModeNotice,
   runAgent,
   type ApprovalOutcome,
   type ApprovalRequest,
@@ -13,9 +13,18 @@ import {
   type Message,
   type Provider,
   type SessionWriter,
+  type Tool,
 } from "@cooper/core";
+import {
+  commandHelp,
+  isModeCommand,
+  modeDescription,
+  parseCommand,
+  type ParsedCommand,
+} from "./commands.js";
 import { buildPreviewRows } from "./preview.js";
 import type { ApprovalMode, Config } from "./config.js";
+import type { McpReport } from "./mcp.js";
 import { buildResumeView } from "./session-view.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
@@ -199,6 +208,9 @@ export function App({
   instructions,
   showReasoning,
   provider,
+  tools,
+  mcp,
+  modeNotice,
   session,
   resumed,
 }: {
@@ -209,6 +221,12 @@ export function App({
   showReasoning: boolean;
   /** Built once by the entry point so every surface uses the same adapter. */
   provider: Provider;
+  /** Built-in tools plus any connected MCP tools. */
+  tools: Tool[];
+  /** MCP startup status, shown in the banner and as notices. */
+  mcp: McpReport;
+  /** Restored/refused mode information, when resuming a session. */
+  modeNotice?: string;
   /** Writes this conversation; null with `--no-session`. */
   session: SessionWriter | null;
   /** Previously saved conversation to restore, if `--resume` was used. */
@@ -216,10 +234,12 @@ export function App({
 }) {
   const { exit } = useApp();
   // The TUI is interactive by definition; the policy is the single source of
-  // both the permission decisions and the system prompt text.
+  // the permission decisions. Its preset changes at runtime, but the system
+  // prompt deliberately stays mode-neutral.
   const [permissions] = useState(
     () => new PermissionPolicy({ preset: mode, interactive: true }),
   );
+  const [modeState, setModeState] = useState<ApprovalMode>(mode);
   const history = useRef<Message[]>([
     {
       role: "system",
@@ -230,6 +250,7 @@ export function App({
       }),
     },
     ...(resumed?.messages ?? []),
+    permissionModeNotice(mode),
   ]);
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -255,23 +276,71 @@ export function App({
   // Replayed history and the banner are committed once, before the live
   // region exists, so resumed rows scroll into history exactly like live ones.
   const [initial] = useState(() => {
-    const firstId = 1;
+    // Server tools are `mcp__<server>__<tool>`; Cooper's shared resource
+    // tools are `mcp_*`, so both belong in the MCP count.
+    const mcpToolCount = tools.filter((tool) =>
+      tool.name.startsWith("mcp_"),
+    ).length;
+    const toolLine = `Tools: ${tools.length}${mcpToolCount > 0 ? ` (${mcpToolCount} MCP)` : ""}`;
+    const mcpLine =
+      mcp.statuses.length === 0
+        ? mcp.warnings.length > 0
+          ? "MCP: no servers loaded"
+          : "MCP: none"
+        : `MCP: ${mcp.statuses
+            .map((status) =>
+              status.ok
+                ? `${status.name} (${status.toolCount})`
+                : `${status.name} failed`,
+            )
+            .join(", ")}`;
+
     const banner: UiItem = {
       id: 0,
       kind: "notice",
       tone: "info",
       text:
         `Cooper ready · ${config.model} · ${root}\n` +
-        `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.\n` +
+        `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · ${toolLine}. /plan /ask /auto switch modes. Esc interrupts.\n` +
         `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
         `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
+        `${mcpLine}\n` +
         sessionLine,
     };
+
+    let id = 1;
+    const startup: UiItem[] = [];
+    for (const warning of mcp.warnings) {
+      startup.push({
+        id: id++,
+        kind: "notice",
+        tone: "info",
+        text: `MCP: ${warning}`,
+      });
+    }
+    for (const status of mcp.statuses) {
+      if (status.ok) continue;
+      startup.push({
+        id: id++,
+        kind: "notice",
+        tone: "error",
+        text: `MCP server ${status.name} failed: ${status.error ?? "unknown error"}`,
+      });
+    }
+    if (modeNotice !== undefined) {
+      startup.push({
+        id: id++,
+        kind: "notice",
+        tone: "info",
+        text: `Mode: ${modeNotice}`,
+      });
+    }
+
     const view =
       resumed !== null
-        ? buildResumeView(resumed, firstId)
-        : { items: [] as UiItem[], nextId: firstId };
-    return { items: [banner, ...view.items], nextId: view.nextId };
+        ? buildResumeView(resumed, id)
+        : { items: [] as UiItem[], nextId: id };
+    return { items: [banner, ...startup, ...view.items], nextId: view.nextId };
   });
   const [committed, setCommitted] = useState<UiItem[]>(initial.items);
   const nextId = useRef(initial.nextId);
@@ -281,6 +350,94 @@ export function App({
   const [reasoningHint, setReasoningHint] = useState<string | null>(null);
   // Tail of the reasoning line that has not been committed yet.
   const [liveReasoning, setLiveReasoning] = useState<string | null>(null);
+
+  const pushCommitted = (item: UiItem) => {
+    setCommitted((previous) => [...previous, item]);
+  };
+
+  // A failed session write must never take down the conversation; tell the
+  // user once and keep working.
+  const warnSession = (error: Error | null) => {
+    if (error === null || sessionFailureShown.current) return;
+    sessionFailureShown.current = true;
+    pushCommitted({
+      id: nextId.current++,
+      kind: "notice",
+      tone: "error",
+      text: `Session not saved: ${error.message}`,
+    });
+  };
+
+  const switchMode = (next: ApprovalMode) => {
+    if (busyRef.current) {
+      pushCommitted({
+        id: nextId.current++,
+        kind: "notice",
+        tone: "info",
+        text: "Wait for the current turn to finish (or press Esc) before switching modes.",
+      });
+      return;
+    }
+    if (permissions.preset === next) {
+      pushCommitted({
+        id: nextId.current++,
+        kind: "notice",
+        tone: "info",
+        text: `Already in ${modeDescription(next)} mode.`,
+      });
+      return;
+    }
+
+    permissions.setPreset(next);
+    setModeState(next);
+    const notice = permissionModeNotice(next);
+    history.current.push(notice);
+    warnSession(session?.appendPolicy(next) ?? null);
+    warnSession(session?.appendMessage(notice) ?? null);
+    pushCommitted({
+      id: nextId.current++,
+      kind: "notice",
+      tone: next === "auto" ? "error" : "info",
+      text: `Mode: ${modeDescription(next)}`,
+    });
+  };
+
+  const handleCommand = (command: ParsedCommand) => {
+    if (command.kind === "unknown") {
+      const shown = command.name.length > 0 ? ` /${command.name}` : " /";
+      pushCommitted({
+        id: nextId.current++,
+        kind: "notice",
+        tone: "error",
+        text: `Unknown command${shown}. Type /help to list commands.`,
+      });
+      return;
+    }
+    if (command.kind !== "command") return;
+
+    if (command.name === "help") {
+      pushCommitted({
+        id: nextId.current++,
+        kind: "notice",
+        tone: "info",
+        text: commandHelp(modeState),
+      });
+      return;
+    }
+    if (isModeCommand(command.name)) {
+      switchMode(command.name);
+    }
+  };
+
+  // Record the mode that this process actually starts with. The notice is
+  // appended after any resumed history; it never rewrites the system prompt.
+  useEffect(() => {
+    if (session === null) return;
+    warnSession(session.appendPolicy(mode));
+    warnSession(session.appendMessage(permissionModeNotice(mode)));
+    // `mode` is the startup mode; runtime changes are recorded by switchMode.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const resolveApproval = (decision: ApprovalOutcome) => {
     const resolver = approvalResolver.current;
@@ -325,28 +482,30 @@ export function App({
   });
 
   const submit = async (value: string) => {
-    const text = value.trim();
+    const parsed = parseCommand(value);
+    if (parsed.kind !== "prompt") {
+      setInput("");
+      if (busyRef.current) {
+        pushCommitted({
+          id: nextId.current++,
+          kind: "notice",
+          tone: "info",
+          text: "Wait for the current turn to finish (or press Esc) before using commands.",
+        });
+        return;
+      }
+      handleCommand(parsed);
+      return;
+    }
+
+    const text = parsed.text.trim();
     if (!text || busyRef.current) return;
 
     // Guards against a second submit landing before React re-renders and
     // unmounts the input (e.g. Enter key repeat).
     busyRef.current = true;
 
-    const push = (item: UiItem) =>
-      setCommitted((previous) => [...previous, item]);
-
-    // A failed session write must never take down the conversation; tell the
-    // user once and keep working.
-    const warnSession = (error: Error | null) => {
-      if (error === null || sessionFailureShown.current) return;
-      sessionFailureShown.current = true;
-      push({
-        id: nextId.current++,
-        kind: "notice",
-        tone: "error",
-        text: `Session not saved: ${error.message}`,
-      });
-    };
+    const push = pushCommitted;
 
     setInput("");
     setBusy(true);
@@ -477,7 +636,7 @@ export function App({
       for await (const event of runAgent({
         provider,
         model: config.model,
-        tools: allTools,
+        tools,
         messages: history.current,
         context: { root },
         permissions,
@@ -637,12 +796,14 @@ export function App({
               <Spinner type="dots" />
             </Text>
             <Text dimColor>
-              {`  ${reasoningHint ?? "working"} — esc to interrupt`}
+              {`  ${reasoningHint ?? "working"} · ${modeState} · esc to interrupt`}
             </Text>
           </Text>
         ) : (
           <Box>
-            <Text color="cyan">{"> "}</Text>
+            <Text color={modeState === "auto" ? "yellow" : "cyan"}>
+              {`${modeState} > `}
+            </Text>
             <TextInput
               value={input}
               onChange={setInput}

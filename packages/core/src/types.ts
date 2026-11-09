@@ -17,9 +17,15 @@ export type ToolCall = {
  */
 export type ProviderData = Record<string, unknown>;
 
+/**
+ * Host-authored context that is model-visible but must never be presented as
+ * user input. `permission-mode` carries the latest permission mode notice.
+ */
+export type RuntimeNoticeKind = "permission-mode";
+
 export type Message =
   | { role: "system"; content: string }
-  | { role: "user"; content: string }
+  | { role: "user"; content: string; runtime?: RuntimeNoticeKind }
   | {
       role: "assistant";
       content: string;

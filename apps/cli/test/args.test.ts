@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs, resolveMode } from "../src/args.js";
+import {
+  parseArgs,
+  resolveMode,
+  resolveModeForSession,
+} from "../src/args.js";
 
 describe("parseArgs", () => {
   it("defaults to the interactive TUI", () => {
@@ -11,6 +15,8 @@ describe("parseArgs", () => {
       resume: null,
       session: true,
       sessions: false,
+      mcpConfig: [],
+      mcpProject: false,
       help: false,
     });
   });
@@ -106,6 +112,16 @@ describe("parseArgs", () => {
       /cannot run a prompt/,
     );
   });
+
+  it("reads repeatable MCP config flags and the project opt-in", () => {
+    expect(parseArgs(["--mcp-config", "a.json"]).mcpConfig).toEqual(["a.json"]);
+    expect(
+      parseArgs(["--mcp-config=a.json", "--mcp-config", "b.json"]).mcpConfig,
+    ).toEqual(["a.json", "b.json"]);
+    expect(parseArgs(["--mcp-project"]).mcpProject).toBe(true);
+    expect(parseArgs([]).mcpProject).toBe(false);
+    expect(() => parseArgs(["--mcp-config"])).toThrow(/requires a value/);
+  });
 });
 
 describe("resolveMode", () => {
@@ -124,5 +140,54 @@ describe("resolveMode", () => {
 
   it("rejects an invalid COOPER_MODE", () => {
     expect(() => resolveMode(undefined, "yolo")).toThrow(/COOPER_MODE/);
+  });
+});
+
+describe("resolveModeForSession", () => {
+  it("prefers the flag, then the environment, then the saved mode", () => {
+    expect(resolveModeForSession("auto", "plan", "ask")).toMatchObject({
+      mode: "auto",
+      source: "flag",
+    });
+    expect(resolveModeForSession(undefined, "auto", "plan")).toMatchObject({
+      mode: "auto",
+      source: "env",
+    });
+    expect(resolveModeForSession(undefined, undefined, "plan")).toMatchObject({
+      mode: "plan",
+      source: "session",
+    });
+    expect(resolveModeForSession(undefined, undefined, "ask")).toMatchObject({
+      mode: "ask",
+      source: "session",
+    });
+    expect(resolveModeForSession(undefined, undefined, null)).toMatchObject({
+      mode: "ask",
+      source: "default",
+    });
+  });
+
+  it("never restores a saved auto mode implicitly", () => {
+    expect(resolveModeForSession(undefined, undefined, "auto")).toEqual({
+      mode: "ask",
+      source: "default",
+      sessionAutoIgnored: true,
+    });
+    expect(resolveModeForSession("auto", undefined, "auto")).toMatchObject({
+      mode: "auto",
+      source: "flag",
+      sessionAutoIgnored: false,
+    });
+    expect(resolveModeForSession(undefined, "auto", "auto")).toMatchObject({
+      mode: "auto",
+      source: "env",
+      sessionAutoIgnored: false,
+    });
+  });
+
+  it("rejects an invalid COOPER_MODE when resuming", () => {
+    expect(() =>
+      resolveModeForSession(undefined, "yolo", "ask"),
+    ).toThrow(/COOPER_MODE/);
   });
 });

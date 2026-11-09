@@ -15,6 +15,10 @@ export type ParsedArgs = {
   session: boolean;
   /** List sessions for the workspace and exit. */
   sessions: boolean;
+  /** Explicit MCP config files, merged after user/project config. */
+  mcpConfig: string[];
+  /** Allow loading <workspace>/.cooper/mcp.json. */
+  mcpProject: boolean;
   help: boolean;
 };
 
@@ -47,6 +51,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     resume: null,
     session: true,
     sessions: false,
+    mcpConfig: [],
+    mcpProject: false,
     help: false,
   };
 
@@ -140,6 +146,24 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       }
 
+      case "--mcp-config": {
+        let value = inline;
+        if (value === undefined) {
+          value = takeValue(index, name);
+          index += 1;
+        }
+        if (value.trim() === "") {
+          throw new Error("--mcp-config requires a file path.");
+        }
+        parsed.mcpConfig.push(value);
+        break;
+      }
+
+      case "--mcp-project": {
+        parsed.mcpProject = true;
+        break;
+      }
+
       case "--print":
       case "-p": {
         let value = inline;
@@ -193,8 +217,45 @@ export function resolveMode(
   flag: ApprovalMode | undefined,
   envValue: string | undefined,
 ): ApprovalMode {
-  if (flag !== undefined) return flag;
-  if (envValue === undefined || envValue.trim() === "") return "ask";
-  if (isMode(envValue)) return envValue;
-  throw new Error(`Invalid COOPER_MODE "${envValue}". Use ask, auto, or plan.`);
+  return resolveModeForSession(flag, envValue, null).mode;
+}
+
+export type ModeResolution = {
+  mode: ApprovalMode;
+  source: "flag" | "env" | "session" | "default";
+  /** A saved auto mode was deliberately not restored (fail closed). */
+  sessionAutoIgnored: boolean;
+};
+
+/**
+ * Resolve the effective mode for a run that may be resuming a session.
+ *
+ * Precedence: explicit --mode > COOPER_MODE > saved plan/ask > ask. A saved
+ * `auto` is never restored implicitly: a new process must not start with
+ * every gated tool approved unless the user asks for it again.
+ */
+export function resolveModeForSession(
+  flag: ApprovalMode | undefined,
+  envValue: string | undefined,
+  savedPreset: ApprovalMode | null | undefined,
+): ModeResolution {
+  if (flag !== undefined) {
+    return { mode: flag, source: "flag", sessionAutoIgnored: false };
+  }
+  if (envValue !== undefined && envValue.trim() !== "") {
+    if (!isMode(envValue)) {
+      throw new Error(
+        `Invalid COOPER_MODE "${envValue}". Use ask, auto, or plan.`,
+      );
+    }
+    return { mode: envValue, source: "env", sessionAutoIgnored: false };
+  }
+  if (savedPreset === "plan" || savedPreset === "ask") {
+    return { mode: savedPreset, source: "session", sessionAutoIgnored: false };
+  }
+  return {
+    mode: "ask",
+    source: "default",
+    sessionAutoIgnored: savedPreset === "auto",
+  };
 }

@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   SessionWriter,
   createSession,
+  isRuntimeNotice,
   loadSession,
   type AssistantMessage,
+  type ChatRequest,
   type LoadedInstructions,
   type Provider,
   type ProviderEvent,
@@ -71,6 +73,19 @@ class ReasoningProvider implements Provider {
 class FailingProvider implements Provider {
   async *stream(): AsyncIterable<ProviderEvent> {
     throw new Error("boom");
+  }
+}
+
+class CapturingProvider implements Provider {
+  readonly requests: ChatRequest[] = [];
+
+  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
+    this.requests.push(request);
+    yield {
+      type: "done",
+      message: { content: "ok", toolCalls: [] },
+      finishReason: "stop",
+    };
   }
 }
 
@@ -276,6 +291,45 @@ describe("runHeadless", () => {
     expect(err.text).not.toContain("let me think");
   });
 
+  it("keeps the system prompt mode-neutral and appends a runtime notice", async () => {
+    const root = await makeWorkspace();
+    const provider = new CapturingProvider();
+    const err = collector();
+
+    const code = await runHeadless({
+      config,
+      root,
+      instructions: noInstructions,
+      showReasoning: false,
+      mode: "plan",
+      prompt: "plan it",
+      provider,
+      out: collector(),
+      err,
+      modeNotice: "Saved session was in auto mode; resumed in ask.",
+    });
+
+    expect(code).toBe(0);
+    expect(err.text).toContain(
+      "mode: Saved session was in auto mode; resumed in ask.",
+    );
+
+    const messages = provider.requests[0]?.messages ?? [];
+    expect(messages[0]?.role).toBe("system");
+    expect(messages[0]?.content).not.toContain("You are in plan mode");
+
+    const noticeIndex = messages.findIndex(
+      (message) =>
+        message.role === "user" && message.runtime === "permission-mode",
+    );
+    const userIndex = messages.findIndex(
+      (message) => message.role === "user" && message.content === "plan it",
+    );
+    expect(noticeIndex).toBeGreaterThanOrEqual(0);
+    expect(noticeIndex).toBeLessThan(userIndex);
+    expect(messages[noticeIndex]?.content).toContain('mode="plan"');
+  });
+
   it("saves a headless turn and resumes it in a later run", async () => {
     const root = await makeWorkspace();
     const home = await makeWorkspace();
@@ -299,7 +353,13 @@ describe("runHeadless", () => {
     expect(err.text).toContain(`session ${writer.id}`);
 
     const saved = loadSession(writer.file);
-    expect(saved.messages).toEqual([
+    // The mode notice is persisted but hidden from the user-facing transcript.
+    expect(saved.messages[0]).toMatchObject({
+      role: "user",
+      runtime: "permission-mode",
+    });
+    expect(saved.preset).toBe("auto");
+    expect(saved.messages.filter((message) => !isRuntimeNotice(message))).toEqual([
       { role: "user", content: "first" },
       { role: "assistant", content: "one" },
     ]);
@@ -321,9 +381,13 @@ describe("runHeadless", () => {
 
     expect(second).toBe(0);
     expect(resumedErr.text).toContain(
-      `resumed session ${writer.id} (2 message(s))`,
+      `resumed session ${writer.id} (${saved.messages.length} message(s))`,
     );
-    expect(loadSession(writer.file).messages).toEqual([
+    const afterSecond = loadSession(writer.file);
+    expect(afterSecond.preset).toBe("auto");
+    expect(
+      afterSecond.messages.filter((message) => !isRuntimeNotice(message)),
+    ).toEqual([
       { role: "user", content: "first" },
       { role: "assistant", content: "one" },
       { role: "user", content: "second" },

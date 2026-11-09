@@ -1,14 +1,17 @@
 import {
   allTools,
   PermissionPolicy,
+  permissionModeNotice,
   runAgent,
   type LoadedInstructions,
   type LoadedSession,
   type Message,
   type Provider,
   type SessionWriter,
+  type Tool,
 } from "@cooper/core";
 import type { ApprovalMode, Config } from "./config.js";
+import type { McpReport } from "./mcp.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 
 /** Minimal sink so tests can capture output without real streams. */
@@ -32,6 +35,12 @@ export type HeadlessOptions = {
   session?: SessionWriter | null;
   /** Conversation to continue, when `--resume` was used. */
   resumed?: LoadedSession | null;
+  /** Built-in plus MCP tools; defaults to the built-ins for tests. */
+  tools?: Tool[];
+  /** MCP startup status and warnings for stderr. */
+  mcp?: McpReport;
+  /** Restored/refused mode information for stderr. */
+  modeNotice?: string;
 };
 
 const ICONS = { ok: "✓", error: "✗", denied: "⊘" } as const;
@@ -65,12 +74,36 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     signal,
     session,
     resumed,
+    mcp,
+    modeNotice,
   } = options;
+  const tools = options.tools ?? allTools;
+
+  if (modeNotice !== undefined) {
+    err.write(`mode: ${modeNotice}\n`);
+  }
 
   if (instructions.sources.length > 0) {
     err.write(
       `instructions: ${describeInstructions(instructions.sources, root)}\n`,
     );
+  }
+
+  if (mcp !== undefined) {
+    for (const warning of mcp.warnings) {
+      err.write(`mcp: ${warning}\n`);
+    }
+    for (const status of mcp.statuses) {
+      if (status.ok) {
+        err.write(
+          `mcp: ${status.name} connected (${status.toolCount} tool(s))\n`,
+        );
+      } else {
+        err.write(
+          `mcp: ${status.name} failed: ${status.error ?? "unknown error"}\n`,
+        );
+      }
+    }
   }
 
   if (mode === "ask") {
@@ -109,10 +142,17 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     );
   }
 
-  // The system prompt is regenerated, never restored: mode, cwd, and project
-  // instructions may all have changed since the session was saved.
+  // The system prompt is regenerated, never restored: cwd and project
+  // instructions may have changed since the session was saved. The mode is
+  // carried by a runtime notice appended after the resumed history so the
+  // provider's cached prefix stays intact.
   const userMessage: Message = { role: "user", content: prompt };
-  if (session) warnSession(session.appendMessage(userMessage));
+  const modeMessage = permissionModeNotice(mode);
+  if (session) {
+    warnSession(session.appendPolicy(mode));
+    warnSession(session.appendMessage(modeMessage));
+    warnSession(session.appendMessage(userMessage));
+  }
 
   const messages: Message[] = [
     {
@@ -124,6 +164,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       }),
     },
     ...(resumed?.messages ?? []),
+    modeMessage,
     userMessage,
   ];
 
@@ -183,7 +224,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     for await (const event of runAgent({
       provider,
       model: config.model,
-      tools: allTools,
+      tools,
       messages,
       context: { root },
       permissions,

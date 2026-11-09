@@ -38,15 +38,27 @@ export function needsApproval(
 }
 
 export class PermissionPolicy {
-  readonly preset: PermissionPreset;
+  private currentPreset: PermissionPreset;
   readonly interactive: boolean;
 
   /** Tools the user allowed for the rest of this process (never persisted). */
   private readonly sessionAllowed = new Set<string>();
 
   constructor(options: PermissionPolicyOptions) {
-    this.preset = options.preset;
+    this.currentPreset = options.preset;
     this.interactive = options.interactive;
+  }
+
+  get preset(): PermissionPreset {
+    return this.currentPreset;
+  }
+
+  /**
+   * Switches the mode for the rest of this process. Callers must only do this
+   * while the agent is idle; session grants are intentionally preserved.
+   */
+  setPreset(next: PermissionPreset): void {
+    this.currentPreset = next;
   }
 
   decide(tool: {

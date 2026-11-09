@@ -5,6 +5,7 @@ import { runCommandTool } from "./tools/shell.js";
 export * from "./types.js";
 export * from "./agent.js";
 export * from "./permissions.js";
+export * from "./runtime-notice.js";
 export * from "./provider/types.js";
 export * from "./provider/openai-compatible.js";
 export * from "./provider/anthropic.js";
@@ -18,8 +19,13 @@ export * from "./context/prune.js";
 export * from "./context/summarize.js";
 export * from "./context/budget.js";
 export * from "./context/window.js";
+export * from "./home.js";
 export * from "./instructions.js";
 export * from "./session.js";
+export * from "./mcp/config.js";
+export * from "./mcp/resources.js";
+export * from "./mcp/tool.js";
+export * from "./mcp/client.js";
 export * from "./diff.js";
 
 /** Every built-in tool: file inspection/editing plus shell execution. */

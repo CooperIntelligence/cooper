@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { LoadedSession, Message } from "@cooper/core";
+import {
+  permissionModeNotice,
+  type LoadedSession,
+  type Message,
+} from "@cooper/core";
 import { buildResumeView } from "../src/session-view.js";
 
 function session(
@@ -18,11 +22,25 @@ function session(
     file: "/workspace/s.jsonl",
     messages,
     toolUi,
+    preset: null,
     repaired: 0,
   };
 }
 
 describe("buildResumeView", () => {
+  it("hides host runtime notices from the user transcript", () => {
+    const view = buildResumeView(
+      session([
+        permissionModeNotice("plan"),
+        { role: "user", content: "hello" },
+      ]),
+      1,
+    );
+
+    expect(view.items).toEqual([{ id: 1, kind: "user", text: "hello" }]);
+    expect(view.nextId).toBe(2);
+  });
+
   it("splits assistant text into lines with one header", () => {
     const view = buildResumeView(
       session([

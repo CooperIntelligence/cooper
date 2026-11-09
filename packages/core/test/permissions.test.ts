@@ -81,4 +81,22 @@ describe("PermissionPolicy", () => {
     expect(policy("ask", false).decide({ name: "mystery" })).toBe("deny");
     expect(policy("plan", true).decide({ name: "mystery" })).toBe("deny");
   });
+
+  it("switches modes at runtime and keeps session grants", () => {
+    const permissions = policy("ask", true);
+    permissions.grantSession("write_file");
+
+    expect(permissions.decide(write)).toBe("allow");
+
+    permissions.setPreset("plan");
+    expect(permissions.preset).toBe("plan");
+    expect(permissions.decide(write)).toBe("deny");
+
+    // The process-level grant survives a temporary read-only mode.
+    permissions.setPreset("ask");
+    expect(permissions.decide(write)).toBe("allow");
+
+    permissions.setPreset("auto");
+    expect(permissions.decide(execute)).toBe("allow");
+  });
 });

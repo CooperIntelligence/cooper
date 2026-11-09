@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { AgentEvent } from "./agent.js";
-import type { Message, ToolCall } from "./types.js";
+import { cooperHome } from "./home.js";
+import type { PermissionPreset } from "./permissions.js";
+import type { Message, RuntimeNoticeKind, ToolCall } from "./types.js";
+
+export { cooperHome } from "./home.js";
 
 /**
  * Conversation persistence.
@@ -66,10 +69,22 @@ export type SessionCheckpointRecord = {
   ui?: (SessionToolUi | null)[];
 };
 
+/**
+ * The permission mode in effect for this process. Kept separate from message
+ * records so a resume can restore the mode without scanning runtime notices.
+ * Session grants are never persisted.
+ */
+export type SessionPolicyRecord = {
+  type: "policy";
+  at: string;
+  preset: PermissionPreset;
+};
+
 export type SessionRecord =
   | SessionHeader
   | SessionMessageRecord
-  | SessionCheckpointRecord;
+  | SessionCheckpointRecord
+  | SessionPolicyRecord;
 
 export type SessionSummary = {
   id: string;
@@ -88,6 +103,8 @@ export type LoadedSession = {
   messages: Message[];
   /** UI metadata keyed by the index in `messages`. */
   toolUi: Map<number, SessionToolUi>;
+  /** Last permission mode recorded in the session, if any. */
+  preset: PermissionPreset | null;
   /** Number of malformed rows and dropped messages repaired during load. */
   repaired: number;
 };
@@ -109,15 +126,6 @@ export type ResumeSessionOptions = {
 };
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/** `COOPER_HOME` when set, otherwise `~/.cooper`. */
-export function cooperHome(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.COOPER_HOME?.trim();
-  if (override !== undefined && override.length > 0) {
-    return path.resolve(override);
-  }
-  return path.join(os.homedir(), ".cooper");
-}
 
 /**
  * A stable, inspectable directory name per workspace. Windows paths are
@@ -195,15 +203,34 @@ function parseToolCalls(value: unknown): ToolCall[] | null {
   return calls;
 }
 
+function isPermissionPreset(value: unknown): value is PermissionPreset {
+  return value === "plan" || value === "ask" || value === "auto";
+}
+
+function isRuntimeNoticeKind(value: unknown): value is RuntimeNoticeKind {
+  return value === "permission-mode";
+}
+
 function parseMessage(value: unknown): Message | null {
   if (!isRecord(value) || !isString(value.role)) return null;
 
   switch (value.role) {
     case "system":
-    case "user":
       return isString(value.content)
-        ? { role: value.role, content: value.content }
+        ? { role: "system", content: value.content }
         : null;
+
+    case "user": {
+      if (!isString(value.content)) return null;
+      const runtime = isRuntimeNoticeKind(value.runtime)
+        ? value.runtime
+        : undefined;
+      return {
+        role: "user",
+        content: value.content,
+        ...(runtime !== undefined ? { runtime } : {}),
+      };
+    }
 
     case "assistant": {
       if (!isString(value.content)) return null;
@@ -360,6 +387,7 @@ function repairEntries(entries: TranscriptEntry[]): {
 export function loadSession(file: string): LoadedSession {
   const text = fs.readFileSync(file, "utf8");
   let header: SessionHeader | null = null;
+  let preset: PermissionPreset | null = null;
   let skipped = 0;
   let entries: TranscriptEntry[] = [];
 
@@ -415,6 +443,11 @@ export function loadSession(file: string): LoadedSession {
         break;
       }
 
+      case "policy":
+        if (isPermissionPreset(value.preset)) preset = value.preset;
+        else skipped += 1;
+        break;
+
       case "session":
         // A repeated header (e.g. from a future append) carries no new state.
         break;
@@ -446,6 +479,7 @@ export function loadSession(file: string): LoadedSession {
     file,
     messages,
     toolUi,
+    preset,
     repaired: skipped + repaired.dropped,
   };
 }
@@ -516,6 +550,18 @@ export class SessionWriter {
     } catch (error) {
       return error instanceof Error ? error : new Error(String(error));
     }
+  }
+
+  /** Records the effective permission mode for this process. */
+  appendPolicy(
+    preset: PermissionPreset,
+    now: Date = new Date(),
+  ): Error | null {
+    return this.append({
+      type: "policy",
+      at: now.toISOString(),
+      preset,
+    });
   }
 
   appendMessage(
@@ -710,7 +756,8 @@ function previewOf(text: string): string {
       value.type !== "message" ||
       !isRecord(value.message) ||
       value.message.role !== "user" ||
-      !isString(value.message.content)
+      !isString(value.message.content) ||
+      isRuntimeNoticeKind(value.message.runtime)
     ) {
       continue;
     }
