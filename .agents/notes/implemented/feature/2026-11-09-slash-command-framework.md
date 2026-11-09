@@ -59,7 +59,7 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 
 **把斜杠命令做成模型可见的 tool。** 模型可主动触发 `/clear` 等，权限边界模糊（清对话是用户意图），且命令本不该进对话历史。宿主命令保持在 UI 层。
 
-**第一版就做命令选择器 / 补全菜单。** 有价值但不是基础命令的前置；注册表已可被选择器消费，留待后续。
+**第一版就做命令选择器 / 补全菜单。** 与注册表同期做会拖慢基础命令交付；先注册表后选择器，选择器只消费 `filterCommands` / `completeCommand` 纯函数，未改动注册表结构——分批的代价没有兑现成返工。选择器本身已随后补上（见 Consequences）。
 
 **`/clear` 只清内存不清屏。** 与 Claude Code 及用户预期不符；Ink 的 `<Static>` 无法擦除已滚入 scrollback 的行，必须 ANSI 清屏 + 组件重挂载。
 
@@ -72,6 +72,7 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 ## Consequences
 
 - 加命令 = 注册表加一行 + `handleCommand` 加一个 `case`；help 自动更新。别名冲突由「注册表唯一性」测试拦住。
+- **输入浮层**：`input` 以 `/` 开头时在输入框上方渲染候选（`filterCommands` 前缀匹配 name+aliases，`/` 全量）。`↑`/`↓`/`Tab`/`Esc` 由宿主 `useInput` 处理——`ink-text-input` 明确忽略方向键与 Tab，无键冲突；`Enter` 走 `onSubmit`，浮层可见时执行高亮项的 `completeCommand` 结果（别名归一到规范名、保留已输参数）。`Esc` 只收浮层不清输入；无匹配不显示浮层，未知命令路径不变。纯函数在 `commands.ts`，Ink 层只做状态与渲染。
 - `/clear` 后旧会话仍可 `--resume`，`--sessions` 列表会变长；未提供批量清理，避免误删。
 - 老 conhost 可能不支持 `ESC[3J` 清 scrollback：屏幕可能残留旧内容，但内存与会话状态已重置，不破坏一致性。
 - `/compact` 复用 core 的 `prepareContext`，与自动压缩同一套阈值与 checkpoint 语义；`COOPER_CONTEXT_COMPACT=off` 时明确拒绝。
