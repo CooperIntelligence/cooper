@@ -179,10 +179,22 @@ TUI 空闲时可以直接切换：
 | `/auto` | 所有工具自动放行（会显示 warning） |
 | `/help` | 列出命令和当前模式 |
 
+其他基础命令（同样只在空闲时可用）：
+
+| 命令 | 别名 | 作用 |
+|---|---|---|
+| `/clear` | `/new`、`/reset` | 开启空上下文的新对话；旧会话文件保留，可用 `--sessions` 找回 |
+| `/compact` | — | 上下文超过摘要阈值时手动压缩，否则提示无需压缩 |
+| `/sessions` | — | 列出本工作区已保存的会话 |
+| `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
+| `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
+| `/exit` | — | 退出 TUI |
+
 - 命令不发给模型，也不写 message 记录；模式变化只追加 `policy` 记录和一条 runtime notice。
-- 当前轮次进行中（包括等待审批）不能切换，等轮次结束或按 `Esc`。
+- 当前轮次进行中（包括等待审批）不能执行命令，等轮次结束或按 `Esc`。
 - 切换是 **cache-first** 的：不改系统提示、不改更早的消息，只在对话尾部追加模式通知；provider 的旧前缀继续命中缓存。
 - runtime notice 只是行为提示，不是授权凭证；伪造它不能绕过 `PermissionPolicy`。
+- `/clear` 生成**新的** session id 并继续写入新文件，不删除旧文件；权限模式（plan/ask/auto）保持不变。第一版不支持 Claude Code 的 `/clear [name]` 命名参数。
 
 权限决策由 `packages/core/src/permissions.ts` 统一执行，宿主只负责界面：
 
@@ -336,5 +348,6 @@ npm test                                   # core + cli 单元测试
 
 ## 下一步
 
-- MCP prompts（需要 slash command / 选择器入口）
+- `/resume <id>`（TUI 内恢复会话）与命令选择器 / 补全
+- MCP prompts（消费斜杠命令注册表）
 - 自动格式化 / linter 集成，测试失败自动回灌

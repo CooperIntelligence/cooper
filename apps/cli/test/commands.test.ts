@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  COMMANDS,
   commandHelp,
+  formatMcp,
+  formatSessions,
+  formatTools,
   isModeCommand,
   modeDescription,
   parseCommand,
@@ -41,6 +45,34 @@ describe("parseCommand", () => {
     });
   });
 
+  it("resolves aliases to the canonical command", () => {
+    expect(parseCommand("/new")).toEqual({
+      kind: "command",
+      name: "clear",
+      args: "",
+    });
+    expect(parseCommand("/reset extra")).toEqual({
+      kind: "command",
+      name: "clear",
+      args: "extra",
+    });
+    expect(parseCommand("/CLEAR")).toEqual({
+      kind: "command",
+      name: "clear",
+      args: "",
+    });
+  });
+
+  it("parses the first batch of operational commands", () => {
+    for (const name of ["clear", "compact", "sessions", "mcp", "tools", "exit"] as const) {
+      expect(parseCommand(`/${name}`)).toEqual({
+        kind: "command",
+        name,
+        args: "",
+      });
+    }
+  });
+
   it("reports unknown slash commands instead of sending them to the model", () => {
     expect(parseCommand("/unknown thing")).toEqual({
       kind: "unknown",
@@ -50,23 +82,89 @@ describe("parseCommand", () => {
   });
 });
 
-describe("command metadata", () => {
+describe("command registry", () => {
+  it("has unique names and aliases", () => {
+    const seen = new Set<string>();
+    for (const spec of COMMANDS) {
+      expect(seen.has(spec.name)).toBe(false);
+      seen.add(spec.name);
+      for (const alias of spec.aliases) {
+        expect(seen.has(alias)).toBe(false);
+        seen.add(alias);
+      }
+    }
+  });
+
   it("identifies mode commands", () => {
     expect(isModeCommand("plan")).toBe(true);
     expect(isModeCommand("ask")).toBe(true);
     expect(isModeCommand("auto")).toBe(true);
     expect(isModeCommand("help")).toBe(false);
+    expect(isModeCommand("clear")).toBe(false);
   });
 
-  it("describes modes and renders help for the current mode", () => {
+  it("describes modes and renders help for every registered command", () => {
     expect(modeDescription("plan")).toBe("plan (read-only)");
-    expect(modeDescription("ask")).toBe("ask (approve writes and commands)");
     expect(modeDescription("auto")).toBe("auto (auto-approve ALL tools)");
+    expect(modeDescription("ask")).toBe("ask (approve writes and commands)");
 
     const help = commandHelp("plan");
     expect(help).toContain("current mode: plan (read-only)");
-    expect(help).toContain("/plan");
-    expect(help).toContain("/ask");
-    expect(help).toContain("/auto");
+    for (const spec of COMMANDS) {
+      expect(help).toContain(spec.usage);
+    }
+    expect(help).toContain("/clear");
+    expect(help).toContain("aliases /new /reset");
+  });
+});
+
+describe("command formatters", () => {
+  it("formats an empty session list", () => {
+    expect(formatSessions([])).toContain("No saved sessions");
+  });
+
+  it("formats session rows newest first as given", () => {
+    const text = formatSessions([
+      {
+        id: "20261109-120000-abc",
+        file: "/tmp/20261109-120000-abc.jsonl",
+        cwd: "/work",
+        model: "gpt-4o-mini",
+        createdAt: "2026-11-09T12:00:00.000Z",
+        updatedAt: "2026-11-09T12:00:00.000Z",
+        preview: "fix the tests",
+      },
+    ]);
+    expect(text).toContain("20261109-120000-abc");
+    expect(text).toContain("fix the tests");
+    expect(text).toContain("cooper --resume <id>");
+  });
+
+  it("formats MCP status with failures and warnings", () => {
+    const text = formatMcp({
+      sources: ["~/.cooper/mcp.json"],
+      statuses: [
+        { name: "fs", ok: true, toolCount: 12 },
+        { name: "bad", ok: false, toolCount: 0, error: "spawn failed" },
+      ],
+      warnings: ["duplicate tool name ignored"],
+    });
+    expect(text).toContain("~/.cooper/mcp.json");
+    expect(text).toContain("fs  ok · 12 tool(s)");
+    expect(text).toContain("bad  failed · spawn failed");
+    expect(text).toContain("duplicate tool name ignored");
+  });
+
+  it("formats tools with capability labels", () => {
+    const text = formatTools([
+      { name: "read_file", capabilities: ["read"] },
+      { name: "write_file", capabilities: ["write"] },
+      { name: "mcp__fs__ls", capabilities: ["execute"] },
+    ]);
+    expect(text).toContain("3 tool(s)");
+    expect(text).toContain("read_file");
+    expect(text).toContain("read");
+    expect(text).toContain("mcp__fs__ls");
+    expect(text).toContain("execute");
   });
 });

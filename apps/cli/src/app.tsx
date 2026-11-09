@@ -4,19 +4,28 @@ import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import {
   PermissionPolicy,
+  SessionWriter,
+  estimateContextTokens,
+  listSessions,
   permissionModeNotice,
+  prepareContext,
+  resolveContextConfig,
   runAgent,
+  sessionsDir,
+  toToolSpec,
   type ApprovalOutcome,
   type ApprovalRequest,
   type LoadedInstructions,
   type LoadedSession,
   type Message,
   type Provider,
-  type SessionWriter,
   type Tool,
 } from "@cooper/core";
 import {
   commandHelp,
+  formatMcp,
+  formatSessions,
+  formatTools,
   isModeCommand,
   modeDescription,
   parseCommand,
@@ -240,6 +249,10 @@ export function App({
     () => new PermissionPolicy({ preset: mode, interactive: true }),
   );
   const [modeState, setModeState] = useState<ApprovalMode>(mode);
+  // Mutable so /clear can swap in a fresh SessionWriter; `sessionsEnabled`
+  // is fixed at mount (--no-session never starts saving on clear either).
+  const [sessionWriter, setSessionWriter] = useState(session);
+  const sessionsEnabled = useRef(session !== null).current;
   const history = useRef<Message[]>([
     {
       role: "system",
@@ -255,6 +268,8 @@ export function App({
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   const sessionFailureShown = useRef(false);
+  // Bumped by /clear to remount <Static> after an ANSI screen wipe.
+  const [staticKey, setStaticKey] = useState(0);
 
   const approvalResolver = useRef<((decision: ApprovalOutcome) => void) | null>(
     null,
@@ -263,21 +278,22 @@ export function App({
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(
     null,
   );
+  const describeSessionLine = (writer: SessionWriter | null): string =>
+    writer !== null
+      ? `Session ${writer.id} · resume with: cooper --resume ${writer.id}`
+      : "Session: not saved (--no-session)";
+
   const sessionLine =
     resumed !== null
       ? `Resumed session ${resumed.header.id} · ${resumed.messages.length} message(s)` +
         (resumed.repaired > 0
           ? ` · repaired ${resumed.repaired} invalid row(s)`
           : "")
-      : session !== null
-        ? `Session ${session.id} · resume with: cooper --resume ${session.id}`
-        : "Session: not saved (--no-session)";
+      : describeSessionLine(sessionWriter);
 
-  // Replayed history and the banner are committed once, before the live
-  // region exists, so resumed rows scroll into history exactly like live ones.
-  const [initial] = useState(() => {
-    // Server tools are `mcp__<server>__<tool>`; Cooper's shared resource
-    // tools are `mcp_*`, so both belong in the MCP count.
+  // Server tools are `mcp__<server>__<tool>`; Cooper's shared resource
+  // tools are `mcp_*`, so both belong in the MCP count.
+  const buildBannerText = (sessionText: string): string => {
     const mcpToolCount = tools.filter((tool) =>
       tool.name.startsWith("mcp_"),
     ).length;
@@ -295,17 +311,24 @@ export function App({
             )
             .join(", ")}`;
 
+    return (
+      `Cooper ready · ${config.model} · ${root}\n` +
+      `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · ${toolLine}. /help lists commands. Esc interrupts.\n` +
+      `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
+      `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
+      `${mcpLine}\n` +
+      sessionText
+    );
+  };
+
+  // Replayed history and the banner are committed once, before the live
+  // region exists, so resumed rows scroll into history exactly like live ones.
+  const [initial] = useState(() => {
     const banner: UiItem = {
       id: 0,
       kind: "notice",
       tone: "info",
-      text:
-        `Cooper ready · ${config.model} · ${root}\n` +
-        `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · ${toolLine}. /plan /ask /auto switch modes. Esc interrupts.\n` +
-        `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
-        `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
-        `${mcpLine}\n` +
-        sessionLine,
+      text: buildBannerText(sessionLine),
     };
 
     let id = 1;
@@ -392,8 +415,8 @@ export function App({
     setModeState(next);
     const notice = permissionModeNotice(next);
     history.current.push(notice);
-    warnSession(session?.appendPolicy(next) ?? null);
-    warnSession(session?.appendMessage(notice) ?? null);
+    warnSession(sessionWriter?.appendPolicy(next) ?? null);
+    warnSession(sessionWriter?.appendMessage(notice) ?? null);
     pushCommitted({
       id: nextId.current++,
       kind: "notice",
@@ -402,39 +425,184 @@ export function App({
     });
   };
 
-  const handleCommand = (command: ParsedCommand) => {
+  const notice = (text: string, tone: "info" | "error" = "info") => {
+    pushCommitted({ id: nextId.current++, kind: "notice", tone, text });
+  };
+
+  /**
+   * /clear (aliases /new, /reset): a new conversation, not a truncated one.
+   * The old session file is left intact for --sessions / --resume; only the
+   * in-memory transcript and the terminal scrollback start over.
+   */
+  const clearConversation = () => {
+    let writer: SessionWriter | null = null;
+    if (sessionsEnabled) {
+      try {
+        writer = SessionWriter.create({ cwd: root, model: config.model });
+      } catch (error) {
+        notice(
+          `Could not start a new session: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+        return;
+      }
+      warnSession(writer.appendPolicy(modeState));
+      warnSession(writer.appendMessage(permissionModeNotice(modeState)));
+    }
+    setSessionWriter(writer);
+
+    history.current = [
+      {
+        role: "system",
+        content: buildSystemPrompt({
+          root,
+          permissions,
+          instructions: instructions.text,
+        }),
+      },
+      permissionModeNotice(modeState),
+    ];
+
+    // Ink cannot erase rows that already scrolled into history; wipe the
+    // terminal ourselves and remount <Static> so the banner is the first row.
+    if (process.stdout.isTTY) {
+      process.stdout.write("\u001B[2J\u001B[H\u001B[3J");
+    }
+    sessionFailureShown.current = false;
+    const banner: UiItem = {
+      id: nextId.current++,
+      kind: "notice",
+      tone: "info",
+      text: buildBannerText(describeSessionLine(writer)),
+    };
+    setCommitted([banner]);
+    setLive(null);
+    setLiveReasoning(null);
+    setReasoningHint(null);
+    setStaticKey((key) => key + 1);
+  };
+
+  const compactNow = async () => {
+    const contextConfig = resolveContextConfig(config.context);
+    if (!contextConfig.enabled) {
+      notice("Context compaction is off (COOPER_CONTEXT_COMPACT=off).");
+      return;
+    }
+
+    const specs = tools.map(toToolSpec);
+    const estimate = estimateContextTokens(history.current, specs);
+    const reserve = Math.min(
+      contextConfig.reserveOutputTokens,
+      Math.floor(contextConfig.window * 0.25),
+    );
+    const usable = Math.max(2048, contextConfig.window - reserve);
+    const summarizeLimit = usable * contextConfig.summarizeAt;
+    if (estimate <= summarizeLimit) {
+      notice(
+        `Context is ${formatTokens(estimate)} tokens — under the summarize threshold (${formatTokens(summarizeLimit)}), nothing to compact.`,
+      );
+      return;
+    }
+
+    busyRef.current = true;
+    setBusy(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const actions = await prepareContext({
+        messages: history.current,
+        tools: specs,
+        provider,
+        model: config.model,
+        config: contextConfig,
+        signal: controller.signal,
+        force: true,
+      });
+      if (actions.length === 0) {
+        notice("Compaction made no changes.");
+      } else {
+        for (const action of actions) {
+          notice(
+            `⤓ context ${formatTokens(action.before)} → ${formatTokens(action.after)} tokens (${action.action})`,
+          );
+          warnSession(
+            sessionWriter?.recordEvent(
+              {
+                type: "context-compacted",
+                action: action.action,
+                before: action.before,
+                after: action.after,
+              },
+              history.current,
+            ) ?? null,
+          );
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        notice(
+          `Compaction failed: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+      }
+    } finally {
+      abortRef.current = null;
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const handleCommand = async (command: ParsedCommand) => {
     if (command.kind === "unknown") {
       const shown = command.name.length > 0 ? ` /${command.name}` : " /";
-      pushCommitted({
-        id: nextId.current++,
-        kind: "notice",
-        tone: "error",
-        text: `Unknown command${shown}. Type /help to list commands.`,
-      });
+      notice(`Unknown command${shown}. Type /help to list commands.`, "error");
       return;
     }
     if (command.kind !== "command") return;
 
-    if (command.name === "help") {
-      pushCommitted({
-        id: nextId.current++,
-        kind: "notice",
-        tone: "info",
-        text: commandHelp(modeState),
-      });
-      return;
-    }
-    if (isModeCommand(command.name)) {
-      switchMode(command.name);
+    switch (command.name) {
+      case "help":
+        notice(commandHelp(modeState));
+        return;
+      case "clear":
+        clearConversation();
+        return;
+      case "compact":
+        await compactNow();
+        return;
+      case "sessions": {
+        try {
+          notice(formatSessions(listSessions(sessionsDir(root))));
+        } catch (error) {
+          notice(
+            `Could not list sessions: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          );
+        }
+        return;
+      }
+      case "mcp":
+        notice(formatMcp(mcp));
+        return;
+      case "tools":
+        notice(formatTools(tools));
+        return;
+      case "exit":
+        exit();
+        return;
+      default:
+        if (isModeCommand(command.name)) {
+          switchMode(command.name);
+        }
     }
   };
 
   // Record the mode that this process actually starts with. The notice is
   // appended after any resumed history; it never rewrites the system prompt.
   useEffect(() => {
-    if (session === null) return;
-    warnSession(session.appendPolicy(mode));
-    warnSession(session.appendMessage(permissionModeNotice(mode)));
+    if (sessionWriter === null) return;
+    warnSession(sessionWriter.appendPolicy(mode));
+    warnSession(sessionWriter.appendMessage(permissionModeNotice(mode)));
     // `mode` is the startup mode; runtime changes are recorded by switchMode.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -494,7 +662,7 @@ export function App({
         });
         return;
       }
-      handleCommand(parsed);
+      await handleCommand(parsed);
       return;
     }
 
@@ -512,7 +680,7 @@ export function App({
     push({ id: nextId.current++, kind: "user", text });
     history.current.push({ role: "user", content: text });
     warnSession(
-      session?.appendMessage({ role: "user", content: text }) ?? null,
+      sessionWriter?.appendMessage({ role: "user", content: text }) ?? null,
     );
 
     const controller = new AbortController();
@@ -739,7 +907,9 @@ export function App({
           event.type === "tool-end" ||
           event.type === "context-compacted"
         ) {
-          warnSession(session?.recordEvent(event, history.current) ?? null);
+          warnSession(
+            sessionWriter?.recordEvent(event, history.current) ?? null,
+          );
         }
       }
     } catch (error) {
@@ -774,7 +944,7 @@ export function App({
 
   return (
     <Box flexDirection="column">
-      <Static items={committed} style={{ width: "100%" }}>
+      <Static key={staticKey} items={committed} style={{ width: "100%" }}>
         {(item) => <ItemRow key={item.id} item={item} />}
       </Static>
 
