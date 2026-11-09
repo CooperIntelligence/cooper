@@ -166,6 +166,12 @@ export async function* runAgent(
   options: RunAgentOptions,
 ): AsyncGenerator<AgentEvent, void, void> {
   const { provider, model, tools, messages, context } = options;
+  // Tools that can block (MCP, long commands) need the same abort signal as
+  // the provider stream so Ctrl+C cancels them too.
+  const toolContext: ToolContext = {
+    ...context,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+  };
   const maxTurns = options.maxTurns ?? 25;
   const specs = tools.map(toToolSpec);
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
@@ -336,12 +342,12 @@ export async function* runAgent(
             isError: true,
           };
         } else if (decision === "allow") {
-          result = await executeTool(tool, input, context);
+          result = await executeTool(tool, input, toolContext);
         } else {
           let preview: ToolPreview | undefined;
           if (tool.preview) {
             try {
-              preview = await tool.preview(input, context);
+              preview = await tool.preview(input, toolContext);
             } catch {
               // A preview must never block the call; approval still happens.
               preview = undefined;
@@ -371,7 +377,7 @@ export async function* runAgent(
             if (outcome === "allow-session") {
               options.permissions.grantSession(tool.name);
             }
-            result = await executeTool(tool, input, context);
+            result = await executeTool(tool, input, toolContext);
           } else {
             denied = true;
             result = { content: USER_DENIED_MESSAGE, isError: true };

@@ -10,6 +10,7 @@
 
 - `packages/core/src/provider/` — `Provider` interface and adapters (OpenAI-compatible, Anthropic)
 - `packages/core/src/tools/` — tool interface and implementations
+- `packages/core/src/mcp/` — MCP config, client, and tool adapter
 - `packages/core/src/agent.ts` — the agent loop and approval hook
 - `packages/core/src/permissions.ts` — presets, tool capabilities, fail-closed decisions
 - `packages/core/src/context/` — token estimation and compaction
@@ -17,7 +18,8 @@
 - `packages/core/src/session.ts` — append-only session files and `--resume`
 - `apps/cli/src/` — surfaces only: `app.tsx` (TUI), `headless.ts` (one-shot),
   `args.ts`, `system-prompt.ts`, `stream-lines.ts`, `session-view.ts`,
-  `provider.ts` (adapter factory), `config.ts`
+  `provider.ts` (adapter factory), `mcp.ts` (trusted config + tool assembly),
+  `config.ts`
 
 ## Hard rules
 
@@ -25,7 +27,9 @@
    UI-facing output travels as `AgentEvent` from `runAgent()`.
 2. Relative imports use explicit `.js` extensions (NodeNext resolution).
 3. New tools implement the `Tool` type with a zod `inputSchema`, and are
-   re-exported through `packages/core/src/index.ts`.
+   re-exported through `packages/core/src/index.ts`. MCP tools are the
+   exception: they forward the server's raw JSON Schema (`jsonSchema`) and use
+   a permissive zod parser, with the external server validating input.
 4. New providers implement `Provider` and normalize into the shared
    `ProviderEvent` shape; the agent loop must stay vendor-agnostic.
 5. Tools must resolve every path through their workspace root and reject
@@ -78,6 +82,11 @@
     after compaction so resume starts from the effective history, and repair
     an incomplete trailing tool-call group on load instead of replaying it
     (the chat protocol requires every call to have its results).
+17. MCP servers execute external code. Load only trusted config: the
+    user-level `~/.cooper/mcp.json` and explicit `--mcp-config` files;
+    `<workspace>/.cooper/mcp.json` only with `--mcp-project`. Treat every MCP
+    tool as `execute` (ignore server annotations such as `readOnlyHint`), cap
+    tool output, and close every client and child process on exit.
 
 ## Commands
 

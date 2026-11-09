@@ -3,7 +3,6 @@ import { Box, Static, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import {
-  allTools,
   PermissionPolicy,
   runAgent,
   type ApprovalOutcome,
@@ -13,9 +12,11 @@ import {
   type Message,
   type Provider,
   type SessionWriter,
+  type Tool,
 } from "@cooper/core";
 import { buildPreviewRows } from "./preview.js";
 import type { ApprovalMode, Config } from "./config.js";
+import type { McpReport } from "./mcp.js";
 import { buildResumeView } from "./session-view.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
@@ -199,6 +200,8 @@ export function App({
   instructions,
   showReasoning,
   provider,
+  tools,
+  mcp,
   session,
   resumed,
 }: {
@@ -209,6 +212,10 @@ export function App({
   showReasoning: boolean;
   /** Built once by the entry point so every surface uses the same adapter. */
   provider: Provider;
+  /** Built-in tools plus any connected MCP tools. */
+  tools: Tool[];
+  /** MCP startup status, shown in the banner and as notices. */
+  mcp: McpReport;
   /** Writes this conversation; null with `--no-session`. */
   session: SessionWriter | null;
   /** Previously saved conversation to restore, if `--resume` was used. */
@@ -255,23 +262,61 @@ export function App({
   // Replayed history and the banner are committed once, before the live
   // region exists, so resumed rows scroll into history exactly like live ones.
   const [initial] = useState(() => {
-    const firstId = 1;
+    const mcpToolCount = tools.filter((tool) =>
+      tool.name.startsWith("mcp__"),
+    ).length;
+    const toolLine = `Tools: ${tools.length}${mcpToolCount > 0 ? ` (${mcpToolCount} MCP)` : ""}`;
+    const mcpLine =
+      mcp.statuses.length === 0
+        ? mcp.warnings.length > 0
+          ? "MCP: no servers loaded"
+          : "MCP: none"
+        : `MCP: ${mcp.statuses
+            .map((status) =>
+              status.ok
+                ? `${status.name} (${status.toolCount})`
+                : `${status.name} failed`,
+            )
+            .join(", ")}`;
+
     const banner: UiItem = {
       id: 0,
       kind: "notice",
       tone: "info",
       text:
         `Cooper ready · ${config.model} · ${root}\n` +
-        `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · tools: list_dir, read_file, grep, write_file, edit_file, run_command. Esc interrupts.\n` +
+        `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · ${toolLine}. Esc interrupts.\n` +
         `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
         `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
+        `${mcpLine}\n` +
         sessionLine,
     };
+
+    let id = 1;
+    const startup: UiItem[] = [];
+    for (const warning of mcp.warnings) {
+      startup.push({
+        id: id++,
+        kind: "notice",
+        tone: "info",
+        text: `MCP: ${warning}`,
+      });
+    }
+    for (const status of mcp.statuses) {
+      if (status.ok) continue;
+      startup.push({
+        id: id++,
+        kind: "notice",
+        tone: "error",
+        text: `MCP server ${status.name} failed: ${status.error ?? "unknown error"}`,
+      });
+    }
+
     const view =
       resumed !== null
-        ? buildResumeView(resumed, firstId)
-        : { items: [] as UiItem[], nextId: firstId };
-    return { items: [banner, ...view.items], nextId: view.nextId };
+        ? buildResumeView(resumed, id)
+        : { items: [] as UiItem[], nextId: id };
+    return { items: [banner, ...startup, ...view.items], nextId: view.nextId };
   });
   const [committed, setCommitted] = useState<UiItem[]>(initial.items);
   const nextId = useRef(initial.nextId);
@@ -477,7 +522,7 @@ export function App({
       for await (const event of runAgent({
         provider,
         model: config.model,
-        tools: allTools,
+        tools,
         messages: history.current,
         context: { root },
         permissions,

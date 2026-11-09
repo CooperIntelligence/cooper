@@ -5,6 +5,8 @@ import type { ToolSpec } from "../types.js";
 export type ToolContext = {
   /** Absolute path of the workspace the tools are allowed to touch. */
   root: string;
+  /** Aborts in-flight work when the user interrupts or the host shuts down. */
+  signal?: AbortSignal;
 };
 
 export type ToolResult = {
@@ -26,6 +28,13 @@ export type Tool<S extends z.ZodType = z.ZodType> = {
   description: string;
   inputSchema: S;
   /**
+   * Raw JSON Schema for tools whose schema comes from outside (MCP). When
+   * present, it is sent to the model verbatim instead of deriving one from
+   * `inputSchema`; `inputSchema` is then a permissive parser and the external
+   * server performs authoritative validation.
+   */
+  jsonSchema?: Record<string, unknown>;
+  /**
    * What the tool is allowed to do. Tools that include "write" or "execute"
    * are approval-gated; read-only tools run without asking. The permission
    * policy treats missing capabilities as dangerous (fail closed).
@@ -45,8 +54,11 @@ export type Tool<S extends z.ZodType = z.ZodType> = {
 };
 
 export function toToolSpec<S extends z.ZodType>(tool: Tool<S>): ToolSpec {
-  const schema = z.toJSONSchema(tool.inputSchema) as Record<string, unknown>;
-  // Some OpenAI-compatible providers reject unknown top-level keywords.
+  const schema: Record<string, unknown> = tool.jsonSchema
+    ? { ...tool.jsonSchema }
+    : (z.toJSONSchema(tool.inputSchema) as Record<string, unknown>);
+  // Some providers reject unknown top-level keywords. Clone first so a raw
+  // schema shared with an external server is never mutated.
   delete schema.$schema;
   return {
     name: tool.name,

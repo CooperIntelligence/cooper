@@ -7,8 +7,10 @@ import {
   type Message,
   type Provider,
   type SessionWriter,
+  type Tool,
 } from "@cooper/core";
 import type { ApprovalMode, Config } from "./config.js";
+import type { McpReport } from "./mcp.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 
 /** Minimal sink so tests can capture output without real streams. */
@@ -32,6 +34,10 @@ export type HeadlessOptions = {
   session?: SessionWriter | null;
   /** Conversation to continue, when `--resume` was used. */
   resumed?: LoadedSession | null;
+  /** Built-in plus MCP tools; defaults to the built-ins for tests. */
+  tools?: Tool[];
+  /** MCP startup status and warnings for stderr. */
+  mcp?: McpReport;
 };
 
 const ICONS = { ok: "✓", error: "✗", denied: "⊘" } as const;
@@ -65,12 +71,31 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     signal,
     session,
     resumed,
+    mcp,
   } = options;
+  const tools = options.tools ?? allTools;
 
   if (instructions.sources.length > 0) {
     err.write(
       `instructions: ${describeInstructions(instructions.sources, root)}\n`,
     );
+  }
+
+  if (mcp !== undefined) {
+    for (const warning of mcp.warnings) {
+      err.write(`mcp: ${warning}\n`);
+    }
+    for (const status of mcp.statuses) {
+      if (status.ok) {
+        err.write(
+          `mcp: ${status.name} connected (${status.toolCount} tool(s))\n`,
+        );
+      } else {
+        err.write(
+          `mcp: ${status.name} failed: ${status.error ?? "unknown error"}\n`,
+        );
+      }
+    }
   }
 
   if (mode === "ask") {
@@ -183,7 +208,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     for await (const event of runAgent({
       provider,
       model: config.model,
-      tools: allTools,
+      tools,
       messages,
       context: { root },
       permissions,

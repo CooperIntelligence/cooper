@@ -25,6 +25,10 @@ packages/core/
   src/context/window.ts              模型窗口表
   src/instructions.ts                COOPER.md / AGENTS.md 加载
   src/session.ts                     会话持久化（JSONL、checkpoint、恢复）
+  src/home.ts                        COOPER_HOME / ~/.cooper 解析
+  src/mcp/config.ts                  MCP 配置与信任规则
+  src/mcp/client.ts                  MCP 连接、工具列表、生命周期
+  src/mcp/tool.ts                    MCP tool → Tool 适配
 apps/cli/
   src/index.tsx                      入口：解析参数、切换 TUI / 无头
   src/args.ts                        命令行参数解析（纯函数，可单测）
@@ -35,6 +39,7 @@ apps/cli/
   src/system-prompt.ts               系统提示（两种界面共用）
   src/stream-lines.ts                流式文本按行切分
   src/provider.ts                    根据配置构造 Provider
+  src/mcp.ts                         加载可信 MCP 配置并组装工具
   src/config.ts                      .env 配置读取
 ```
 
@@ -230,6 +235,44 @@ COOPER_MODE=auto npm run dev # 也可用环境变量
 
 所有工具都被限制在启动目录内，路径逃逸会被拒绝。
 
+## MCP 工具
+
+Cooper 可以作为 MCP 客户端，把本地或远程服务器的工具并入同一套审批、执行和会话流程。
+
+配置文件使用标准的 `mcpServers` 格式：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ..." }
+    }
+  }
+}
+```
+
+加载顺序（同名服务器后者覆盖前者）：
+
+1. `~/.cooper/mcp.json` —— 用户级，默认加载
+2. `<工作目录>/.cooper/mcp.json` —— 仅 `--mcp-project` 时加载
+3. `--mcp-config <file>` —— 可重复，始终加载
+
+启动 MCP 服务器等于执行外部程序，所以**默认不读工作区里的配置**，打开一个仓库不会自动运行任何命令。连接失败只告警并跳过该服务器，内置工具不受影响。
+
+- 传输：stdio、Streamable HTTP、SSE
+- 配置值按字面量使用，暂不支持 `${VAR}` 展开
+- 工具名：`mcp__<server>__<tool>`，输入 Schema 原样交给模型
+- **所有 MCP 工具都按 `execute` 处理**，忽略服务器自报的 `readOnlyHint`：`plan` 拒绝、`ask` 询问、`auto` 放行
+- 单次输出上限 30k 字符；图片/音频转成占位说明
+- 启动横幅和无头 stderr 显示每台服务器的连接状态与工具数；退出或中断时关闭客户端和子进程
+- 本轮只支持 tools；resources / prompts 暂未接入
+
 ## 命令
 
 ```bash
@@ -239,6 +282,8 @@ npm run dev -- --cwd ../other-project      # 在别的工作区启动
 npm run dev -- --sessions                  # 列出本工作区保存的会话
 npm run dev -- --resume <id>               # 继续某个会话
 npm run dev -- --no-session                # 本次不保存会话
+npm run dev -- --mcp-project               # 加载工作区的 MCP 配置
+npm run dev -- --mcp-config ./mcp.json     # 显式加载 MCP 配置（可重复）
 npm run typecheck                          # 全仓库类型检查
 npm test                                   # core + cli 单元测试
 ```
@@ -247,13 +292,13 @@ npm test                                   # core + cli 单元测试
 
 1. `packages/core` 不依赖 Ink/React，也不直接写 stdout。它只产出 `AgentEvent`。
 2. 每种界面（TUI / 未来的 desktop、server）都是事件的消费者。
-3. 工具统一实现 `Tool` 接口，输入用 zod 定义，自动转成 JSON Schema 交给模型。
-4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。
+3. 工具统一实现 `Tool` 接口，输入用 zod 定义，自动转成 JSON Schema 交给模型；MCP 工具直接透传服务器的 JSON Schema。
+4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。MCP 工具一律声明 `execute`，不信任服务器标注。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。Anthropic 的签名 thinking 块存放在 `providerData`，只回传给 Anthropic。
 7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，权限段从 `PermissionPolicy` 实例派生，TUI 与无头模式共用。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
 
 ## 下一步
 
-- MCP 客户端
+- MCP resources / prompts
 - 自动格式化 / linter 集成，测试失败自动回灌

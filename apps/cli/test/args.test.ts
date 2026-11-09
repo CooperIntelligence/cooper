@@ -11,6 +11,8 @@ describe("parseArgs", () => {
       resume: null,
       session: true,
       sessions: false,
+      mcpConfig: [],
+      mcpProject: false,
       help: false,
     });
   });
@@ -105,6 +107,16 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--sessions", "--resume", "abc"])).toThrow(
       /cannot run a prompt/,
     );
+  });
+
+  it("reads repeatable MCP config flags and the project opt-in", () => {
+    expect(parseArgs(["--mcp-config", "a.json"]).mcpConfig).toEqual(["a.json"]);
+    expect(
+      parseArgs(["--mcp-config=a.json", "--mcp-config", "b.json"]).mcpConfig,
+    ).toEqual(["a.json", "b.json"]);
+    expect(parseArgs(["--mcp-project"]).mcpProject).toBe(true);
+    expect(parseArgs([]).mcpProject).toBe(false);
+    expect(() => parseArgs(["--mcp-config"])).toThrow(/requires a value/);
   });
 });
 

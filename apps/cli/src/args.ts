@@ -15,6 +15,10 @@ export type ParsedArgs = {
   session: boolean;
   /** List sessions for the workspace and exit. */
   sessions: boolean;
+  /** Explicit MCP config files, merged after user/project config. */
+  mcpConfig: string[];
+  /** Allow loading <workspace>/.cooper/mcp.json. */
+  mcpProject: boolean;
   help: boolean;
 };
 
@@ -47,6 +51,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     resume: null,
     session: true,
     sessions: false,
+    mcpConfig: [],
+    mcpProject: false,
     help: false,
   };
 
@@ -137,6 +143,24 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
       case "--no-session": {
         parsed.session = false;
+        break;
+      }
+
+      case "--mcp-config": {
+        let value = inline;
+        if (value === undefined) {
+          value = takeValue(index, name);
+          index += 1;
+        }
+        if (value.trim() === "") {
+          throw new Error("--mcp-config requires a file path.");
+        }
+        parsed.mcpConfig.push(value);
+        break;
+      }
+
+      case "--mcp-project": {
+        parsed.mcpProject = true;
         break;
       }
 

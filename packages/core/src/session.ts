@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { AgentEvent } from "./agent.js";
+import { cooperHome } from "./home.js";
 import type { Message, ToolCall } from "./types.js";
+
+export { cooperHome } from "./home.js";
 
 /**
  * Conversation persistence.
@@ -109,15 +111,6 @@ export type ResumeSessionOptions = {
 };
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/** `COOPER_HOME` when set, otherwise `~/.cooper`. */
-export function cooperHome(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.COOPER_HOME?.trim();
-  if (override !== undefined && override.length > 0) {
-    return path.resolve(override);
-  }
-  return path.join(os.homedir(), ".cooper");
-}
 
 /**
  * A stable, inspectable directory name per workspace. Windows paths are
