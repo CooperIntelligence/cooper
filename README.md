@@ -186,6 +186,7 @@ TUI 空闲时可以直接切换：
 | `/clear` | `/new`、`/reset` | 开启空上下文的新对话；旧会话文件保留，可用 `--sessions` 找回 |
 | `/compact` | — | 上下文超过摘要阈值时手动压缩，否则提示无需压缩 |
 | `/sessions` | — | 列出本工作区已保存的会话 |
+| `/resume <id>` | — | 切换到已保存会话（支持唯一 id 前缀）；保持当前权限模式 |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
 | `/exit` | — | 退出 TUI |
@@ -195,6 +196,7 @@ TUI 空闲时可以直接切换：
 - 切换是 **cache-first** 的：不改系统提示、不改更早的消息，只在对话尾部追加模式通知；provider 的旧前缀继续命中缓存。
 - runtime notice 只是行为提示，不是授权凭证；伪造它不能绕过 `PermissionPolicy`。
 - `/clear` 生成**新的** session id 并继续写入新文件，不删除旧文件；权限模式（plan/ask/auto）保持不变。第一版不支持 Claude Code 的 `/clear [name]` 命名参数。
+- `/resume` 先加载成功再切换，坏 id 不会打断当前对话；切换后写入目标会话文件，**当前进程模式不被目标会话的旧 policy 覆盖**（与启动时 `--resume` 不同——启动时进程刚起、没有已选模式）。
 
 权限决策由 `packages/core/src/permissions.ts` 统一执行，宿主只负责界面：
 
@@ -348,6 +350,6 @@ npm test                                   # core + cli 单元测试
 
 ## 下一步
 
-- `/resume <id>`（TUI 内恢复会话）与命令选择器 / 补全
+- 命令选择器 / 输入补全
 - MCP prompts（消费斜杠命令注册表）
 - 自动格式化 / linter 集成，测试失败自动回灌

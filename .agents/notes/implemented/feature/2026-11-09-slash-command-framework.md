@@ -21,11 +21,12 @@ TUI 只有 4 个写死的斜杠命令（`/help` `/plan` `/ask` `/auto`）：命�
 | `/clear` | `/new`、`/reset` | 开启空上下文的新对话 |
 | `/compact` | — | 估计 token；低于摘要阈值则提示，否则 `prepareContext({ force: true })` 并按事件追加 checkpoint |
 | `/sessions` | — | 列出本工作区已保存会话 |
+| `/resume <id>` | — | 切换到已保存会话（唯一 id 前缀可命中）；**保持当前进程模式** |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及 `read`/`write`/`execute` 能力 |
 | `/exit` | — | 退出 TUI |
 
-`/help` 与三个模式命令保留，help 文案由注册表生成。`/resume` 涉及滚动区重建，未纳入本批。
+`/help` 与三个模式命令保留，help 文案由注册表生成。
 
 ### `/clear` 语义（对齐 Claude Code）
 
@@ -37,11 +38,20 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 - 不支持 Claude Code 的 `/clear [name]` 命名参数。
 - `--no-session` 时只重置内存与屏幕，`sessionsEnabled` 在 mount 时固定，clear 不会开始落盘。
 
+### `/resume` 语义
+
+- **先加载后切换**：`resumeSession` 失败（坏 id / 歧义 / 跨工作区）只报错，当前对话不动。
+- 命中后 `SessionWriter.from(loaded)` 把写入目标切到该会话文件；旧文件已即时追加、无未保存状态，直接弃引用即可。
+- 内存历史 = `[system, ...loaded.messages, permissionModeNotice(当前模式)]`，与启动 `--resume` 同构；滚动区用 `buildResumeView` 重建 + ANSI 清屏 + `<Static>` 重挂载（与 `/clear` 共用路径）。
+- **模式保持当前进程的**（拍板选项 A）：模式是进程级状态，用户本进程显式设过的不应被一次对话切换改掉；切换后向目标会话补写 `policy` + runtime notice。这与启动时 `--resume` 恢复 plan/ask、忽略 auto 的行为**有意不同**——启动时进程刚起、没有已选模式可言。
+- 支持 `findSessionFile` 的唯一前缀匹配；已在目标会话中则提示不动作。
+- `--no-session` 下拒绝（与 CLI「`--resume` 不能配 `--no-session`」对齐）。
+
 ### 边界
 
 - 所有命令只在空闲时可用（busy 期间统一提示等待或 Esc）；`/compact` 执行期间自行置 busy 并挂 AbortController，Esc 可中断摘要调用。
-- 命令不发给模型、不写 message 记录；`/clear` 与 `/compact` 是仅有的碰会话文件的命令（新建文件 / 追加 checkpoint）。
-- 参数校验从宽：多余参数忽略，与 `/auto please` 一致。
+- 命令不发给模型、不写 message 记录；`/clear`、`/compact`、`/resume` 是碰会话文件的三个命令（新建 / checkpoint / 切换写入目标）。
+- 参数校验从宽：多余参数忽略，与 `/auto please` 一致；`/resume` 是唯一必须带参数的命令，缺参报用法错误。
 
 ## Alternatives considered
 
@@ -57,11 +67,14 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 
 **`/compact` 无条件 `force=true`。** 小对话上也会花一次摘要调用且可能越压越大；先用估计值卡在 summarize 阈值下，低于阈值直接告知无需压缩，高于阈值才 `force: true` 一次压到位。
 
+**`/resume` 恢复目标会话的 plan/ask 模式（对齐启动逻辑）。** 与启动一致看似统一，但 TUI 里模式是用户刚刚主动设的；切个对话就把权限改掉（甚至从 plan 放开到 ask）更 surprising。启动恢复是因为进程没有「当前模式」可言，条件不同。选了保持进程模式（选项 A）。
+
 ## Consequences
 
 - 加命令 = 注册表加一行 + `handleCommand` 加一个 `case`；help 自动更新。别名冲突由「注册表唯一性」测试拦住。
 - `/clear` 后旧会话仍可 `--resume`，`--sessions` 列表会变长；未提供批量清理，避免误删。
 - 老 conhost 可能不支持 `ESC[3J` 清 scrollback：屏幕可能残留旧内容，但内存与会话状态已重置，不破坏一致性。
 - `/compact` 复用 core 的 `prepareContext`，与自动压缩同一套阈值与 checkpoint 语义；`COOPER_CONTEXT_COMPACT=off` 时明确拒绝。
-- Claude Code 的 `/clear [name]` 与 TUI 内 `/resume` 未做；见 README「下一步」。
-- 验证：`npm run typecheck` 与 `npm test` 通过（core 138 + cli 82）；覆盖别名解析、注册表唯一性、help 全量命令、三个格式化函数。
+- Claude Code 的 `/clear [name]`（给旧会话命名）未做；见 README「下一步」。
+- `/resume` 与启动 `--resume` 的模式语义有意分叉（见 Decision）；若未来要统一，应改启动侧向 TUI 对齐（启动也保持…不行，启动没有当前模式），或在 note 里显式记录两者的各自理由——现在已记录。
+- 验证：`npm run typecheck` 与 `npm test` 通过（core 138 + cli 82）；覆盖别名解析、注册表唯一性、help 全量命令（含 `/resume <id>`）、三个格式化函数。

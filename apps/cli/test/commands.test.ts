@@ -64,7 +64,7 @@ describe("parseCommand", () => {
   });
 
   it("parses the first batch of operational commands", () => {
-    for (const name of ["clear", "compact", "sessions", "mcp", "tools", "exit"] as const) {
+    for (const name of ["clear", "compact", "sessions", "resume", "mcp", "tools", "exit"] as const) {
       expect(parseCommand(`/${name}`)).toEqual({
         kind: "command",
         name,
@@ -115,6 +115,7 @@ describe("command registry", () => {
     }
     expect(help).toContain("/clear");
     expect(help).toContain("aliases /new /reset");
+    expect(help).toContain("/resume <id>");
   });
 });
 

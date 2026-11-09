@@ -8,6 +8,7 @@ export type CommandName =
   | "clear"
   | "compact"
   | "sessions"
+  | "resume"
   | "mcp"
   | "tools"
   | "exit";
@@ -67,6 +68,12 @@ export const COMMANDS: readonly CommandSpec[] = [
     aliases: [],
     usage: "/sessions",
     description: "list saved sessions for this workspace",
+  },
+  {
+    name: "resume",
+    aliases: [],
+    usage: "/resume <id>",
+    description: "switch to a saved session (unique id prefix works)",
   },
   {
     name: "mcp",

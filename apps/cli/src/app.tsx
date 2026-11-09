@@ -10,6 +10,7 @@ import {
   permissionModeNotice,
   prepareContext,
   resolveContextConfig,
+  resumeSession,
   runAgent,
   sessionsDir,
   toToolSpec,
@@ -482,6 +483,97 @@ export function App({
     setStaticKey((key) => key + 1);
   };
 
+  /**
+   * /resume <id>: switch the conversation to a saved session (unique id
+   * prefix accepted). Loads first so a bad id never disturbs the current
+   * transcript; the old file stays as-is, and the process mode is kept
+   * (option A) - only the write target changes.
+   */
+  const resumeConversation = (idArg: string) => {
+    if (!sessionsEnabled) {
+      notice(
+        "Session resume requires sessions (not compatible with --no-session).",
+        "error",
+      );
+      return;
+    }
+    const id = idArg.trim();
+    if (id === "") {
+      notice("Usage: /resume <id>. List sessions with /sessions.", "error");
+      return;
+    }
+
+    let loaded: LoadedSession;
+    try {
+      loaded = resumeSession({ cwd: root, id });
+    } catch (error) {
+      notice(
+        `Could not resume: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return;
+    }
+
+    if (sessionWriter !== null && sessionWriter.id === loaded.header.id) {
+      notice(`Already in session ${loaded.header.id}.`);
+      return;
+    }
+
+    let writer: SessionWriter;
+    try {
+      writer = SessionWriter.from(loaded);
+    } catch (error) {
+      notice(
+        `Could not open session: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return;
+    }
+    setSessionWriter(writer);
+    // Keep the process mode; record it on the target session so a later
+    // --resume of this file starts from what the user actually ran here.
+    warnSession(writer.appendPolicy(modeState));
+    warnSession(writer.appendMessage(permissionModeNotice(modeState)));
+
+    history.current = [
+      {
+        role: "system",
+        content: buildSystemPrompt({
+          root,
+          permissions,
+          instructions: instructions.text,
+        }),
+      },
+      ...loaded.messages,
+      permissionModeNotice(modeState),
+    ];
+
+    if (process.stdout.isTTY) {
+      process.stdout.write("\u001B[2J\u001B[H\u001B[3J");
+    }
+    sessionFailureShown.current = false;
+
+    let resumeId = nextId.current;
+    const banner: UiItem = {
+      id: resumeId++,
+      kind: "notice",
+      tone: "info",
+      text: buildBannerText(
+        `Resumed session ${loaded.header.id} · ${loaded.messages.length} message(s)` +
+          (loaded.repaired > 0
+            ? ` · repaired ${loaded.repaired} invalid row(s)`
+            : ""),
+      ),
+    };
+    const view = buildResumeView(loaded, resumeId);
+    setCommitted([banner, ...view.items]);
+    nextId.current = view.nextId;
+    setLive(null);
+    setLiveReasoning(null);
+    setReasoningHint(null);
+    setStaticKey((key) => key + 1);
+  };
+
   const compactNow = async () => {
     const contextConfig = resolveContextConfig(config.context);
     if (!contextConfig.enabled) {
@@ -569,6 +661,9 @@ export function App({
         return;
       case "compact":
         await compactNow();
+        return;
+      case "resume":
+        resumeConversation(command.args);
         return;
       case "sessions": {
         try {
