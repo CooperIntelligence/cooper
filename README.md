@@ -68,9 +68,9 @@ npm run dev
 
 | 供应商 | COOPER_BASE_URL | COOPER_MODEL |
 |---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
-| Moonshot | `https://api.moonshot.cn/v1` | `kimi-k2-0711-preview` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-6-astra` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-flash` |
+| Moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
 
 Anthropic 原生协议使用 `ANTHROPIC_BASE_URL`（可选），输出上限由 `COOPER_MAX_OUTPUT_TOKENS` 控制（默认 64000）。同时设置时，`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` 优先于通用的 `COOPER_BASE_URL`，避免切换提供商时被旧的端点配置带偏。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
 
@@ -190,6 +190,12 @@ TUI 空闲时可以直接切换：
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
 | `/exit` | — | 退出 TUI |
+
+输入以 `/` 开头时，输入框上方会浮出注册表候选（前缀匹配，含别名）：
+
+- `↑` / `↓` 移动高亮，`Tab` 补全为规范命令名（保留已输入的参数），`Enter` 直接执行高亮项
+- `Esc` 收起浮层但保留已输入文本（再按一次且轮次进行中才会中断）
+- 单独输入 `/` 列出全部命令；无匹配时不显示浮层，`Enter` 按未知命令提示
 
 - 命令不发给模型，也不写 message 记录；模式变化只追加 `policy` 记录和一条 runtime notice。
 - 当前轮次进行中（包括等待审批）不能执行命令，等轮次结束或按 `Esc`。
@@ -350,6 +356,5 @@ npm test                                   # core + cli 单元测试
 
 ## 下一步
 
-- 命令选择器 / 输入补全
-- MCP prompts（消费斜杠命令注册表）
+- MCP prompts（消费斜杠命令注册表与选择器）
 - 自动格式化 / linter 集成，测试失败自动回灌

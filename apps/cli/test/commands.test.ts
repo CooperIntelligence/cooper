@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   COMMANDS,
+  commandArgsOf,
   commandHelp,
+  completeCommand,
+  filterCommands,
   formatMcp,
   formatSessions,
   formatTools,
@@ -116,6 +119,83 @@ describe("command registry", () => {
     expect(help).toContain("/clear");
     expect(help).toContain("aliases /new /reset");
     expect(help).toContain("/resume <id>");
+  });
+});
+
+describe("filterCommands", () => {
+  it("returns nothing for non-slash input", () => {
+    expect(filterCommands("")).toEqual([]);
+    expect(filterCommands("hello")).toEqual([]);
+    expect(filterCommands("a /help")).toEqual([]);
+  });
+
+  it("lists every command for a bare slash", () => {
+    expect(filterCommands("/")).toEqual([...COMMANDS]);
+    expect(filterCommands("/ ")).toEqual([...COMMANDS]);
+  });
+
+  it("matches name and alias prefixes case-insensitively", () => {
+    // `/re` hits `resume` by name and `clear` by its alias `reset`.
+    expect(filterCommands("/re").map((spec) => spec.name)).toEqual([
+      "clear",
+      "resume",
+    ]);
+    expect(filterCommands("/resu").map((spec) => spec.name)).toEqual([
+      "resume",
+    ]);
+    expect(filterCommands("/RESU").map((spec) => spec.name)).toEqual([
+      "resume",
+    ]);
+    expect(filterCommands("/ne").map((spec) => spec.name)).toEqual(["clear"]);
+    expect(filterCommands("/reset").map((spec) => spec.name)).toEqual([
+      "clear",
+    ]);
+  });
+
+  it("matches multiple commands on a shared prefix", () => {
+    expect(filterCommands("/c").map((spec) => spec.name)).toEqual([
+      "clear",
+      "compact",
+    ]);
+    expect(filterCommands("/s").map((spec) => spec.name)).toEqual([
+      "sessions",
+    ]);
+  });
+
+  it("ignores args after the command token when filtering", () => {
+    expect(filterCommands("/resume 2026-11-09").map((s) => s.name)).toEqual([
+      "resume",
+    ]);
+    expect(filterCommands("/mcp extra").map((s) => s.name)).toEqual(["mcp"]);
+  });
+
+  it("returns nothing when the prefix matches no command", () => {
+    expect(filterCommands("/zzz")).toEqual([]);
+  });
+});
+
+describe("commandArgsOf / completeCommand", () => {
+  it("extracts args after the slash token", () => {
+    expect(commandArgsOf("/resume")).toBe("");
+    expect(commandArgsOf("/resume ")).toBe("");
+    expect(commandArgsOf("/resume abc def")).toBe("abc def");
+    expect(commandArgsOf("not-a-command")).toBe("");
+  });
+
+  it("completes to the canonical name and keeps typed args", () => {
+    const resume = COMMANDS.find((spec) => spec.name === "resume");
+    const help = COMMANDS.find((spec) => spec.name === "help");
+    const clear = COMMANDS.find((spec) => spec.name === "clear");
+    if (!resume || !help || !clear) throw new Error("missing specs");
+
+    // Placeholder usage gets a trailing space for the argument.
+    expect(completeCommand("/re", resume)).toBe("/resume ");
+    // No placeholder: bare name.
+    expect(completeCommand("/he", help)).toBe("/help");
+    // Typed args survive completion (alias rewritten to canonical).
+    expect(completeCommand("/ne keep", clear)).toBe("/clear keep");
+    // Args already present are not doubled with a placeholder space.
+    expect(completeCommand("/resume abc", resume)).toBe("/resume abc");
   });
 });
 

@@ -122,6 +122,38 @@ export function parseCommand(input: string): ParsedCommand {
   return { kind: "command", name, args };
 }
 
+/**
+ * Commands matching the typed slash prefix, for the input-suggest popup.
+ * Non-slash input yields []; a bare `/` lists everything. Matching is a
+ * case-insensitive prefix on the canonical name or any alias.
+ */
+export function filterCommands(input: string): CommandSpec[] {
+  const trimmed = input.trimStart();
+  if (!trimmed.startsWith("/")) return [];
+  const token = (/^\S*/.exec(trimmed.slice(1))?.[0] ?? "").toLowerCase();
+  if (token === "") return [...COMMANDS];
+  return COMMANDS.filter(
+    (spec) =>
+      spec.name.startsWith(token) ||
+      spec.aliases.some((alias) => alias.startsWith(token)),
+  );
+}
+
+/** Text after the first slash token, e.g. `/resume abc` → `abc`. */
+export function commandArgsOf(input: string): string {
+  const match = /^\/\S*(?:\s+([\s\S]*))?$/.exec(input.trim());
+  return (match?.[1] ?? "").trim();
+}
+
+/** Canonical invocation for a spec, preserving any typed args. */
+export function completeCommand(input: string, spec: CommandSpec): string {
+  const args = commandArgsOf(input);
+  const base = `/${spec.name}`;
+  if (args.length > 0) return `${base} ${args}`;
+  // Placeholders like `/resume <id>` get a trailing space for the argument.
+  return spec.usage.includes("<") ? `${base} ` : base;
+}
+
 export function isModeCommand(name: CommandName): name is ApprovalMode {
   return name === "plan" || name === "ask" || name === "auto";
 }

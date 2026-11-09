@@ -24,6 +24,8 @@ import {
 } from "@cooper/core";
 import {
   commandHelp,
+  completeCommand,
+  filterCommands,
   formatMcp,
   formatSessions,
   formatTools,
@@ -51,6 +53,13 @@ function formatTokens(tokens: number): string {
 
 function formatCount(count: number): string {
   return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
+}
+
+/** plan green · ask cyan · auto yellow — the prompt prefix is the mode HUD. */
+function modePromptColor(mode: ApprovalMode): string {
+  if (mode === "plan") return "green";
+  if (mode === "auto") return "yellow";
+  return "cyan";
 }
 
 function previewLines(text: string, maxLines = 6): string[] {
@@ -370,6 +379,10 @@ export function App({
   const nextId = useRef(initial.nextId);
   const [live, setLive] = useState<UiItem | null>(null);
   const [input, setInput] = useState("");
+  // Slash-command popup: index into `matches` and a one-shot dismiss that
+  // resets on the next keystroke (Esc keeps the typed text).
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reasoningHint, setReasoningHint] = useState<string | null>(null);
   // Tail of the reasoning line that has not been committed yet.
@@ -731,6 +744,31 @@ export function App({
       return;
     }
 
+    // Slash-command popup: ink-text-input ignores up/down/tab, so these
+    // never fight the text cursor. Escape dismisses the popup first and
+    // only aborts a turn when the popup is already closed.
+    if (suggestionsVisible) {
+      if (key.upArrow) {
+        setSuggestionIndex((index) => Math.max(0, index - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setSuggestionIndex((index) =>
+          Math.min(matches.length - 1, index + 1),
+        );
+        return;
+      }
+      if (key.tab) {
+        const spec = matches[activeIndex];
+        if (spec !== undefined) setInput(completeCommand(input, spec));
+        return;
+      }
+      if (key.escape) {
+        setSuggestionsDismissed(true);
+        return;
+      }
+    }
+
     if (key.ctrl && inputChar === "c") {
       if (abortRef.current) {
         abortRef.current.abort();
@@ -1037,6 +1075,11 @@ export function App({
     }
   };
 
+  const matches = filterCommands(input);
+  const activeIndex = Math.min(suggestionIndex, Math.max(0, matches.length - 1));
+  const suggestionsVisible = !busy && !suggestionsDismissed && matches.length > 0;
+  const usageWidth = Math.max(...matches.map((spec) => spec.usage.length), 1);
+
   return (
     <Box flexDirection="column">
       <Static key={staticKey} items={committed} style={{ width: "100%" }}>
@@ -1065,18 +1108,53 @@ export function App({
             </Text>
           </Text>
         ) : (
-          <Box>
-            <Text color={modeState === "auto" ? "yellow" : "cyan"}>
-              {`${modeState} > `}
-            </Text>
-            <TextInput
-              value={input}
-              onChange={setInput}
-              onSubmit={(value) => {
-                void submit(value);
-              }}
-              placeholder="Ask Cooper to inspect or change the project…"
-            />
+          <Box flexDirection="column">
+            {suggestionsVisible ? (
+              <Box
+                borderStyle="round"
+                borderColor="cyan"
+                paddingX={1}
+                flexDirection="column"
+              >
+                {matches.map((spec, index) => (
+                  <Text
+                    key={spec.name}
+                    inverse={index === activeIndex}
+                    wrap="truncate-end"
+                  >
+                    {spec.usage.padEnd(usageWidth)}
+                    {"  "}
+                    {spec.description}
+                  </Text>
+                ))}
+              </Box>
+            ) : null}
+            <Box>
+              <Text color={modePromptColor(modeState)}>
+                {`${modeState} > `}
+              </Text>
+              <TextInput
+                value={input}
+                onChange={(value) => {
+                  setInput(value);
+                  setSuggestionIndex(0);
+                  setSuggestionsDismissed(false);
+                }}
+                onSubmit={(value) => {
+                  // Enter runs the highlighted match when the popup is up, so
+                  // `/re` + Enter behaves like `/resume` without typing it out.
+                  if (suggestionsVisible) {
+                    const spec = matches[activeIndex];
+                    if (spec !== undefined) {
+                      void submit(completeCommand(value, spec));
+                      return;
+                    }
+                  }
+                  void submit(value);
+                }}
+                placeholder="Ask Cooper to inspect or change the project…"
+              />
+            </Box>
           </Box>
         )}
       </Box>
