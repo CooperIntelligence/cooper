@@ -28,6 +28,7 @@ packages/core/
   src/home.ts                        COOPER_HOME / ~/.cooper 解析
   src/mcp/config.ts                  MCP 配置与信任规则
   src/mcp/client.ts                  MCP 连接、工具列表、生命周期
+  src/mcp/resources.ts               MCP resources 的共享工具与结果投影
   src/mcp/tool.ts                    MCP tool → Tool 适配
 apps/cli/
   src/index.tsx                      入口：解析参数、切换 TUI / 无头
@@ -268,10 +269,27 @@ Cooper 可以作为 MCP 客户端，把本地或远程服务器的工具并入�
 - 传输：stdio、Streamable HTTP、SSE
 - 配置值按字面量使用，暂不支持 `${VAR}` 展开
 - 工具名：`mcp__<server>__<tool>`，输入 Schema 原样交给模型
-- **所有 MCP 工具都按 `execute` 处理**，忽略服务器自报的 `readOnlyHint`：`plan` 拒绝、`ask` 询问、`auto` 放行
+- **服务器暴露的 MCP 工具都按 `execute` 处理**，忽略服务器自报的 `readOnlyHint`：`plan` 拒绝、`ask` 询问、`auto` 放行
 - 单次输出上限 30k 字符；图片/音频转成占位说明
 - 启动横幅和无头 stderr 显示每台服务器的连接状态与工具数；退出或中断时关闭客户端和子进程
-- 本轮只支持 tools；resources / prompts 暂未接入
+- 支持 MCP resources；prompts、资源订阅与更新通知暂未接入
+
+### MCP resources
+
+只要配置了服务器（连接成功），Cooper 就提供 3 个共享只读工具：
+
+| 工具 | 作用 |
+|---|---|
+| `mcp_list_resources` | 列出某服务器的资源 |
+| `mcp_list_resource_templates` | 列出参数化 URI 模板 |
+| `mcp_read_resource` | 按 URI 读取资源 |
+
+- 每次调用都必须显式指定 `server`；不做跨服务器聚合。
+- **按需读取**：连接服务器不会预加载资源内容，也不会自动注入上下文。
+- 省略 `cursor` 时汇总全部分页；显式传入 `cursor` 时只取一页。
+- 服务器缺少 resources 能力时返回空列表，读取会明确报错。
+- 结果保留 URI / MIME / 文本；二进制 `blob` 转成说明文字，不内联 base64。
+- 这 3 个工具是 `read`：`plan` 模式可读，`ask` 模式不弹审批；它们只读取显式配置的服务器，不执行服务器工具。
 
 ## 命令
 
@@ -293,12 +311,12 @@ npm test                                   # core + cli 单元测试
 1. `packages/core` 不依赖 Ink/React，也不直接写 stdout。它只产出 `AgentEvent`。
 2. 每种界面（TUI / 未来的 desktop、server）都是事件的消费者。
 3. 工具统一实现 `Tool` 接口，输入用 zod 定义，自动转成 JSON Schema 交给模型；MCP 工具直接透传服务器的 JSON Schema。
-4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。MCP 工具一律声明 `execute`，不信任服务器标注。
+4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。MCP 服务器暴露的 tools 一律声明 `execute`，不信任服务器标注；Cooper 自己的 MCP resources 适配器是 `read`。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。Anthropic 的签名 thinking 块存放在 `providerData`，只回传给 Anthropic。
 7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，权限段从 `PermissionPolicy` 实例派生，TUI 与无头模式共用。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
 
 ## 下一步
 
-- MCP resources / prompts
+- MCP prompts（需要 slash command / 选择器入口）
 - 自动格式化 / linter 集成，测试失败自动回灌

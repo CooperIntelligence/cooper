@@ -262,8 +262,10 @@ export function App({
   // Replayed history and the banner are committed once, before the live
   // region exists, so resumed rows scroll into history exactly like live ones.
   const [initial] = useState(() => {
+    // Server tools are `mcp__<server>__<tool>`; Cooper's shared resource
+    // tools are `mcp_*`, so both belong in the MCP count.
     const mcpToolCount = tools.filter((tool) =>
-      tool.name.startsWith("mcp__"),
+      tool.name.startsWith("mcp_"),
     ).length;
     const toolLine = `Tools: ${tools.length}${mcpToolCount > 0 ? ` (${mcpToolCount} MCP)` : ""}`;
     const mcpLine =

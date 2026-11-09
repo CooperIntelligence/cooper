@@ -10,7 +10,7 @@
 
 - `packages/core/src/provider/` — `Provider` interface and adapters (OpenAI-compatible, Anthropic)
 - `packages/core/src/tools/` — tool interface and implementations
-- `packages/core/src/mcp/` — MCP config, client, and tool adapter
+- `packages/core/src/mcp/` — MCP config, client, resource tools, and tool adapter
 - `packages/core/src/agent.ts` — the agent loop and approval hook
 - `packages/core/src/permissions.ts` — presets, tool capabilities, fail-closed decisions
 - `packages/core/src/context/` — token estimation and compaction
@@ -84,9 +84,13 @@
     (the chat protocol requires every call to have its results).
 17. MCP servers execute external code. Load only trusted config: the
     user-level `~/.cooper/mcp.json` and explicit `--mcp-config` files;
-    `<workspace>/.cooper/mcp.json` only with `--mcp-project`. Treat every MCP
-    tool as `execute` (ignore server annotations such as `readOnlyHint`), cap
-    tool output, and close every client and child process on exit.
+    `<workspace>/.cooper/mcp.json` only with `--mcp-project`. Treat every tool
+    exposed by an MCP server as `execute` (ignore server annotations such as
+    `readOnlyHint`), cap tool output, and close every client and child process
+    on exit. Cooper's own resource adapters (`mcp_list_resources`,
+    `mcp_list_resource_templates`, `mcp_read_resource`) are `read`: they only
+    fetch read-only resources from explicitly configured servers, never run
+    server tools.
 
 ## Commands
 

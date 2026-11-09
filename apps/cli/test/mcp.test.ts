@@ -1,8 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareTools } from "../src/mcp.js";
+
+const fixture = fileURLToPath(
+  new URL(
+    "../../../packages/core/test/fixtures/mcp-stdio-server.mjs",
+    import.meta.url,
+  ),
+);
 
 const dirs: string[] = [];
 const originalHome = process.env.COOPER_HOME;
@@ -74,6 +82,34 @@ describe("prepareTools", () => {
       await prepared.close();
     }
   });
+
+  it("assembles server tools and shared resource tools from an explicit config", async () => {
+    const home = tempDir("cooper-cli-home-");
+    const root = tempDir("cooper-cli-root-");
+    process.env.COOPER_HOME = home;
+    const configFile = path.join(root, "mcp.json");
+    writeConfig(configFile, {
+      fixture: { command: process.execPath, args: [fixture] },
+    });
+
+    const prepared = await prepareTools({
+      root,
+      explicit: [configFile],
+      loadProject: false,
+    });
+    try {
+      expect(prepared.mcp.statuses).toEqual([
+        { name: "fixture", ok: true, toolCount: 1 },
+      ]);
+      const names = prepared.tools.map((tool) => tool.name);
+      expect(names).toContain("mcp__fixture__echo");
+      expect(names).toContain("mcp_list_resources");
+      expect(names).toContain("mcp_list_resource_templates");
+      expect(names).toContain("mcp_read_resource");
+    } finally {
+      await prepared.close();
+    }
+  }, 20_000);
 
   it("fails on a missing explicit config", async () => {
     const home = tempDir("cooper-cli-home-");

@@ -22,6 +22,7 @@ export * from "./home.js";
 export * from "./instructions.js";
 export * from "./session.js";
 export * from "./mcp/config.js";
+export * from "./mcp/resources.js";
 export * from "./mcp/tool.js";
 export * from "./mcp/client.js";
 export * from "./diff.js";

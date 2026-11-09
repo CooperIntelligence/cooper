@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { connectMcpServers } from "../src/mcp/client.js";
+import { createMcpResourceTools } from "../src/mcp/resources.js";
 
 const fixture = fileURLToPath(
   new URL("./fixtures/mcp-stdio-server.mjs", import.meta.url),
@@ -36,6 +37,20 @@ describe("connectMcpServers", () => {
         { root: process.cwd() },
       );
       expect(result).toEqual({ content: "echo: hi", isError: false });
+
+      // Resources are available from the same connection without a reload.
+      const resourceTools = createMcpResourceTools({
+        servers: connection.resources,
+      });
+      const readResource = resourceTools.find(
+        (tool) => tool.name === "mcp_read_resource",
+      );
+      const resource = await readResource!.execute(
+        { server: "fixture", uri: "fixture://hello" },
+        { root: process.cwd() },
+      );
+      expect(resource.content).toContain("MCP server: fixture");
+      expect(resource.content).toContain("hello resource");
     } finally {
       await connection.close();
     }

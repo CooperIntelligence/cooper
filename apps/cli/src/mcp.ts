@@ -1,6 +1,7 @@
 import {
   allTools,
   connectMcpServers,
+  createMcpResourceTools,
   loadMcpConfig,
   type McpServerStatus,
   type Tool,
@@ -49,7 +50,11 @@ export async function prepareTools(options: {
   });
 
   return {
-    tools: [...allTools, ...connection.tools],
+    tools: [
+      ...allTools,
+      ...connection.tools,
+      ...createMcpResourceTools({ servers: connection.resources }),
+    ],
     mcp: {
       sources: config.sources,
       statuses: connection.statuses,

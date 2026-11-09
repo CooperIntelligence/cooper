@@ -9,6 +9,10 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Tool } from "../tools/tool.js";
 import type { McpServerConfig } from "./config.js";
 import {
+  createResourceProvider,
+  type McpResourceProvider,
+} from "./resources.js";
+import {
   createMcpTool,
   type McpToolDefinition,
 } from "./tool.js";
@@ -23,6 +27,8 @@ export type McpServerStatus = {
 
 export type McpConnection = {
   tools: Tool[];
+  /** Resource access for each successfully connected server. */
+  resources: ReadonlyMap<string, McpResourceProvider>;
   statuses: McpServerStatus[];
   /** Non-fatal issues (duplicate tool names, ignored project config, ...). */
   warnings: string[];
@@ -186,6 +192,7 @@ export async function listMcpTools(
 type ServerResult = {
   client: Client | null;
   tools: Tool[];
+  resourceProvider: McpResourceProvider | null;
   warnings: string[];
   status: McpServerStatus;
 };
@@ -215,6 +222,9 @@ async function connectServer(
     return {
       client,
       tools: listed.tools,
+      resourceProvider: createResourceProvider(name, client, {
+        callTimeoutMs: options.callTimeoutMs,
+      }),
       warnings: listed.warnings,
       status: { name, ok: true, toolCount: listed.tools.length },
     };
@@ -225,6 +235,7 @@ async function connectServer(
     return {
       client: null,
       tools: [],
+      resourceProvider: null,
       warnings: [],
       status: {
         name,
@@ -259,6 +270,7 @@ export async function connectMcpServers(
         return Promise.resolve<ServerResult>({
           client: null,
           tools: [],
+          resourceProvider: null,
           warnings: [],
           status: { name, ok: false, toolCount: 0, error: "missing config" },
         });
@@ -295,8 +307,16 @@ export async function connectMcpServers(
     }
   }
 
+  const resources = new Map<string, McpResourceProvider>();
+  for (const result of results) {
+    if (result.resourceProvider !== null) {
+      resources.set(result.status.name, result.resourceProvider);
+    }
+  }
+
   return {
     tools,
+    resources,
     statuses: results.map((result) => result.status),
     warnings,
     async close() {
