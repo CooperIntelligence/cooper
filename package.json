@@ -9,10 +9,12 @@
   ],
   "scripts": {
     "dev": "tsx apps/cli/src/index.tsx",
+    "package": "node scripts/package.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
-    "@types/node": "^26.6.6"
+    "@types/node": "^26.6.6",
+    "postject": "^1.0.0-alpha.6"
   }
 }
