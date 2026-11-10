@@ -43,7 +43,8 @@ apps/cli/
   src/stream-lines.ts                流式文本按行切分
   src/provider.ts                    根据配置构造 Provider
   src/mcp.ts                         加载可信 MCP 配置并组装工具
-  src/config.ts                      .env 配置读取
+  src/config.ts                      配置聚合（flag > env > 配置文件 > 默认）
+  src/settings.ts                    ~/.cooper/config.json 与项目层加载校验
 ```
 
 ## 快速开始
@@ -73,6 +74,47 @@ npm run dev
 | Moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
 
 Anthropic 原生协议使用 `ANTHROPIC_BASE_URL`（可选），输出上限由 `COOPER_MAX_OUTPUT_TOKENS` 控制（默认 64000）。同时设置时，`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` 优先于通用的 `COOPER_BASE_URL`，避免切换提供商时被旧的端点配置带偏。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
+
+## 配置
+
+配置分四个通道，各管一段生命周期：
+
+| 通道 | 放什么 | 生命周期 |
+|---|---|---|
+| `~/.cooper/config.json`（user 层） | 非密偏好：provider、model、baseURL、`apiKeyEnv`、调参、默认 mode | 长期，跨项目 |
+| `<workspace>/.cooper/config.json`（project 层，可提交） | 项目级覆盖（见下方限制） | 长期，随仓库 |
+| `.env` / shell 环境变量 | **只有 API key**；`COOPER_*` 变量保留为单次/CI 覆盖 | 长期（密钥）/ 临时 |
+| CLI flag / 斜杠命令 | flag：单次运行（`--model`、`--mode`…）；命令：会话内（`/plan`、`/auto`…） | 单次 / 会话 |
+
+**每个 key 独立取最高优先级**：`flag > env > project 配置 > user 配置 > 内置默认`。`/status` 显示每个生效值及其来源层。
+
+配置文件示例（JSON，严格校验；未知字段告警并忽略，JSON 损坏直接报错）：
+
+```jsonc
+// ~/.cooper/config.json
+{
+  "provider": "anthropic",          // 协议，显式，不按模型名猜
+  "model": "claude-sonnet-5-5",
+  "baseURL": "https://gateway.example/v1",
+  "apiKeyEnv": "CORP_KEY",          // 指针：去哪个 env 变量找 key
+  "maxOutputTokens": 64000,
+  "showReasoning": false,
+  "mode": "ask",                    // user 层可为 plan|ask|auto
+  "context": {
+    "window": 200000,               // 省略则按模型表，未知模型假设 200k
+    "reserveOutputTokens": 16384,
+    "compact": true,
+    "summaryModel": null
+  }
+}
+```
+
+规则：
+
+- **API key 永远只从 env 读**（bring your own key）。配置里只写 `apiKeyEnv` 指针；解析顺序：指针指向的变量 → `COOPER_API_KEY` → `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。配置文件里出现 `apiKey` 之类的密钥字段会告警并忽略。
+- **project 层不能碰网络**：`provider`、`baseURL`、`apiKeyEnv` 只允许 user 层 / env / flag。clone 下来的仓库无法把你的 key 重定向到自己的服务器（与 MCP 需要 `--mcp-project` 同一威胁模型）。project 层出现这些字段会告警并忽略。
+- **project 层不能设 `mode: "auto"`**：仓库不能自我放行；auto 只能来自 `--mode auto`、`COOPER_MODE`、TUI `/auto` 或 user 层配置。
+- mode 优先级：`--mode` > `COOPER_MODE` > 会话保存的 plan/ask > 配置文件 > `ask`。会话保存的 `auto` 仍不隐式恢复（落空到配置层再决定）。
 
 ## 运行方式
 
@@ -142,7 +184,7 @@ npm run dev -- --no-session         # 本次不落盘
 - **面向用户的推理内容不落盘**（规则 15）。Anthropic 的签名 thinking 块是协议续传数据，作为 `providerData` 随消息保存；它不会显示，也不会发往其他厂商。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
 - system 提示不落盘，恢复时按工作目录和项目指令重新生成；它不包含当前模式，保持字节稳定以复用 provider 的 prompt cache。
 - 当前模式作为 `policy` 记录追加到会话；模型看到的模式说明是带 `runtime: "permission-mode"` 的 `<cooper-runtime>` 消息，TUI 和恢复视图会过滤它，不把它显示成用户输入。
-- 恢复会话时按 `--mode` > `COOPER_MODE` > 会话记录的 `plan`/`ask` > 默认 `ask` 的顺序决定模式；**已保存的 `auto` 不会隐式恢复**，必须显式 `--mode auto` 或在 TUI 里 `/auto`。
+- 恢复会话时按 `--mode` > `COOPER_MODE` > 会话记录的 `plan`/`ask` > 配置文件的 `mode` > 默认 `ask` 的顺序决定模式；**已保存的 `auto` 不会隐式恢复**（落空到配置层，配置里显式写了 `auto` 才生效），否则必须显式 `--mode auto` 或在 TUI 里 `/auto`。
 - 无头模式仍然保持 stdout 只有答案；会话 id、恢复提示和“未保存”告警都走 stderr。
 
 ## 项目指令
@@ -189,6 +231,7 @@ TUI 空闲时可以直接切换：
 | `/resume <id>` | — | 切换到已保存会话（支持唯一 id 前缀）；保持当前权限模式 |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
+| `/status` | — | 显示生效配置：每个值、来源层（flag/env/project/user/default）与配置文件路径 |
 | `/exit` | — | 退出 TUI |
 
 输入以 `/` 开头时，输入框上方会浮出注册表候选（前缀匹配，含别名）：
@@ -249,12 +292,12 @@ TUI 空闲时可以直接切换：
 
 **token 估算**不依赖 tokenizer：CJK 按约 1.1 token/字符、其余按 3.6 字符/token，再加上消息结构开销和工具 schema。端点返回 `usage` 时用真实值做指数滑动平均修正；不支持的端点会自动降级（`stream_options` 被拒后重试一次并记住）。
 
-| 变量 | 默认 | 说明 |
+| 变量（env 覆盖，优先于配置文件） | 默认 | 配置文件对应字段 |
 |---|---|---|
-| `COOPER_CONTEXT_WINDOW` | 按模型表，否则 200000 | 窗口大小 |
-| `COOPER_CONTEXT_RESERVE` | 16384 | 预留给回复的 token |
-| `COOPER_CONTEXT_COMPACT` | `on` | `off` 时只发送、不压缩 |
-| `COOPER_SUMMARY_MODEL` | 同主模型 | 摘要用更便宜的模型 |
+| `COOPER_CONTEXT_WINDOW` | 按模型表，否则 200000 | `context.window` |
+| `COOPER_CONTEXT_RESERVE` | 16384 | `context.reserveOutputTokens` |
+| `COOPER_CONTEXT_COMPACT` | `on` | `context.compact` |
+| `COOPER_SUMMARY_MODEL` | 同主模型 | `context.summaryModel` |
 
 压缩发生时界面会显示 `⤓ context 92.4k → 18.1k tokens (summarize)`。摘要用英文生成：同样的信息量，中文的成本约为英文的三倍。
 
@@ -353,8 +396,3 @@ npm test                                   # core + cli 单元测试
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。Anthropic 的签名 thinking 块存放在 `providerData`，只回传给 Anthropic。
 7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，描述权限机制但不写死当前模式，TUI 与无头模式共用。当前模式作为追加的 `<cooper-runtime>` 通知进入对话，避免切换模式时让 provider 的 prompt cache 整体失效。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。
-
-## 下一步
-
-- MCP prompts（消费斜杠命令注册表与选择器）
-- 自动格式化 / linter 集成，测试失败自动回灌

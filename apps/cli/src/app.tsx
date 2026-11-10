@@ -28,6 +28,7 @@ import {
   filterCommands,
   formatMcp,
   formatSessions,
+  formatStatus,
   formatTools,
   isModeCommand,
   modeDescription,
@@ -35,6 +36,7 @@ import {
   type ParsedCommand,
 } from "./commands.js";
 import { buildPreviewRows } from "./preview.js";
+import type { ModeResolution } from "./args.js";
 import type { ApprovalMode, Config } from "./config.js";
 import type { McpReport } from "./mcp.js";
 import { buildResumeView } from "./session-view.js";
@@ -224,6 +226,7 @@ export function App({
   config,
   root,
   mode,
+  modeSource,
   instructions,
   showReasoning,
   provider,
@@ -236,6 +239,8 @@ export function App({
   config: Config;
   root: string;
   mode: ApprovalMode;
+  /** Where the startup mode came from (flag/env/session/config/default). */
+  modeSource: ModeResolution["source"];
   instructions: LoadedInstructions;
   showReasoning: boolean;
   /** Built once by the entry point so every surface uses the same adapter. */
@@ -259,6 +264,11 @@ export function App({
     () => new PermissionPolicy({ preset: mode, interactive: true }),
   );
   const [modeState, setModeState] = useState<ApprovalMode>(mode);
+  // Tracked separately so /status can say where the current mode came from;
+  // in-session switches count as "command".
+  const [modeSourceState, setModeSourceState] = useState<
+    ModeResolution["source"] | "command"
+  >(modeSource);
   // Mutable so /clear can swap in a fresh SessionWriter; `sessionsEnabled`
   // is fixed at mount (--no-session never starts saving on clear either).
   const [sessionWriter, setSessionWriter] = useState(session);
@@ -427,6 +437,7 @@ export function App({
 
     permissions.setPreset(next);
     setModeState(next);
+    setModeSourceState("command");
     const notice = permissionModeNotice(next);
     history.current.push(notice);
     warnSession(sessionWriter?.appendPolicy(next) ?? null);
@@ -694,6 +705,15 @@ export function App({
         return;
       case "tools":
         notice(formatTools(tools));
+        return;
+      case "status":
+        notice(
+          formatStatus({
+            config,
+            mode: modeState,
+            modeSource: modeSourceState,
+          }),
+        );
         return;
       case "exit":
         exit();
