@@ -1,5 +1,5 @@
 {
-  "main": "dist/cooper.mjs",
+  "main": "apps/cli/dist/cooper.mjs",
   "output": "dist/cooper.blob",
   "disableExperimentalSEAWarning": true,
   "mainFormat": "module",

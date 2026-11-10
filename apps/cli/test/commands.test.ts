@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Config } from "../src/config.js";
 import {
   COMMANDS,
   commandArgsOf,
@@ -7,6 +8,7 @@ import {
   filterCommands,
   formatMcp,
   formatSessions,
+  formatStatus,
   formatTools,
   isModeCommand,
   modeDescription,
@@ -159,6 +161,7 @@ describe("filterCommands", () => {
     ]);
     expect(filterCommands("/s").map((spec) => spec.name)).toEqual([
       "sessions",
+      "status",
     ]);
   });
 
@@ -247,5 +250,66 @@ describe("command formatters", () => {
     expect(text).toContain("read");
     expect(text).toContain("mcp__fs__ls");
     expect(text).toContain("execute");
+  });
+});
+
+describe("formatStatus", () => {
+  const baseConfig: Config = {
+    provider: "anthropic",
+    apiKey: "secret-key",
+    apiKeyVariable: "ANTHROPIC_API_KEY",
+    baseURL: "https://gateway.example/v1",
+    model: "claude-sonnet-5-5",
+    maxOutputTokens: 64_000,
+    context: { window: 200_000, reserveOutputTokens: 16_384, enabled: true },
+    contextWindowAssumed: false,
+    showReasoning: false,
+    defaultMode: undefined,
+    sources: {
+      provider: "env",
+      model: "flag",
+      baseURL: "user",
+      apiKey: "env",
+      maxOutputTokens: "default",
+      showReasoning: "project",
+      "context.window": "user",
+    },
+    settingsWarnings: [],
+    settingsFiles: { user: "/home/u/.cooper/config.json", project: null },
+  };
+
+  it("shows the effective mode, values, and each value's source", () => {
+    const text = formatStatus({
+      config: baseConfig,
+      mode: "plan",
+      modeSource: "config",
+    });
+    expect(text).toContain("Mode: plan (config file)");
+    expect(text).toContain("anthropic");
+    expect(text).toContain("claude-sonnet-5-5");
+    expect(text).toContain("flag");
+    expect(text).toContain("set via ANTHROPIC_API_KEY");
+    // The key value itself must never appear.
+    expect(text).not.toContain("secret-key");
+    expect(text).toContain("user file");
+    expect(text).toContain("user: /home/u/.cooper/config.json");
+    expect(text).not.toContain("project:");
+    expect(text).toContain("Settings files: user: /home/u/.cooper/config.json");
+  });
+
+  it("marks an assumed context window and missing files", () => {
+    const text = formatStatus({
+      config: {
+        ...baseConfig,
+        contextWindowAssumed: true,
+        settingsFiles: { user: null, project: null },
+        settingsWarnings: ["oops"],
+      },
+      mode: "ask",
+      modeSource: "default",
+    });
+    expect(text).toContain("200000 (assumed)");
+    expect(text).toContain("Settings files: none");
+    expect(text).toContain("Warning: oops");
   });
 });

@@ -124,6 +124,19 @@ describe("parseArgs", () => {
   });
 });
 
+describe("--model", () => {
+  it("parses a model name for this run", () => {
+    expect(parseArgs(["--model", "gpt-x"]).model).toBe("gpt-x");
+    expect(parseArgs(["--model=gpt-x"]).model).toBe("gpt-x");
+    expect(parseArgs([]).model).toBeUndefined();
+  });
+
+  it("rejects an empty model", () => {
+    expect(() => parseArgs(["--model"])).toThrow(/requires a value/);
+    expect(() => parseArgs(["--model", ""])).toThrow(/requires a name/);
+  });
+});
+
 describe("resolveMode", () => {
   it("prefers the flag over the environment", () => {
     expect(resolveMode("plan", "auto")).toBe("plan");
@@ -189,5 +202,42 @@ describe("resolveModeForSession", () => {
     expect(() =>
       resolveModeForSession(undefined, "yolo", "ask"),
     ).toThrow(/COOPER_MODE/);
+  });
+
+  it("falls back to the configured mode from settings files", () => {
+    expect(resolveModeForSession(undefined, undefined, null, "plan")).toEqual({
+      mode: "plan",
+      source: "config",
+      sessionAutoIgnored: false,
+    });
+    // Saved plan/ask still beats the configured default.
+    expect(resolveModeForSession(undefined, undefined, "ask", "plan")).toMatchObject({
+      mode: "ask",
+      source: "session",
+    });
+    // Env beats the configured mode.
+    expect(resolveModeForSession(undefined, "auto", null, "plan")).toMatchObject({
+      mode: "auto",
+      source: "env",
+    });
+  });
+
+  it("honours a durable configured auto but never a remembered one", () => {
+    expect(resolveModeForSession(undefined, undefined, "auto", "auto")).toEqual({
+      mode: "auto",
+      source: "config",
+      sessionAutoIgnored: false,
+    });
+    expect(resolveModeForSession(undefined, undefined, "auto", "ask")).toEqual({
+      mode: "ask",
+      source: "config",
+      sessionAutoIgnored: true,
+    });
+  });
+
+  it("rejects an invalid configured mode", () => {
+    expect(() =>
+      resolveModeForSession(undefined, undefined, null, "yolo" as never),
+    ).toThrow(/configured mode/);
   });
 });

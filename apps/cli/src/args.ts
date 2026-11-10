@@ -3,6 +3,8 @@ import type { ApprovalMode } from "./config.js";
 export type ParsedArgs = {
   /** Explicit --mode. undefined means "fall back to COOPER_MODE, then ask". */
   mode: ApprovalMode | undefined;
+  /** Explicit --model. undefined means "fall back to env, then settings files". */
+  model: string | undefined;
   /** Workspace directory. undefined means "the launch directory". */
   cwd: string | undefined;
   /** Prompt for a non-interactive run. "-" means read stdin. null starts the TUI. */
@@ -45,6 +47,7 @@ function parseModeValue(value: string | undefined): ApprovalMode {
 export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     mode: undefined,
+    model: undefined,
     cwd: undefined,
     prompt: null,
     showReasoning: false,
@@ -97,6 +100,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
           index += 1;
         }
         parsed.mode = parseModeValue(value);
+        break;
+      }
+
+      case "--model": {
+        let value = inline;
+        if (value === undefined) {
+          value = takeValue(index, name);
+          index += 1;
+        }
+        if (value.trim() === "") throw new Error("--model requires a name.");
+        parsed.model = value;
         break;
       }
 
@@ -212,17 +226,18 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return parsed;
 }
 
-/** Flag wins over COOPER_MODE, which wins over "ask". */
+/** Flag wins over COOPER_MODE, which wins over the settings files, then ask. */
 export function resolveMode(
   flag: ApprovalMode | undefined,
   envValue: string | undefined,
+  configuredMode?: ApprovalMode | null,
 ): ApprovalMode {
-  return resolveModeForSession(flag, envValue, null).mode;
+  return resolveModeForSession(flag, envValue, null, configuredMode).mode;
 }
 
 export type ModeResolution = {
   mode: ApprovalMode;
-  source: "flag" | "env" | "session" | "default";
+  source: "flag" | "env" | "session" | "config" | "default";
   /** A saved auto mode was deliberately not restored (fail closed). */
   sessionAutoIgnored: boolean;
 };
@@ -230,14 +245,16 @@ export type ModeResolution = {
 /**
  * Resolve the effective mode for a run that may be resuming a session.
  *
- * Precedence: explicit --mode > COOPER_MODE > saved plan/ask > ask. A saved
- * `auto` is never restored implicitly: a new process must not start with
- * every gated tool approved unless the user asks for it again.
+ * Precedence: explicit --mode > COOPER_MODE > saved plan/ask > mode from the
+ * settings files > ask. A saved `auto` is never restored implicitly: a new
+ * process must not start with every gated tool approved unless the user asks
+ * for it again — either explicitly (flag/env) or durably (settings file).
  */
 export function resolveModeForSession(
   flag: ApprovalMode | undefined,
   envValue: string | undefined,
   savedPreset: ApprovalMode | null | undefined,
+  configuredMode: ApprovalMode | null | undefined = null,
 ): ModeResolution {
   if (flag !== undefined) {
     return { mode: flag, source: "flag", sessionAutoIgnored: false };
@@ -252,6 +269,18 @@ export function resolveModeForSession(
   }
   if (savedPreset === "plan" || savedPreset === "ask") {
     return { mode: savedPreset, source: "session", sessionAutoIgnored: false };
+  }
+  if (configuredMode !== null && configuredMode !== undefined) {
+    if (!isMode(configuredMode)) {
+      throw new Error(
+        `Invalid configured mode "${configuredMode}". Use ask, auto, or plan.`,
+      );
+    }
+    return {
+      mode: configuredMode,
+      source: "config",
+      sessionAutoIgnored: savedPreset === "auto" && configuredMode !== "auto",
+    };
   }
   return {
     mode: "ask",

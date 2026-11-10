@@ -1,25 +1,58 @@
 {
-  "name": "@cooper/cli",
+  "name": "@cooper-intelligence/cooper-code",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "description": "Cooper Code — an AI coding agent in your terminal.",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "ai-agent",
+    "cli",
+    "tui",
+    "llm"
+  ],
+  "homepage": "https://github.com/CooperIntelligence/cooper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CooperIntelligence/cooper.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/CooperIntelligence/cooper/issues"
+  },
+  "license": "MIT",
+  "bin": {
+    "cooper": "./dist/cooper.mjs"
+  },
+  "files": [
+    "dist/cooper.mjs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "cd ../.. && tsx apps/cli/src/index.tsx",
+    "build": "cd ../.. && node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "node -e \"if (!process.env.AUTHORIZED) { console.error('ERROR: Direct publishing is not allowed. Set AUTHORIZED=true and follow the release workflow.'); process.exit(1); }\" && npm test",
+    "prepack": "npm run build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@cooper/core": "0.1.0",
+    "@types/react": "^19.3.0",
     "dotenv": "^18.0.9",
+    "esbuild": "^0.28.2",
     "ink": "^8.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
-    "react": "^19.3.1"
-  },
-  "devDependencies": {
-    "@types/react": "^19.3.0",
+    "react": "^19.3.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "zod": "^4.6.7"
   }
 }
