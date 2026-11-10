@@ -12,9 +12,11 @@ import { chmod, mkdir } from "node:fs/promises";
  *   banner defines `require` before esbuild's __require helper runs, so
  *   the helper picks it up (it checks typeof require !== "undefined").
  */
-await mkdir("dist", { recursive: true });
+// Output lives inside the npm package root (apps/cli) so its `files`
+// whitelist can ship it; the SEA pipeline reads the same file.
+await mkdir("apps/cli/dist", { recursive: true });
 
-const outfile = "dist/cooper.mjs";
+const outfile = "apps/cli/dist/cooper.mjs";
 const result = await build({
   entryPoints: ["apps/cli/src/index.tsx"],
   bundle: true,
