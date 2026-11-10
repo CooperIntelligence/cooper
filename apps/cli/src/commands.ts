@@ -1,5 +1,6 @@
 import type { SessionSummary } from "@cooper/core";
-import type { ApprovalMode } from "./config.js";
+import type { ModeResolution } from "./args.js";
+import type { ApprovalMode, Config, ConfigSource } from "./config.js";
 import type { McpReport } from "./mcp.js";
 
 export type CommandName =
@@ -11,6 +12,7 @@ export type CommandName =
   | "resume"
   | "mcp"
   | "tools"
+  | "status"
   | "exit";
 
 export type CommandSpec = {
@@ -86,6 +88,12 @@ export const COMMANDS: readonly CommandSpec[] = [
     aliases: [],
     usage: "/tools",
     description: "list tools and their capabilities",
+  },
+  {
+    name: "status",
+    aliases: [],
+    usage: "/status",
+    description: "show effective settings and where each value came from",
   },
   {
     name: "exit",
@@ -203,6 +211,107 @@ export function formatMcp(mcp: McpReport): string {
   }
   for (const warning of mcp.warnings) {
     lines.push(`  warning: ${warning}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatStatus(options: {
+  config: Config;
+  mode: ApprovalMode;
+  modeSource: ModeResolution["source"] | "command";
+}): string {
+  const { config, mode, modeSource } = options;
+
+  const configSourceLabel = (source: ConfigSource | undefined): string => {
+    switch (source) {
+      case "flag":
+        return "flag";
+      case "env":
+        return "env";
+      case "project":
+        return "project file";
+      case "user":
+        return "user file";
+      default:
+        return "default";
+    }
+  };
+  const modeSourceLabel: Record<string, string> = {
+    flag: "flag",
+    env: "env",
+    session: "session",
+    config: "config file",
+    default: "default",
+    command: "command",
+  };
+
+  const entries: [name: string, value: string, source: string][] = [
+    ["provider", config.provider, configSourceLabel(config.sources.provider)],
+    ["model", config.model, configSourceLabel(config.sources.model)],
+    [
+      "baseURL",
+      config.baseURL ?? "(provider default)",
+      configSourceLabel(config.sources.baseURL),
+    ],
+    // Never the key itself — only which variable supplied it.
+    [
+      "apiKey",
+      `set via ${config.apiKeyVariable}`,
+      configSourceLabel(config.sources.apiKey),
+    ],
+    [
+      "maxOutputTokens",
+      String(config.maxOutputTokens),
+      configSourceLabel(config.sources.maxOutputTokens),
+    ],
+    [
+      "showReasoning",
+      config.showReasoning ? "on" : "off",
+      configSourceLabel(config.sources.showReasoning),
+    ],
+    [
+      "context.window",
+      `${config.context.window}${config.contextWindowAssumed ? " (assumed)" : ""}`,
+      configSourceLabel(config.sources["context.window"]),
+    ],
+    [
+      "context.reserveOutputTokens",
+      String(config.context.reserveOutputTokens),
+      configSourceLabel(config.sources["context.reserveOutputTokens"]),
+    ],
+    [
+      "context.compact",
+      config.context.enabled ? "on" : "off",
+      configSourceLabel(config.sources["context.compact"]),
+    ],
+    [
+      "context.summaryModel",
+      config.context.summaryModel ?? "(same as model)",
+      configSourceLabel(config.sources["context.summaryModel"]),
+    ],
+  ];
+
+  const nameWidth = Math.max(...entries.map(([name]) => name.length));
+  const valueWidth = Math.max(...entries.map(([, value]) => value.length));
+
+  const lines = [
+    `Mode: ${mode} (${modeSourceLabel[modeSource] ?? modeSource})`,
+  ];
+  for (const [name, value, source] of entries) {
+    lines.push(`  ${name.padEnd(nameWidth)}  ${value.padEnd(valueWidth)}  ${source}`);
+  }
+
+  const files = [
+    config.settingsFiles.user !== null
+      ? `user: ${config.settingsFiles.user}`
+      : null,
+    config.settingsFiles.project !== null
+      ? `project: ${config.settingsFiles.project}`
+      : null,
+  ].filter((file): file is string => file !== null);
+  lines.push(`Settings files: ${files.length > 0 ? files.join(" · ") : "none"}`);
+  for (const warning of config.settingsWarnings) {
+    lines.push(`Warning: ${warning}`);
   }
   return lines.join("\n");
 }

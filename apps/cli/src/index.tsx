@@ -16,6 +16,7 @@ import { App } from "./app.js";
 import {
   parseArgs,
   resolveModeForSession,
+  type ModeResolution,
   type ParsedArgs,
 } from "./args.js";
 import {
@@ -37,6 +38,7 @@ Usage:
 
 Options:
   -m, --mode <mode>   ask (default) | auto | plan
+      --model <name>  model for this run (overrides env and config files)
   -C, --cwd <dir>     workspace directory (default: current directory)
   -p, --print [text]  non-interactive; omit text or use "-" for stdin
   -r, --resume <id>   continue a saved session
@@ -70,6 +72,9 @@ Environment:
   COOPER_HOME       Data directory (default: ~/.cooper)
 
 .env is read from the workspace, then from the directory next to Cooper.
+Long-term preferences live in ~/.cooper/config.json (and optionally
+<workspace>/.cooper/config.json); .env holds API keys. Precedence per key:
+flag > env > project config > user config > defaults.
 Sessions are saved by default; use --no-session to keep a run ephemeral.
 `;
 
@@ -150,13 +155,17 @@ async function main(): Promise<void> {
 
   let config: Config;
   let mode: ApprovalMode;
+  let modeSource: ModeResolution["source"] = "default";
   let modeNotice: string | undefined;
   let instructions: LoadedInstructions;
   let session: SessionWriter | null = null;
   let resumed: LoadedSession | null = null;
   try {
     loadEnvFiles();
-    config = loadConfig();
+    config = loadConfig({ root, overrides: { model: args.model } });
+    for (const warning of config.settingsWarnings) {
+      console.error(`warning: ${warning}`);
+    }
     instructions = await loadProjectInstructions(root);
 
     if (args.resume !== null) {
@@ -167,11 +176,13 @@ async function main(): Promise<void> {
       args.mode,
       process.env.COOPER_MODE,
       resumed?.preset ?? null,
+      config.defaultMode ?? null,
     );
     mode = resolution.mode;
+    modeSource = resolution.source;
     if (resolution.sessionAutoIgnored) {
       modeNotice =
-        "Saved session was in auto mode; resumed in ask. " +
+        `Saved session was in auto mode; not restored (now ${mode}). ` +
         "Pass --mode auto or run /auto to enable auto-approve.";
     } else if (resolution.source === "session") {
       modeNotice = `Restored from session: ${mode}.`;
@@ -186,7 +197,12 @@ async function main(): Promise<void> {
     fail(error);
   }
 
-  const showReasoning = args.showReasoning || config.showReasoning;
+  // The flag always wins; record it so /status reports the true source.
+  if (args.showReasoning) {
+    config.showReasoning = true;
+    config.sources.showReasoning = "flag";
+  }
+  const showReasoning = config.showReasoning;
   const provider = createProvider(config);
 
   let prepared: PreparedTools;
@@ -242,6 +258,7 @@ async function main(): Promise<void> {
         config={config}
         root={root}
         mode={mode}
+        modeSource={modeSource}
         instructions={instructions}
         showReasoning={showReasoning}
         provider={provider}

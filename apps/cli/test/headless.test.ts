@@ -19,12 +19,17 @@ import { runHeadless } from "../src/headless.js";
 const config: Config = {
   provider: "openai",
   apiKey: "test-key",
+  apiKeyVariable: "COOPER_API_KEY",
   baseURL: undefined,
   model: "test-model",
   maxOutputTokens: 64_000,
   context: { window: 200_000 },
   contextWindowAssumed: false,
   showReasoning: false,
+  defaultMode: undefined,
+  sources: {},
+  settingsWarnings: [],
+  settingsFiles: { user: null, project: null },
 };
 
 const noInstructions: LoadedInstructions = { text: "", sources: [] };
