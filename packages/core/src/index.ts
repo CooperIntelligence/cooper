@@ -1,6 +1,6 @@
 import type { Tool } from "./tools/tool.js";
 import { fileTools } from "./tools/fs.js";
-import { runCommandTool } from "./tools/shell.js";
+import { createRunCommandTool, runCommandTool, type CommandShell } from "./tools/shell.js";
 
 export * from "./types.js";
 export * from "./agent.js";
@@ -30,3 +30,7 @@ export * from "./diff.js";
 
 /** Every built-in tool: file inspection/editing plus shell execution. */
 export const allTools: Tool[] = [...fileTools, runCommandTool];
+
+export function createBuiltinTools(shell: CommandShell): Tool[] {
+  return [...fileTools, createRunCommandTool(shell)];
+}

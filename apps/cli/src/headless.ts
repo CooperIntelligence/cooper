@@ -1,5 +1,5 @@
 import {
-  allTools,
+  createBuiltinTools,
   PermissionPolicy,
   permissionModeNotice,
   runAgent,
@@ -77,7 +77,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     mcp,
     modeNotice,
   } = options;
-  const tools = options.tools ?? allTools;
+  const tools = options.tools ?? createBuiltinTools(config.shell);
 
   if (modeNotice !== undefined) {
     err.write(`mode: ${modeNotice}\n`);

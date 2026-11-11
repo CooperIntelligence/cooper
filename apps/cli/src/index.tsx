@@ -230,6 +230,7 @@ async function main(): Promise<void> {
       root,
       explicit: args.mcpConfig,
       loadProject: args.mcpProject,
+      shell: config.shell,
     });
   } catch (error) {
     fail(error);

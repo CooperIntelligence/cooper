@@ -37,10 +37,25 @@ describe("loadConfig", () => {
     expect(config.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
     expect(config.context.window).toBe(200_000);
     expect(config.contextWindowAssumed).toBe(true);
+    const defaultShells: Partial<Record<NodeJS.Platform, string>> = {
+      win32: "powershell",
+      linux: "bash",
+      darwin: "zsh",
+    };
+    expect(config.shell.kind).toBe(defaultShells[process.platform] ?? "sh");
     expect(config.sources).toMatchObject({
       protocol: "config", model: "config", baseURL: "config", apiKey: "config",
     });
     expect(config.settingsFile).toBe(path.join(home, "config.json"));
+  });
+
+  it("resolves a configured shell and reports the config source", () => {
+    const kind = process.platform === "win32" ? "cmd" : "sh";
+    writeConfig({ ...connection, shell: { kind } });
+    const config = loadConfig({ home });
+    expect(config.shell.kind).toBe(kind);
+    expect(path.isAbsolute(config.shell.executable)).toBe(true);
+    expect(config.sources.shell).toBe("config");
   });
 
   it("ignores ambient overrides and keeps the saved key out of the process environment", () => {
