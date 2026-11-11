@@ -75,7 +75,7 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 - **输入浮层**：`input` 以 `/` 开头时在输入框上方渲染候选（`filterCommands` 前缀匹配 name+aliases，`/` 全量）。`↑`/`↓`/`Tab`/`Esc` 由宿主 `useInput` 处理——`ink-text-input` 明确忽略方向键与 Tab，无键冲突；`Enter` 走 `onSubmit`，浮层可见时执行高亮项的 `completeCommand` 结果（别名归一到规范名、保留已输参数）。`Esc` 只收浮层不清输入；无匹配不显示浮层，未知命令路径不变。纯函数在 `commands.ts`，Ink 层只做状态与渲染。
 - `/clear` 后旧会话仍可 `--resume`，`--sessions` 列表会变长；未提供批量清理，避免误删。
 - 老 conhost 可能不支持 `ESC[3J` 清 scrollback：屏幕可能残留旧内容，但内存与会话状态已重置，不破坏一致性。
-- `/compact` 复用 core 的 `prepareContext`，与自动压缩同一套阈值与 checkpoint 语义；`COOPER_CONTEXT_COMPACT=off` 时明确拒绝。
+- `/compact` 复用 core 的 `prepareContext`，与自动压缩使用同一套阈值与 checkpoint 语义。配置中的 `context.compact` 为 `false` 时明确拒绝。
 - Claude Code 的 `/clear [name]`（给旧会话命名）未做；见 README「下一步」。
 - `/resume` 与启动 `--resume` 的模式语义有意分叉（见 Decision）；若未来要统一，应改启动侧向 TUI 对齐（启动也保持…不行，启动没有当前模式），或在 note 里显式记录两者的各自理由——现在已记录。
 - 验证：`npm run typecheck` 与 `npm test` 通过（core 138 + cli 82）；覆盖别名解析、注册表唯一性、help 全量命令（含 `/resume <id>`）、三个格式化函数。

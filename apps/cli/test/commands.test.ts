@@ -255,9 +255,8 @@ describe("command formatters", () => {
 
 describe("formatStatus", () => {
   const baseConfig: Config = {
-    provider: "anthropic",
+    protocol: "anthropic-messages",
     apiKey: "secret-key",
-    apiKeyVariable: "ANTHROPIC_API_KEY",
     baseURL: "https://gateway.example/v1",
     model: "claude-sonnet-5-5",
     maxOutputTokens: 64_000,
@@ -266,16 +265,16 @@ describe("formatStatus", () => {
     showReasoning: false,
     defaultMode: undefined,
     sources: {
-      provider: "env",
-      model: "flag",
-      baseURL: "user",
-      apiKey: "env",
+      protocol: "config",
+      model: "config",
+      baseURL: "config",
+      apiKey: "config",
       maxOutputTokens: "default",
-      showReasoning: "project",
-      "context.window": "user",
+      showReasoning: "flag",
+      "context.window": "config",
     },
     settingsWarnings: [],
-    settingsFiles: { user: "/home/u/.cooper/config.json", project: null },
+    settingsFile: "/home/u/.cooper/config.json",
   };
 
   it("shows the effective mode, values, and each value's source", () => {
@@ -283,33 +282,34 @@ describe("formatStatus", () => {
       config: baseConfig,
       mode: "plan",
       modeSource: "config",
+      contextTokens: 25_000,
     });
     expect(text).toContain("Mode: plan (config file)");
-    expect(text).toContain("anthropic");
+    expect(text).toContain("Context usage (estimated): 25000 / 200000 tokens (12.5%)");
+    expect(text).toContain("anthropic-messages");
     expect(text).toContain("claude-sonnet-5-5");
     expect(text).toContain("flag");
-    expect(text).toContain("set via ANTHROPIC_API_KEY");
+    expect(text).toMatch(/apiKey\s+set\s+config file/);
     // The key value itself must never appear.
     expect(text).not.toContain("secret-key");
-    expect(text).toContain("user file");
-    expect(text).toContain("user: /home/u/.cooper/config.json");
-    expect(text).not.toContain("project:");
-    expect(text).toContain("Settings files: user: /home/u/.cooper/config.json");
+    expect(text).toContain("config file");
+    expect(text).toContain("Settings file: /home/u/.cooper/config.json");
   });
 
-  it("marks an assumed context window and missing files", () => {
+  it("marks an assumed context window and a missing settings file", () => {
     const text = formatStatus({
       config: {
         ...baseConfig,
         contextWindowAssumed: true,
-        settingsFiles: { user: null, project: null },
+        settingsFile: null,
         settingsWarnings: ["oops"],
       },
       mode: "ask",
       modeSource: "default",
+      contextTokens: 0,
     });
     expect(text).toContain("200000 (assumed)");
-    expect(text).toContain("Settings files: none");
+    expect(text).toContain("Settings file: none (built-in defaults)");
     expect(text).toContain("Warning: oops");
   });
 });

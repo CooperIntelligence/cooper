@@ -112,7 +112,7 @@ export type LoadedSession = {
 export type CreateSessionOptions = {
   cwd: string;
   model: string;
-  /** Overrides `COOPER_HOME`; used by tests. */
+  /** Overrides the `cooperHome()` anchor; used by tests. */
   home?: string;
   now?: Date;
   /** Explicit id (tests or import). Generated from the timestamp otherwise. */

@@ -219,26 +219,24 @@ export function formatStatus(options: {
   config: Config;
   mode: ApprovalMode;
   modeSource: ModeResolution["source"] | "command";
+  contextTokens: number;
 }): string {
-  const { config, mode, modeSource } = options;
+  const { config, mode, modeSource, contextTokens } = options;
+  const window = config.context.window;
+  const contextPercent = ((contextTokens / window) * 100).toFixed(1);
 
   const configSourceLabel = (source: ConfigSource | undefined): string => {
     switch (source) {
       case "flag":
         return "flag";
-      case "env":
-        return "env";
-      case "project":
-        return "project file";
-      case "user":
-        return "user file";
+      case "config":
+        return "config file";
       default:
         return "default";
     }
   };
   const modeSourceLabel: Record<string, string> = {
     flag: "flag",
-    env: "env",
     session: "session",
     config: "config file",
     default: "default",
@@ -246,19 +244,14 @@ export function formatStatus(options: {
   };
 
   const entries: [name: string, value: string, source: string][] = [
-    ["provider", config.provider, configSourceLabel(config.sources.provider)],
+    ["protocol", config.protocol, configSourceLabel(config.sources.protocol)],
     ["model", config.model, configSourceLabel(config.sources.model)],
     [
       "baseURL",
-      config.baseURL ?? "(provider default)",
+      config.baseURL,
       configSourceLabel(config.sources.baseURL),
     ],
-    // Never the key itself — only which variable supplied it.
-    [
-      "apiKey",
-      `set via ${config.apiKeyVariable}`,
-      configSourceLabel(config.sources.apiKey),
-    ],
+    ["apiKey", "set", configSourceLabel(config.sources.apiKey)],
     [
       "maxOutputTokens",
       String(config.maxOutputTokens),
@@ -296,20 +289,15 @@ export function formatStatus(options: {
 
   const lines = [
     `Mode: ${mode} (${modeSourceLabel[modeSource] ?? modeSource})`,
+    `Context usage (estimated): ${contextTokens} / ${window} tokens (${contextPercent}%)`,
   ];
   for (const [name, value, source] of entries) {
     lines.push(`  ${name.padEnd(nameWidth)}  ${value.padEnd(valueWidth)}  ${source}`);
   }
 
-  const files = [
-    config.settingsFiles.user !== null
-      ? `user: ${config.settingsFiles.user}`
-      : null,
-    config.settingsFiles.project !== null
-      ? `project: ${config.settingsFiles.project}`
-      : null,
-  ].filter((file): file is string => file !== null);
-  lines.push(`Settings files: ${files.length > 0 ? files.join(" · ") : "none"}`);
+  lines.push(
+    `Settings file: ${config.settingsFile ?? "none (built-in defaults)"}`,
+  );
   for (const warning of config.settingsWarnings) {
     lines.push(`Warning: ${warning}`);
   }

@@ -26,7 +26,7 @@ packages/core/
   src/context/window.ts              模型窗口表
   src/instructions.ts                COOPER.md / AGENTS.md 加载
   src/session.ts                     会话持久化（JSONL、checkpoint、恢复）
-  src/home.ts                        COOPER_HOME / ~/.cooper 解析
+  src/home.ts                        ~/.cooper 常量锚点（不可被环境变量改写）
   src/mcp/config.ts                  MCP 配置与信任规则
   src/mcp/client.ts                  MCP 连接、工具列表、生命周期
   src/mcp/resources.ts               MCP resources 的共享工具与结果投影
@@ -43,8 +43,9 @@ apps/cli/
   src/stream-lines.ts                流式文本按行切分
   src/provider.ts                    根据配置构造 Provider
   src/mcp.ts                         加载可信 MCP 配置并组装工具
-  src/config.ts                      配置聚合（flag > env > 配置文件 > 默认）
-  src/settings.ts                    ~/.cooper/config.json 与项目层加载校验
+  src/config.ts                      配置聚合（flag > env > config.json > 默认）
+  src/settings.ts                    ~/.cooper/config.json 加载校验
+  src/onboarding.tsx                 首次运行引导（缺 key 时的向导）
 ```
 
 ## 快速开始
@@ -53,68 +54,62 @@ apps/cli/
 
 ```bash
 npm install
-cp .env.example .env        # Windows PowerShell: Copy-Item .env.example .env
-# 编辑 .env，至少填 COOPER_API_KEY
-npm run dev
+npm run dev          # 首次运行会进入引导：选协议 → 填 key → 验证并保存
 ```
 
-`COOPER_PROVIDER` **显式**选择协议，默认 `openai`（不按模型名猜测，因为 Claude 也可能通过 OpenAI 兼容网关提供）：
+引导把结果写进 `~/.cooper/config.json`，之后所有项目共用。CI 和脚本在启动前准备好同一个配置文件，填齐 `protocol`、`model`、`baseURL` 和 `apiKey`。
 
-| 协议 | 配置 | 默认模型 |
+填写模型后可指定总上下文窗口。已有 `context.window` 会预填，回车可保留。没有配置时可留空，Cooper 会使用模型表中的窗口，未知模型暂按 200,000 token 估算。手动填写的窗口会写入 `context.window`。
+
+引导用模型列表请求检查端点。失败后可按 `e` 返回修改连接参数，或按 `k` 单独修改密钥。所选模型在首轮对话时验证。保存时先完整写入同目录临时文件，再替换配置。POSIX 上新文件以 `0600` 创建，Windows 的访问权限由文件系统 ACL 决定。
+
+协议**显式**选择（不按模型名猜测，因为 Claude 也可能通过 OpenAI 兼容网关提供）。**`protocol`、`model`、`baseURL`、API key 四项都必须显式配置**，缺任何一项启动即报错（交互式进引导补齐，无头 fail closed）；官方端点只作为引导里的 **placeholder**，回车确认后写入，`loadConfig` 绝不静默代填。
+
+| 协议（`protocol`） | 端点（placeholder / 必填） | 模型 |
 |---|---|---|
-| OpenAI 兼容（默认） | `COOPER_API_KEY` 或 `OPENAI_API_KEY` | `gpt-4o-mini` |
-| Anthropic 原生 | `COOPER_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` | `claude-opus-5-5` |
+| `openai-chat` | `https://api.openai.com/v1`（引导 placeholder） | **必填**（无默认） |
+| `anthropic-messages` | `https://api.anthropic.com`（引导 placeholder） | **必填**（无默认） |
 
-`COOPER_BASE_URL` 支持任何 OpenAI 兼容端点，例如：
+OpenAI 兼容端点通过 `baseURL` 指定，例如：
 
-| 供应商 | COOPER_BASE_URL | COOPER_MODEL |
+| 供应商 | `baseURL` | `model` |
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | `gpt-6-astra` |
 | DeepSeek | `https://api.deepseek.com` | `deepseek-flash` |
 | Moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
 
-Anthropic 原生协议使用 `ANTHROPIC_BASE_URL`（可选），输出上限由 `COOPER_MAX_OUTPUT_TOKENS` 控制（默认 64000）。同时设置时，`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` 优先于通用的 `COOPER_BASE_URL`，避免切换提供商时被旧的端点配置带偏。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
+输出上限由 `maxOutputTokens` 控制（默认 64000）。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
 
 ## 配置
 
-配置分四个通道，各管一段生命周期：
+TUI 和 headless 都从 **`~/.cooper/config.json`** 读取 provider 配置。旧版的环境变量、`env` 对象、`--env-file` 和 `--model` 已移除。工作区的 `.env` 和 provider 配置文件不会被加载。
 
-| 通道 | 放什么 | 生命周期 |
-|---|---|---|
-| `~/.cooper/config.json`（user 层） | 非密偏好：provider、model、baseURL、`apiKeyEnv`、调参、默认 mode | 长期，跨项目 |
-| `<workspace>/.cooper/config.json`（project 层，可提交） | 项目级覆盖（见下方限制） | 长期，随仓库 |
-| `.env` / shell 环境变量 | **只有 API key**；`COOPER_*` 变量保留为单次/CI 覆盖 | 长期（密钥）/ 临时 |
-| CLI flag / 斜杠命令 | flag：单次运行（`--model`、`--mode`…）；命令：会话内（`/plan`、`/auto`…） | 单次 / 会话 |
-
-**每个 key 独立取最高优先级**：`flag > env > project 配置 > user 配置 > 内置默认`。`/status` 显示每个生效值及其来源层。
+`/status` 显示生效值和来源，密钥只显示是否已设置。
 
 配置文件示例（JSON，严格校验；未知字段告警并忽略，JSON 损坏直接报错）：
 
-```jsonc
-// ~/.cooper/config.json
+```json
 {
-  "provider": "anthropic",          // 协议，显式，不按模型名猜
-  "model": "claude-sonnet-5-5",
+  "protocol": "openai-chat",
+  "model": "gpt-4o-mini",
   "baseURL": "https://gateway.example/v1",
-  "apiKeyEnv": "CORP_KEY",          // 指针：去哪个 env 变量找 key
+  "apiKey": "sk-…",
   "maxOutputTokens": 64000,
   "showReasoning": false,
-  "mode": "ask",                    // user 层可为 plan|ask|auto
+  "mode": "ask",
   "context": {
-    "window": 200000,               // 省略则按模型表，未知模型假设 200k
+    "window": 200000,
     "reserveOutputTokens": 16384,
-    "compact": true,
-    "summaryModel": null
+    "compact": true
   }
 }
 ```
 
 规则：
 
-- **API key 永远只从 env 读**（bring your own key）。配置里只写 `apiKeyEnv` 指针；解析顺序：指针指向的变量 → `COOPER_API_KEY` → `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。配置文件里出现 `apiKey` 之类的密钥字段会告警并忽略。
-- **project 层不能碰网络**：`provider`、`baseURL`、`apiKeyEnv` 只允许 user 层 / env / flag。clone 下来的仓库无法把你的 key 重定向到自己的服务器（与 MCP 需要 `--mcp-project` 同一威胁模型）。project 层出现这些字段会告警并忽略。
-- **project 层不能设 `mode: "auto"`**：仓库不能自我放行；auto 只能来自 `--mode auto`、`COOPER_MODE`、TUI `/auto` 或 user 层配置。
-- mode 优先级：`--mode` > `COOPER_MODE` > 会话保存的 plan/ask > 配置文件 > `ask`。会话保存的 `auto` 仍不隐式恢复（落空到配置层再决定）。
+- **迁移旧配置**：把旧 `env` 对象里的 `COOPER_BASE_URL` 和 `COOPER_API_KEY` 移到顶层 `baseURL` 和 `apiKey`，再删除 `env` 对象。原本通过 shell 或启动参数配置的连接信息也需要写入该文件。
+- 权限模式优先级为 `--mode` > 会话保存的 `plan` / `ask` > 配置文件的 `mode` > `ask`。`COOPER_MODE` 已移除。配置默认值只支持 `plan` 和 `ask`，旧的 `"mode": "auto"` 会被忽略并提示迁移。
+- **`COOPER_HOME` 已移除**：数据目录固定为 `~/.cooper`。曾设置过该变量的用户会被忽略（pre-1.0 破坏性变更）。
 
 ## 运行方式
 
@@ -157,13 +152,8 @@ npm run dev -- --cwd ../my-app
 npm run dev -- -C ../my-app -p "跑一下测试"
 ```
 
-工作目录同时决定：工具能访问的根、`run_command` 的执行目录、`.env` 的查找起点。
+工作目录决定内置文件工具的根、`run_command` 的启动目录、MCP 项目配置（需 `--mcp-project`）与会话归属。凭据和偏好从 `~/.cooper/config.json` 读取。
 
-`.env` 查找顺序（先命中者生效；真实环境变量永远优先于任何文件）：
-
-1. `<工作目录>/.env`
-2. `<工作目录>/../../.env`（兼容 monorepo）
-3. Cooper 自己的 `.env`（所以换项目时不必复制密钥）
 
 ## 会话持久化
 
@@ -176,7 +166,7 @@ npm run dev -- -p --resume <id> "接着改"
 npm run dev -- --no-session         # 本次不落盘
 ```
 
-- 存储位置：`~/.cooper/projects/<工作区标识>/sessions/<id>.jsonl`。工作区标识由路径生成，同一工作区共享；`COOPER_HOME` 可以换根目录。
+- 存储位置：`~/.cooper/projects/<工作区标识>/sessions/<id>.jsonl`。工作区标识由路径生成，同一工作区共享；`~/.cooper` 是固定常量，不可改写。
 - 每个会话是一个 **JSONL 追加文件**，崩溃时最多丢最后一行。恢复时会忽略损坏的行，并丢弃缺少工具结果的残缺尾部（否则下一次请求会被 API 拒绝）。
 - TUI 横幅和无头模式的 stderr 都会打印会话 id。
 - 会话绑定工作目录：在别的工作区 `--resume` 会报错，不会把路径错配到另一个项目。
@@ -184,7 +174,7 @@ npm run dev -- --no-session         # 本次不落盘
 - **面向用户的推理内容不落盘**（规则 15）。Anthropic 的签名 thinking 块是协议续传数据，作为 `providerData` 随消息保存；它不会显示，也不会发往其他厂商。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
 - system 提示不落盘，恢复时按工作目录和项目指令重新生成；它不包含当前模式，保持字节稳定以复用 provider 的 prompt cache。
 - 当前模式作为 `policy` 记录追加到会话；模型看到的模式说明是带 `runtime: "permission-mode"` 的 `<cooper-runtime>` 消息，TUI 和恢复视图会过滤它，不把它显示成用户输入。
-- 恢复会话时按 `--mode` > `COOPER_MODE` > 会话记录的 `plan`/`ask` > 配置文件的 `mode` > 默认 `ask` 的顺序决定模式；**已保存的 `auto` 不会隐式恢复**（落空到配置层，配置里显式写了 `auto` 才生效），否则必须显式 `--mode auto` 或在 TUI 里 `/auto`。
+- 启动时用 `--resume` 恢复会话，可以沿用保存的 `plan` 或 `ask`。保存的 `auto` 会被跳过，继续使用配置默认值或 `ask`。开启 `auto` 需要本次启动传入 `--mode auto`，或在空闲的 TUI 内输入 `/auto`。
 - 无头模式仍然保持 stdout 只有答案；会话 id、恢复提示和“未保存”告警都走 stderr。
 
 ## 项目指令
@@ -209,7 +199,7 @@ npm run dev -- --no-session         # 本次不落盘
 ```bash
 npm run dev                  # ask
 npm run dev -- --mode plan   # 只读规划
-COOPER_MODE=auto npm run dev # 也可用环境变量
+npm run dev -- --mode auto  # 显式开启本进程的自动审批
 ```
 
 TUI 空闲时可以直接切换：
@@ -231,7 +221,7 @@ TUI 空闲时可以直接切换：
 | `/resume <id>` | — | 切换到已保存会话（支持唯一 id 前缀）；保持当前权限模式 |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
-| `/status` | — | 显示生效配置：每个值、来源层（flag/env/project/user/default）与配置文件路径 |
+| `/status` | — | 显示当前上下文占用率、生效配置及其来源 |
 | `/exit` | — | 退出 TUI |
 
 输入以 `/` 开头时，输入框上方会浮出注册表候选（前缀匹配，含别名）：
@@ -268,7 +258,7 @@ TUI 空闲时可以直接切换：
 支持 `reasoning_content` / `reasoning` 字段的端点（DeepSeek、Kimi、Qwen、OpenRouter 等）会额外返回模型的推理摘要。
 
 - **默认**：不显示文本，只在运行时显示 `reasoning 12.3k chars` 的进度提示；端点报告推理 token 数时，每轮结束留一行 `· reasoned 1.2k tokens`
-- **`--show-reasoning`**（或 `COOPER_SHOW_REASONING=1`）：按完整行以暗灰色提交到滚动区；无头模式写到 stderr，stdout 仍然只有答案
+- **`--show-reasoning`**（或配置 `showReasoning: true`）：按完整行以暗灰色提交到滚动区；无头模式写到 stderr，stdout 仍然只有答案
 
 **推理内容永远不进入对话历史**，也不会被将来的会话持久化保存。三个原因：DeepSeek 明确要求 `reasoning_content` 不能回传；回传只会白白消耗上下文；推理摘要未必忠实反映模型的实际计算，让它变成后续轮次的上下文会污染判断。
 
@@ -292,12 +282,14 @@ TUI 空闲时可以直接切换：
 
 **token 估算**不依赖 tokenizer：CJK 按约 1.1 token/字符、其余按 3.6 字符/token，再加上消息结构开销和工具 schema。端点返回 `usage` 时用真实值做指数滑动平均修正；不支持的端点会自动降级（`stream_options` 被拒后重试一次并记住）。
 
-| 变量（env 覆盖，优先于配置文件） | 默认 | 配置文件对应字段 |
-|---|---|---|
-| `COOPER_CONTEXT_WINDOW` | 按模型表，否则 200000 | `context.window` |
-| `COOPER_CONTEXT_RESERVE` | 16384 | `context.reserveOutputTokens` |
-| `COOPER_CONTEXT_COMPACT` | `on` | `context.compact` |
-| `COOPER_SUMMARY_MODEL` | 同主模型 | `context.summaryModel` |
+| `config.json` 字段 | 默认 |
+|---|---|
+| `context.window` | 按模型表，否则 200000 |
+| `context.reserveOutputTokens` | 16384 |
+| `context.compact` | `true` |
+| `context.summaryModel` | 同主模型 |
+
+在 `~/.cooper/config.json` 中设置 `context.window` 来指定总上下文窗口。TUI 的 `/status` 用当前消息和工具定义的估算 token 数除以这个窗口，显示占用比例。压缩阈值仍按扣除输出预留后的预算计算。
 
 压缩发生时界面会显示 `⤓ context 92.4k → 18.1k tokens (summarize)`。摘要用英文生成：同样的信息量，中文的成本约为英文的三倍。
 
@@ -315,7 +307,7 @@ TUI 空闲时可以直接切换：
 - `edit_file` — 精确字符串替换；默认要求唯一匹配，可设 `replace_all`
 - `run_command` — 在工作区内执行 shell 命令，默认超时 120s，输出上限 30k 字符
 
-所有工具都被限制在启动目录内，路径逃逸会被拒绝。
+内置文件工具和 `run_command` 的启动目录会校验真实路径，拒绝指向工作区外的符号链接和 Windows junction。获准启动的命令以当前操作系统用户的权限运行。
 
 ## MCP 工具
 

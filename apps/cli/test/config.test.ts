@@ -1,237 +1,118 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_MAX_OUTPUT_TOKENS,
+  IncompleteConfigError,
   loadConfig,
-  resolveProvider,
 } from "../src/config.js";
 
-function env(values: Record<string, string>): NodeJS.ProcessEnv {
-  return values as NodeJS.ProcessEnv;
-}
-
-describe("resolveProvider", () => {
-  it("defaults to the OpenAI-compatible protocol", () => {
-    expect(resolveProvider(undefined)).toBe("openai");
-    expect(resolveProvider("")).toBe("openai");
-    expect(resolveProvider("  ")).toBe("openai");
-  });
-
-  it("accepts both supported protocols explicitly", () => {
-    expect(resolveProvider("openai")).toBe("openai");
-    expect(resolveProvider("Anthropic")).toBe("anthropic");
-  });
-
-  it("rejects unknown protocols instead of guessing from the model", () => {
-    expect(() => resolveProvider("claude")).toThrow(/COOPER_PROVIDER/);
-  });
-});
-
 describe("loadConfig", () => {
-  it("uses the OpenAI-compatible defaults", () => {
-    const config = loadConfig({
-      loadEnv: false,
-      env: env({ COOPER_API_KEY: "test-key" }),
-    });
-
-    expect(config.provider).toBe("openai");
-    expect(config.model).toBe("gpt-4o-mini");
-    expect(config.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
-    expect(config.context.window).toBe(128_000);
-  });
-
-  it("uses Anthropic defaults and the Anthropic key fallback", () => {
-    const config = loadConfig({
-      loadEnv: false,
-      env: env({
-        COOPER_PROVIDER: "anthropic",
-        ANTHROPIC_API_KEY: "test-key",
-      }),
-    });
-
-    expect(config.provider).toBe("anthropic");
-    expect(config.apiKey).toBe("test-key");
-    expect(config.model).toBe("claude-opus-5-5");
-    expect(config.context.window).toBe(1_000_000);
-  });
-
-  it("lets COOPER_MODEL and COOPER_MAX_OUTPUT_TOKENS override defaults", () => {
-    const config = loadConfig({
-      loadEnv: false,
-      env: env({
-        COOPER_PROVIDER: "anthropic",
-        COOPER_API_KEY: "test-key",
-        ANTHROPIC_BASE_URL: "http://localhost:1234",
-        COOPER_MODEL: "claude-sonnet-5-5",
-        COOPER_MAX_OUTPUT_TOKENS: "2048",
-      }),
-    });
-
-    expect(config.model).toBe("claude-sonnet-5-5");
-    expect(config.baseURL).toBe("http://localhost:1234");
-    expect(config.maxOutputTokens).toBe(2048);
-  });
-
-  it("prefers the provider-specific endpoint over a generic override", () => {
-    const config = loadConfig({
-      loadEnv: false,
-      env: env({
-        COOPER_PROVIDER: "anthropic",
-        ANTHROPIC_API_KEY: "test-key",
-        ANTHROPIC_BASE_URL: "http://anthropic.local",
-        COOPER_BASE_URL: "http://openai.local/v1",
-      }),
-    });
-
-    expect(config.baseURL).toBe("http://anthropic.local");
-  });
-
-  it("requires a key for the selected provider", () => {
-    expect(() =>
-      loadConfig({
-        loadEnv: false,
-        env: env({ COOPER_PROVIDER: "anthropic", OPENAI_API_KEY: "nope" }),
-      }),
-    ).toThrow(/ANTHROPIC_API_KEY/);
-  });
-});
-
-describe("loadConfig settings layers", () => {
-  let dir: string;
   let home: string;
-  let root: string;
+  const connection = {
+    protocol: "openai-chat",
+    model: "test-model",
+    baseURL: "https://gateway.example/v1",
+    apiKey: "test-key",
+  };
 
-  function writeJson(file: string, value: unknown): void {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(value), "utf8");
-  }
-
-  function load(
-    values: Record<string, string>,
-    overrides?: { model?: string },
-  ) {
-    return loadConfig({
-      loadEnv: false,
-      env: env({ COOPER_HOME: home, ...values }),
-      root,
-      overrides,
-    });
+  function writeConfig(value: unknown): void {
+    fs.writeFileSync(path.join(home, "config.json"), JSON.stringify(value), "utf8");
   }
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "cooper-config-"));
-    home = path.join(dir, "home");
-    root = path.join(dir, "workspace");
-    fs.mkdirSync(root, { recursive: true });
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cooper-config-"));
   });
 
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
-  it("applies flag > env > project > user > default for model", () => {
-    writeJson(path.join(home, "config.json"), { model: "user-model" });
-    writeJson(path.join(root, ".cooper", "config.json"), { model: "project-model" });
+  it("loads provider settings from config.json and supplies other defaults", () => {
+    writeConfig(connection);
+    const config = loadConfig({ home });
+    expect(config).toMatchObject(connection);
+    expect(config.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+    expect(config.context.window).toBe(200_000);
+    expect(config.contextWindowAssumed).toBe(true);
+    expect(config.sources).toMatchObject({
+      protocol: "config", model: "config", baseURL: "config", apiKey: "config",
+    });
+    expect(config.settingsFile).toBe(path.join(home, "config.json"));
+  });
 
-    expect(load({ COOPER_API_KEY: "k" }).model).toBe("project-model");
-    expect(load({ COOPER_API_KEY: "k", COOPER_MODEL: "env-model" }).model).toBe(
-      "env-model",
+  it("ignores ambient overrides and keeps the saved key out of the process environment", () => {
+    vi.stubEnv("COOPER_PROTOCOL", "anthropic-messages");
+    vi.stubEnv("COOPER_MODEL", "env-model");
+    vi.stubEnv("COOPER_BASE_URL", "https://ambient.example/v1");
+    vi.stubEnv("COOPER_API_KEY", undefined);
+    vi.stubEnv("COOPER_CONTEXT_WINDOW", "1234");
+    writeConfig(connection);
+
+    const config = loadConfig({ home });
+    expect(config).toMatchObject(connection);
+    expect(config.context.window).toBe(200_000);
+    expect(process.env.COOPER_API_KEY).toBeUndefined();
+  });
+
+  it("reports every missing field even when the ambient environment is complete", () => {
+    vi.stubEnv("COOPER_PROTOCOL", "openai-chat");
+    vi.stubEnv("COOPER_MODEL", "env-model");
+    vi.stubEnv("COOPER_BASE_URL", "https://ambient.example/v1");
+    vi.stubEnv("COOPER_API_KEY", "ambient-key");
+
+    expect(() => loadConfig({ home })).toThrow(IncompleteConfigError);
+    expect(() => loadConfig({ home })).toThrow(/missing: protocol, model, baseURL, apiKey/);
+  });
+
+  it("keeps the existing provider fields available to onboarding", () => {
+    const { model: _model, ...partial } = connection;
+    writeConfig({ ...partial, context: { window: 32_768 } });
+
+    expect(() => loadConfig({ home })).toThrow(
+      expect.objectContaining({
+        missing: ["model"],
+        settings: { ...partial, model: undefined, contextWindow: 32_768 },
+      }),
     );
-    expect(
-      load({ COOPER_API_KEY: "k" }, { model: "flag-model" }).model,
-    ).toBe("flag-model");
   });
 
-  it("lets the user layer beat the default when no project file exists", () => {
-    writeJson(path.join(home, "config.json"), { model: "user-model" });
-
-    const config = load({ COOPER_API_KEY: "k" });
-    expect(config.model).toBe("user-model");
-    expect(config.sources.model).toBe("user");
+  it("ignores the legacy env object and offers migration guidance", () => {
+    writeConfig({
+      protocol: connection.protocol,
+      model: connection.model,
+      env: { COOPER_API_KEY: "old-key", COOPER_BASE_URL: "https://old.example" },
+    });
+    expect(() => loadConfig({ home })).toThrow(
+      expect.objectContaining({
+        missing: ["baseURL", "apiKey"],
+        warnings: [expect.stringMatching(/"env" is no longer supported/)],
+      }),
+    );
   });
 
-  it("records the source of each value", () => {
-    writeJson(path.join(home, "config.json"), { model: "user-model" });
-    writeJson(path.join(root, ".cooper", "config.json"), {
+  it("reads optional preferences and reports their sources", () => {
+    writeConfig({
+      ...connection,
+      protocol: "anthropic-messages",
+      mode: "plan",
       maxOutputTokens: 1234,
+      showReasoning: true,
+      context: { window: 111_000, reserveOutputTokens: 2048, compact: false, summaryModel: "small" },
+      unknownSetting: 1,
     });
-
-    const config = load({ COOPER_API_KEY: "k", COOPER_PROVIDER: "anthropic" });
-    expect(config.sources.provider).toBe("env");
-    expect(config.sources.model).toBe("user");
-    expect(config.sources.maxOutputTokens).toBe("project");
-    expect(config.sources.apiKey).toBe("env");
-  });
-
-  it("keeps baseURL in env/user only and lets env win", () => {
-    writeJson(path.join(home, "config.json"), {
-      baseURL: "http://user.local/v1",
+    const config = loadConfig({ home });
+    expect(config).toMatchObject({
+      protocol: "anthropic-messages",
+      defaultMode: "plan",
+      maxOutputTokens: 1234,
+      showReasoning: true,
+      contextWindowAssumed: false,
+      context: { window: 111_000, reserveOutputTokens: 2048, enabled: false, summaryModel: "small" },
     });
-
-    expect(load({ COOPER_API_KEY: "k" }).baseURL).toBe("http://user.local/v1");
-    expect(
-      load({ COOPER_API_KEY: "k", COOPER_BASE_URL: "http://env.local/v1" })
-        .baseURL,
-    ).toBe("http://env.local/v1");
-    expect(load({ COOPER_API_KEY: "k" }).sources.baseURL).toBe("user");
-  });
-
-  it("resolves the API key through the apiKeyEnv pointer first", () => {
-    writeJson(path.join(home, "config.json"), { apiKeyEnv: "CORP_KEY" });
-
-    const config = load({ CORP_KEY: "corp-key", COOPER_API_KEY: "fallback" });
-    expect(config.apiKey).toBe("corp-key");
-    expect(load({ COOPER_API_KEY: "fallback" }).apiKey).toBe("fallback");
-  });
-
-  it("names the pointed-at variable when it is missing", () => {
-    writeJson(path.join(home, "config.json"), { apiKeyEnv: "CORP_KEY" });
-
-    expect(() => load({})).toThrow(/Set CORP_KEY/);
-  });
-
-  it("layers context settings below env", () => {
-    writeJson(path.join(home, "config.json"), {
-      context: { window: 111_000, reserveOutputTokens: 2048 },
-    });
-    writeJson(path.join(root, ".cooper", "config.json"), {
-      context: { window: 222_000 },
-    });
-
-    const config = load({ COOPER_API_KEY: "k" });
-    expect(config.context.window).toBe(222_000);
-    expect(config.context.reserveOutputTokens).toBe(2048);
-    expect(config.sources["context.window"]).toBe("project");
-    expect(config.sources["context.reserveOutputTokens"]).toBe("user");
-
-    const withEnv = load({
-      COOPER_API_KEY: "k",
-      COOPER_CONTEXT_WINDOW: "333000",
-    });
-    expect(withEnv.context.window).toBe(333_000);
-    expect(withEnv.sources["context.window"]).toBe("env");
-  });
-
-  it("reads defaultMode from the settings files, project first", () => {
-    writeJson(path.join(home, "config.json"), { mode: "auto" });
-    expect(load({ COOPER_API_KEY: "k" }).defaultMode).toBe("auto");
-
-    writeJson(path.join(root, ".cooper", "config.json"), { mode: "plan" });
-    expect(load({ COOPER_API_KEY: "k" }).defaultMode).toBe("plan");
-  });
-
-  it("propagates settings-file warnings", () => {
-    fs.mkdirSync(path.join(home), { recursive: true });
-    fs.writeFileSync(
-      path.join(home, "config.json"),
-      JSON.stringify({ model: "m", nope: 1 }),
-      "utf8",
-    );
-
-    const config = load({ COOPER_API_KEY: "k" });
-    expect(config.model).toBe("m");
-    expect(config.settingsWarnings.some((w) => w.includes("nope"))).toBe(true);
+    expect(config.sources["context.window"]).toBe("config");
+    expect(config.settingsWarnings).toEqual([expect.stringContaining("unknownSetting")]);
   });
 });

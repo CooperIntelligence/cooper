@@ -20,14 +20,19 @@ import {
   type ParsedArgs,
 } from "./args.js";
 import {
+  IncompleteConfigError,
   loadConfig,
-  loadEnvFiles,
   type ApprovalMode,
   type Config,
 } from "./config.js";
 import { runHeadless } from "./headless.js";
 import { prepareTools, type PreparedTools } from "./mcp.js";
+import {
+  runOnboarding,
+  writeOnboardingConfig,
+} from "./onboarding.js";
 import { createProvider } from "./provider.js";
+import { userConfigFile } from "./settings.js";
 
 const HELP = `Cooper — a terminal coding agent
 
@@ -37,8 +42,7 @@ Usage:
   cooper -p - < prompt.txt        read the prompt from stdin
 
 Options:
-  -m, --mode <mode>   ask (default) | auto | plan
-      --model <name>  model for this run (overrides env and config files)
+  -m, --mode <mode>   override the startup mode: ask | auto | plan
   -C, --cwd <dir>     workspace directory (default: current directory)
   -p, --print [text]  non-interactive; omit text or use "-" for stdin
   -r, --resume <id>   continue a saved session
@@ -58,23 +62,15 @@ Modes:
 
   With -p nobody can answer an approval prompt, so ask denies writes and
   commands; pass --mode auto for unattended edits.
+  Startup precedence: --mode > saved plan/ask > config.json mode > ask.
+  Config defaults accept plan and ask. In the TUI, /plan, /ask and /auto
+  switch the mode while idle.
 
-Environment:
-  COOPER_PROVIDER   openai (default) | anthropic
-  COOPER_API_KEY    API key (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)
-  COOPER_BASE_URL   Endpoint override (provider-specific env wins)
-  COOPER_MODEL      Model name (default: gpt-4o-mini or claude-opus-5-5)
-  COOPER_MAX_OUTPUT_TOKENS
-                    Anthropic max_tokens (default 64000)
-  COOPER_MODE       Default approval mode (flag wins)
-  COOPER_SHOW_REASONING
-                    Set to 1 to show reasoning summaries by default
-  COOPER_HOME       Data directory (default: ~/.cooper)
+Configuration:
+  Set protocol, model, baseURL, and apiKey in ~/.cooper/config.json.
+  The supported protocols are openai-chat and anthropic-messages.
+  Run cooper interactively to complete setup.
 
-.env is read from the workspace, then from the directory next to Cooper.
-Long-term preferences live in ~/.cooper/config.json (and optionally
-<workspace>/.cooper/config.json); .env holds API keys. Precedence per key:
-flag > env > project config > user config > defaults.
 Sessions are saved by default; use --no-session to keep a run ephemeral.
 `;
 
@@ -141,8 +137,7 @@ async function main(): Promise<void> {
   let root: string;
   try {
     root = resolveRoot(args.cwd);
-    // One workspace root for everything: .env lookup, tool paths, session
-    // buckets, and child processes all resolve against the same directory.
+    // Tools, sessions, and child processes share the same workspace root.
     process.chdir(root);
   } catch (error) {
     fail(error);
@@ -161,8 +156,31 @@ async function main(): Promise<void> {
   let session: SessionWriter | null = null;
   let resumed: LoadedSession | null = null;
   try {
-    loadEnvFiles();
-    config = loadConfig({ root, overrides: { model: args.model } });
+
+    // Any missing required field (protocol/model/baseURL/apiKey) + interactive
+    // TUI is the one entry point into onboarding; headless and every other
+    // config error fail closed as before.
+    try {
+      config = loadConfig();
+    } catch (error) {
+      if (!(error instanceof IncompleteConfigError)) throw error;
+      if (args.prompt !== null || !process.stdin.isTTY || !process.stdout.isTTY) {
+        for (const warning of error.warnings) console.error(`warning: ${warning}`);
+        throw error;
+      }
+
+      const result = await runOnboarding(error.settings);
+      if (result === null) {
+        fail(
+          `Setup cancelled. Set protocol, model, baseURL, and ` +
+            `apiKey in ${userConfigFile()}, ` +
+            `then run cooper again.`,
+        );
+      }
+      writeOnboardingConfig(undefined, result);
+      config = loadConfig();
+    }
+
     for (const warning of config.settingsWarnings) {
       console.error(`warning: ${warning}`);
     }
@@ -174,16 +192,17 @@ async function main(): Promise<void> {
 
     const resolution = resolveModeForSession(
       args.mode,
-      process.env.COOPER_MODE,
       resumed?.preset ?? null,
-      config.defaultMode ?? null,
+      config.defaultMode,
     );
     mode = resolution.mode;
     modeSource = resolution.source;
     if (resolution.sessionAutoIgnored) {
       modeNotice =
         `Saved session was in auto mode; not restored (now ${mode}). ` +
-        "Pass --mode auto or run /auto to enable auto-approve.";
+        (args.prompt === null
+          ? "Pass --mode auto or run /auto to enable auto-approve."
+          : "Pass --mode auto to enable auto-approve.");
     } else if (resolution.source === "session") {
       modeNotice = `Restored from session: ${mode}.`;
     }

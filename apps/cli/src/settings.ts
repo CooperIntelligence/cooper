@@ -3,20 +3,7 @@ import path from "node:path";
 import { cooperHome } from "@cooper/core";
 import { z } from "zod";
 
-/**
- * Long-term preference files, one per scope:
- *
- *   user    <COOPER_HOME>/config.json   (default ~/.cooper/config.json)
- *   project <workspace>/.cooper/config.json
- *
- * Precedence between layers (and against env/flags) is resolved in
- * `loadConfig()`; this module only loads and validates each layer.
- *
- * Secrets never live here. The project layer additionally may not redirect
- * network or credential resolution (`provider`, `baseURL`, `apiKeyEnv`): a
- * cloned repository must not be able to point the user's API key at its own
- * server. Those fields in a project file are dropped with a warning.
- */
+/** The user configuration file is the source of provider settings. */
 
 const contextSchema = z.object({
   window: z.number().int().positive().optional(),
@@ -26,36 +13,24 @@ const contextSchema = z.object({
 });
 
 const settingsSchema = z.object({
-  provider: z.enum(["openai", "anthropic"]).optional(),
-  model: z.string().min(1).optional(),
-  baseURL: z.string().min(1).optional(),
-  apiKeyEnv: z
-    .string()
-    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name")
-    .optional(),
+  protocol: z.enum(["openai-chat", "anthropic-messages"]).optional(),
+  model: z.string().trim().min(1).optional(),
+  baseURL: z.string().trim().min(1).optional(),
+  apiKey: z.string().trim().min(1).optional(),
   maxOutputTokens: z.number().int().positive().optional(),
   showReasoning: z.boolean().optional(),
-  mode: z.enum(["plan", "ask", "auto"]).optional(),
+  mode: z.enum(["plan", "ask"]).optional(),
   context: contextSchema.optional(),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
 
-/** Fields the project layer may override; everything else is dropped there. */
-const PROJECT_FIELDS = new Set([
-  "model",
-  "maxOutputTokens",
-  "showReasoning",
-  "mode",
-  "context",
-]);
-
 /** Shape used to report unknown keys (values are nested key names). */
 const KNOWN_SHAPE: Record<string, string[] | true> = {
-  provider: true,
+  protocol: true,
   model: true,
   baseURL: true,
-  apiKeyEnv: true,
+  apiKey: true,
   maxOutputTokens: true,
   showReasoning: true,
   mode: true,
@@ -63,25 +38,20 @@ const KNOWN_SHAPE: Record<string, string[] | true> = {
 };
 
 // Whole-key matches only: substrings would eat legitimate names like
-// `maxOutputTokens` or the `apiKeyEnv` pointer itself.
+// `maxOutputTokens`.
 const SECRET_KEY =
   /^(api[-_]?key|key|token|secret|password|credential|credentials)$|[-_](token|secret|password|key)$|(apikey|token|secret|password)$/i;
 
 export type LoadedSettings = {
-  user: Settings | null;
-  project: Settings | null;
-  /** Absolute paths of the files that contributed a layer (for /status). */
-  userFile: string | null;
-  projectFile: string | null;
+  settings: Settings | null;
+  /** Absolute path of the file that loaded, for `/status`. */
+  file: string | null;
   warnings: string[];
 };
 
-export function userConfigFile(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(cooperHome(env), "config.json");
-}
-
-export function projectConfigFile(root: string): string {
-  return path.join(root, ".cooper", "config.json");
+/** `config.json` under `home`; tests pass their own directory. */
+export function userConfigFile(home: string = cooperHome()): string {
+  return path.join(home, "config.json");
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -119,9 +89,7 @@ function formatIssues(file: string, error: z.ZodError): string {
   return `Invalid settings in ${file}: ${detail}`;
 }
 
-type LayerResult = { settings: Settings; warnings: string[] };
-
-function loadLayer(file: string, scope: "user" | "project"): LayerResult | null {
+function loadLayer(file: string): { settings: Settings; warnings: string[] } | null {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
@@ -144,11 +112,26 @@ function loadLayer(file: string, scope: "user" | "project"): LayerResult | null 
 
   const warnings: string[] = [];
 
+  if (Object.hasOwn(raw, "env")) {
+    warnings.push(
+      `${file}: "env" is no longer supported (ignored). Move COOPER_BASE_URL and ` +
+        "COOPER_API_KEY to the top-level baseURL and apiKey fields.",
+    );
+    delete raw.env;
+  }
+
+  if (raw.mode === "auto") {
+    warnings.push(
+      `${file}: mode "auto" is no longer a valid default (ignored). ` +
+        "Use --mode auto or /auto in the TUI.",
+    );
+    delete raw.mode;
+  }
+
   for (const key of Object.keys(raw)) {
-    if (SECRET_KEY.test(key)) {
+    if (key !== "apiKey" && SECRET_KEY.test(key)) {
       warnings.push(
-        `${file}: "${key}" looks like a secret; configuration files must not ` +
-          `hold credentials — put keys in .env (ignored).`,
+        `${file}: "${key}" looks like a secret (ignored). Use "apiKey" for the provider key.`,
       );
       delete raw[key];
     }
@@ -162,52 +145,21 @@ function loadLayer(file: string, scope: "user" | "project"): LayerResult | null 
 
   const parsed = settingsSchema.safeParse(raw);
   if (!parsed.success) throw new Error(formatIssues(file, parsed.error));
-  const settings = parsed.data;
-
-  if (scope === "project") {
-    for (const key of Object.keys(settings) as (keyof Settings)[]) {
-      if (!PROJECT_FIELDS.has(key)) {
-        warnings.push(
-          `${file}: "${key}" is not allowed in a project config (ignored); ` +
-            `set it in ${userConfigFile()} or the environment instead.`,
-        );
-        delete settings[key];
-      }
-    }
-    if (settings.mode === "auto") {
-      warnings.push(
-        `${file}: mode "auto" is not allowed in a project config (ignored); ` +
-          `pass --mode auto or set it in ${userConfigFile()}.`,
-      );
-      delete settings.mode;
-    }
-  }
-
-  return { settings, warnings };
+  return { settings: parsed.data, warnings };
 }
 
 /**
- * Reads both settings layers. Missing files are normal (a fresh install has
- * neither); malformed files are hard errors so a typo never silently changes
- * behaviour.
+ * Reads `config.json`. A missing file is normal (a fresh install has none);
+ * malformed files are hard errors so a typo never silently changes behaviour.
  */
 export function loadSettings(
-  options: { root: string; env?: NodeJS.ProcessEnv } = {
-    root: process.cwd(),
-  },
+  options: { home?: string } = {},
 ): LoadedSettings {
-  const env = options.env ?? process.env;
-  const userFile = userConfigFile(env);
-  const projectFile = projectConfigFile(options.root);
-
-  const user = loadLayer(userFile, "user");
-  const project = loadLayer(projectFile, "project");
-
+  const file = userConfigFile(options.home);
+  const layer = loadLayer(file);
   return {
-    user: user?.settings ?? null,
-    project: project?.settings ?? null,
-    userFile: user !== null ? userFile : null,
-    projectFile: project !== null ? projectFile : null,
-    warnings: [...(user?.warnings ?? []), ...(project?.warnings ?? [])],
+    settings: layer?.settings ?? null,
+    file: layer !== null ? file : null,
+    warnings: layer?.warnings ?? [],
   };
 }

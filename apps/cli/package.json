@@ -44,7 +44,6 @@
   "devDependencies": {
     "@cooper/core": "0.1.0",
     "@types/react": "^19.3.0",
-    "dotenv": "^18.0.9",
     "esbuild": "^0.28.2",
     "ink": "^8.0.0",
     "ink-spinner": "^5.0.0",

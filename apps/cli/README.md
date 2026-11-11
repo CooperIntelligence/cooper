@@ -19,22 +19,28 @@ cooper "fix the tests"    # one-shot, non-interactive
 cooper --help
 ```
 
-Put your API key in `.env` (or the shell environment):
-
-```bash
-COOPER_API_KEY=sk-...      # or OPENAI_API_KEY / ANTHROPIC_API_KEY
-```
-
-Long-term preferences — provider protocol, model, endpoint, context tuning —
-live in `~/.cooper/config.json` (optionally overridden per project in
-`<workspace>/.cooper/config.json`):
+Run `cooper` once interactively — a guided setup asks for your protocol and
+API key, verifies the key against the endpoint, and writes
+`~/.cooper/config.json`:
 
 ```json
-{ "provider": "openai", "model": "gpt-4o-mini" }
+{
+  "protocol": "openai-chat",
+  "model": "gpt-4o-mini",
+  "baseURL": "https://api.openai.com/v1",
+  "apiKey": "sk-..."
+}
 ```
 
-Precedence per key: CLI flag > env > project config > user config > defaults.
-Run `/status` in the TUI to see every effective value and where it came from.
+Both interactive and headless runs read provider settings from this file.
+For legacy configs, move the endpoint and key out of the old `env` block
+into `baseURL` and `apiKey`. Run `/status` in the TUI to inspect the
+effective configuration.
+
+Startup permission mode follows `--mode`, then a saved `plan` or `ask` when
+resuming, then the `config.json` default, then `ask`. Use `--mode auto` to
+enable automatic approvals for a new process. In an idle TUI, `/plan`,
+`/ask`, and `/auto` switch the mode for the current process.
 
 ## Documentation
 

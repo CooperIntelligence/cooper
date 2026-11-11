@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cooperHome } from "../src/home.js";
 import { loadMcpConfig } from "../src/mcp/config.js";
 
 const roots: string[] = [];
@@ -124,24 +125,11 @@ describe("loadMcpConfig", () => {
     expect(loaded.warnings).toHaveLength(4);
   });
 
-  it("resolves the user config under COOPER_HOME by default", () => {
-    const home = tempDir("cooper-mcp-home-");
-    const root = tempDir("cooper-mcp-root-");
-    writeConfig(path.join(home, "mcp.json"), { user: stdio("user-cmd") });
-
-    const previous = process.env.COOPER_HOME;
-    process.env.COOPER_HOME = home;
-    try {
-      const loaded = loadMcpConfig({ root });
-      expect(Object.keys(loaded.servers)).toEqual(["user"]);
-      expect(loaded.sources).toEqual([path.join(home, "mcp.json")]);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.COOPER_HOME;
-      } else {
-        process.env.COOPER_HOME = previous;
-      }
-    }
+  it("anchors the default home at the fixed ~/.cooper constant", () => {
+    // COOPER_HOME no longer exists: nothing in the environment may relocate
+    // Cooper's data directory. Tests inject `home` as a parameter instead.
+    expect(cooperHome()).toBe(path.join(os.homedir(), ".cooper"));
+    expect(process.env.COOPER_HOME).toBeUndefined();
   });
 
   it("rejects invalid JSON and missing explicit files", () => {

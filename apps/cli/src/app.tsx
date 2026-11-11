@@ -334,9 +334,12 @@ export function App({
     return (
       `Cooper ready · ${config.model} · ${root}\n` +
       `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · ${toolLine}. /help lists commands. Esc interrupts.\n` +
-      `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
+      `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set context.window in config.json to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
       `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
       `${mcpLine}\n` +
+      (config.settingsFile === null
+        ? "No config file yet — /status shows effective settings; setup writes ~/.cooper/config.json.\n"
+        : "") +
       sessionText
     );
   };
@@ -601,7 +604,7 @@ export function App({
   const compactNow = async () => {
     const contextConfig = resolveContextConfig(config.context);
     if (!contextConfig.enabled) {
-      notice("Context compaction is off (COOPER_CONTEXT_COMPACT=off).");
+      notice("Context compaction is off (context.compact is false).");
       return;
     }
 
@@ -712,6 +715,7 @@ export function App({
             config,
             mode: modeState,
             modeSource: modeSourceState,
+            contextTokens: estimateContextTokens(history.current, tools.map(toToolSpec)),
           }),
         );
         return;
