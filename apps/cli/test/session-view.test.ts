@@ -52,10 +52,32 @@ describe("buildResumeView", () => {
 
     expect(view.items).toEqual([
       { id: 5, kind: "user", text: "hello" },
-      { id: 6, kind: "assistant-line", text: "one", first: true },
-      { id: 7, kind: "assistant-line", text: "two", first: false },
+      {
+        id: 6, kind: "assistant-line", first: true,
+        line: { kind: "text", spans: [{ text: "one" }] },
+      },
+      {
+        id: 7, kind: "assistant-line", first: false,
+        line: { kind: "text", spans: [{ text: "two" }] },
+      },
     ]);
     expect(view.nextId).toBe(8);
+  });
+
+  it("formats restored code without carrying an unclosed fence into the next reply", () => {
+    const view = buildResumeView(
+      session([
+        { role: "assistant", content: "```ts\n  const x = 1" },
+        { role: "assistant", content: "# Summary" },
+      ]),
+      1,
+    );
+
+    expect(view.items).toMatchObject([
+      { first: true, line: { kind: "code-label", text: "ts" } },
+      { first: false, line: { kind: "code", text: "  const x = 1" } },
+      { first: true, line: { kind: "heading", spans: [{ text: "Summary" }] } },
+    ]);
   });
 
   it("restores tool rows from recorded display metadata", () => {
