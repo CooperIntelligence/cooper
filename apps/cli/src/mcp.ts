@@ -1,8 +1,10 @@
 import {
   allTools,
   connectMcpServers,
+  createBuiltinTools,
   createMcpResourceTools,
   loadMcpConfig,
+  type CommandShell,
   type McpServerStatus,
   type Tool,
 } from "@cooper/core";
@@ -29,10 +31,12 @@ export async function prepareTools(options: {
   root: string;
   explicit: string[];
   loadProject: boolean;
+  shell?: CommandShell;
   /** Overrides the `cooperHome()` anchor; tests only. */
   home?: string;
 }): Promise<PreparedTools> {
   const config = loadMcpConfig(options);
+  const builtins = options.shell ? createBuiltinTools(options.shell) : allTools;
   const base: McpReport = {
     sources: config.sources,
     statuses: [],
@@ -41,7 +45,7 @@ export async function prepareTools(options: {
 
   if (Object.keys(config.servers).length === 0) {
     return {
-      tools: allTools,
+      tools: builtins,
       mcp: base,
       close: async () => {},
     };
@@ -53,7 +57,7 @@ export async function prepareTools(options: {
 
   return {
     tools: [
-      ...allTools,
+      ...builtins,
       ...connection.tools,
       ...createMcpResourceTools({ servers: connection.resources }),
     ],

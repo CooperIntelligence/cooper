@@ -264,6 +264,7 @@ describe("formatStatus", () => {
     contextWindowAssumed: false,
     showReasoning: false,
     defaultMode: undefined,
+    shell: { kind: "sh", executable: "/bin/sh" },
     sources: {
       protocol: "config",
       model: "config",
@@ -286,6 +287,7 @@ describe("formatStatus", () => {
     });
     expect(text).toContain("Mode: plan (config file)");
     expect(text).toContain("Context usage (estimated): 25000 / 200000 tokens (12.5%)");
+    expect(text).toContain("sh (/bin/sh)");
     expect(text).toContain("anthropic-messages");
     expect(text).toContain("claude-sonnet-5-5");
     expect(text).toContain("flag");

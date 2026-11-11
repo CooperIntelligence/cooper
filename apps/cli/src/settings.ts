@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { cooperHome } from "@cooper/core";
+import { commandShellKinds, cooperHome } from "@cooper/core";
 import { z } from "zod";
 
 /** The user configuration file is the source of provider settings. */
@@ -20,6 +20,10 @@ const settingsSchema = z.object({
   maxOutputTokens: z.number().int().positive().optional(),
   showReasoning: z.boolean().optional(),
   mode: z.enum(["plan", "ask"]).optional(),
+  shell: z.object({
+    kind: z.enum(commandShellKinds),
+    executable: z.string().trim().min(1).optional(),
+  }).optional(),
   context: contextSchema.optional(),
 });
 
@@ -34,6 +38,7 @@ const KNOWN_SHAPE: Record<string, string[] | true> = {
   maxOutputTokens: true,
   showReasoning: true,
   mode: true,
+  shell: ["kind", "executable"],
   context: ["window", "reserveOutputTokens", "compact", "summaryModel"],
 };
 

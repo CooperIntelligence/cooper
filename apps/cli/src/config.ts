@@ -1,5 +1,7 @@
 import {
+  resolveCommandShell,
   resolveContextWindow,
+  type CommandShell,
   type ContextSettings,
   type PermissionPreset,
 } from "@cooper/core";
@@ -18,6 +20,7 @@ export type ConfigKey =
   | "apiKey"
   | "maxOutputTokens"
   | "showReasoning"
+  | "shell"
   | "context.window"
   | "context.reserveOutputTokens"
   | "context.compact"
@@ -33,6 +36,7 @@ export type Config = Required<ConnectionSettings> & {
   contextWindowAssumed: boolean;
   showReasoning: boolean;
   defaultMode: Settings["mode"];
+  shell: CommandShell;
   sources: Partial<Record<ConfigKey, ConfigSource>>;
   settingsWarnings: string[];
   settingsFile: string | null;
@@ -92,6 +96,7 @@ export function loadConfig(options: { home?: string } = {}): Config {
     contextWindowAssumed: assumed,
     showReasoning: settings?.showReasoning ?? false,
     defaultMode: settings?.mode,
+    shell: resolveCommandShell(settings?.shell),
     sources: {
       protocol: "config",
       model: "config",
@@ -99,6 +104,7 @@ export function loadConfig(options: { home?: string } = {}): Config {
       apiKey: "config",
       maxOutputTokens: source(settings?.maxOutputTokens),
       showReasoning: source(settings?.showReasoning),
+      shell: source(settings?.shell),
       "context.window": source(configuredWindow),
       "context.reserveOutputTokens": source(context?.reserveOutputTokens),
       "context.compact": source(context?.compact),

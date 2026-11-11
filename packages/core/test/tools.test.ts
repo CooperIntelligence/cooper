@@ -9,7 +9,7 @@ import {
   readFileTool,
   writeFileTool,
 } from "../src/tools/fs.js";
-import { runCommandTool } from "../src/tools/shell.js";
+import { createRunCommandTool, resolveCommandShell, runCommandTool } from "../src/tools/shell.js";
 
 let root: string;
 
@@ -169,6 +169,48 @@ describe("edit_file", () => {
 });
 
 describe("run_command", () => {
+  it.skipIf(process.platform !== "win32")("uses Windows PowerShell by default and preserves Unicode", async () => {
+    const input = { command: "Write-Output '中文 shell'" };
+    expect(runCommandTool.description).toContain("Windows PowerShell 5.1");
+    expect(runCommandTool.summarize?.(input)).toContain("Windows PowerShell 5.1");
+    const result = await runCommandTool.execute(input, { root });
+    expect(result.content).toContain("中文 shell");
+    expect(result.isError).toBe(false);
+  });
+
+  it.skipIf(process.platform !== "win32")("omits PowerShell progress and keeps errors in plain text", async () => {
+    const success = await runCommandTool.execute({
+      command: "Get-ChildItem -Force | Select-Object -First 1 Name; Write-Progress -Activity 'fixture progress'; Write-Output 'ready'",
+    }, { root });
+    expect(success.isError).toBe(false);
+    expect(success.content).toContain("ready");
+    expect(success.content).not.toMatch(/CLIXML|\[stderr\]|fixture progress/);
+
+    const failure = await runCommandTool.execute({ command: "Write-Error '中文诊断'" }, { root });
+    expect(failure.isError).toBe(true);
+    expect(failure.content).toMatch(/exit code: 1/);
+    expect(failure.content).toContain("中文诊断");
+    expect(failure.content).not.toMatch(/CLIXML|<Objs\b/);
+  });
+
+  it("uses the configured shell in execution and tool metadata", async () => {
+    const kind = process.platform === "win32" ? "cmd" : "sh";
+    const tool = createRunCommandTool(resolveCommandShell({ kind }));
+    const input = { command: kind === "cmd" ? "echo %COMSPEC%" : "printf '%s' shell-fixture" };
+    expect(tool.description).toContain(`using ${kind}`);
+    expect(tool.summarize?.(input)).toContain(`[${kind} · cwd: .]`);
+    const result = await tool.execute(input, { root });
+    expect(result.content).toMatch(kind === "cmd" ? /cmd\.exe/i : /shell-fixture/);
+    expect(result.isError).toBe(false);
+  });
+
+  it("rejects relative or missing configured executables", () => {
+    const kind = resolveCommandShell().kind;
+    expect(() => resolveCommandShell({ kind, executable: "./shell" })).toThrow(/absolute/);
+    expect(() => resolveCommandShell({ kind, executable: path.join(root, "missing-shell") }))
+      .toThrow(/was not found/);
+  });
+
   it("returns output and the exit code", async () => {
     const result = await runCommandTool.execute(
       { command: "echo hello", timeout_ms: 10_000 },

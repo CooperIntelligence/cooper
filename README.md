@@ -307,6 +307,16 @@ TUI 空闲时可以直接切换：
 - `edit_file` — 精确字符串替换；默认要求唯一匹配，可设 `replace_all`
 - `run_command` — 在工作区内执行 shell 命令，默认超时 120s，输出上限 30k 字符
 
+Cooper 在 Windows 默认使用系统自带的 Windows PowerShell 5.1，在 Linux 默认使用 Bash（`/bin/bash`），在 macOS 默认使用 zsh（`/bin/zsh`）。在 `~/.cooper/config.json` 中可以为 TUI 和 headless 选择其他 shell，例如：
+
+```json
+{
+  "shell": { "kind": "pwsh" }
+}
+```
+
+可选值为 `powershell`、`pwsh`、`cmd`、`sh`、`bash`、`zsh` 和 `git-bash`。`powershell`、`cmd` 和 `git-bash` 用于 Windows。`git-bash` 会查找 Git for Windows 的标准安装目录。也可以设置 `shell.executable` 为绝对路径，Windows 上选择 `bash` 时必须提供该路径。显式配置的 shell 不可用时，Cooper 会在启动时指出问题。没有安装 Bash 的精简 Linux 环境可配置 `"shell": { "kind": "sh" }`。审批界面会显示 shell 和工作目录，`/status` 会显示可执行文件路径。
+
 内置文件工具和 `run_command` 的启动目录会校验真实路径，拒绝指向工作区外的符号链接和 Windows junction。获准启动的命令以当前操作系统用户的权限运行。
 
 ## MCP 工具

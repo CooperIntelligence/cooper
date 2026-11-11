@@ -246,6 +246,7 @@ export function formatStatus(options: {
   const entries: [name: string, value: string, source: string][] = [
     ["protocol", config.protocol, configSourceLabel(config.sources.protocol)],
     ["model", config.model, configSourceLabel(config.sources.model)],
+    ["shell", `${config.shell.kind} (${config.shell.executable})`, configSourceLabel(config.sources.shell)],
     [
       "baseURL",
       config.baseURL,
