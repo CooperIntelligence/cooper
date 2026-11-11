@@ -19,7 +19,6 @@ import { runHeadless } from "../src/headless.js";
 const config: Config = {
   protocol: "openai-chat",
   apiKey: "test-key",
-  apiKeyVariable: "COOPER_API_KEY",
   baseURL: "https://api.openai.com/v1",
   model: "test-model",
   maxOutputTokens: 64_000,

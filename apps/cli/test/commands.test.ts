@@ -257,7 +257,6 @@ describe("formatStatus", () => {
   const baseConfig: Config = {
     protocol: "anthropic-messages",
     apiKey: "secret-key",
-    apiKeyVariable: "COOPER_API_KEY",
     baseURL: "https://gateway.example/v1",
     model: "claude-sonnet-5-5",
     maxOutputTokens: 64_000,
@@ -267,11 +266,11 @@ describe("formatStatus", () => {
     defaultMode: undefined,
     sources: {
       protocol: "config",
-      model: "flag",
-      baseURL: "config-env",
-      apiKey: "config-env",
+      model: "config",
+      baseURL: "config",
+      apiKey: "config",
       maxOutputTokens: "default",
-      showReasoning: "env",
+      showReasoning: "flag",
       "context.window": "config",
     },
     settingsWarnings: [],
@@ -288,10 +287,9 @@ describe("formatStatus", () => {
     expect(text).toContain("anthropic-messages");
     expect(text).toContain("claude-sonnet-5-5");
     expect(text).toContain("flag");
-    expect(text).toContain("set via COOPER_API_KEY");
+    expect(text).toMatch(/apiKey\s+set\s+config file/);
     // The key value itself must never appear.
     expect(text).not.toContain("secret-key");
-    expect(text).toContain("config env");
     expect(text).toContain("config file");
     expect(text).toContain("Settings file: /home/u/.cooper/config.json");
   });

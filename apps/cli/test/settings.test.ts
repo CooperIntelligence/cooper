@@ -33,27 +33,29 @@ describe("loadSettings", () => {
     expect(settings.warnings).toEqual([]);
   });
 
-  it("loads every field, including the env object", () => {
+  it("loads every field, including the top-level provider credentials", () => {
     write(
       JSON.stringify({
-        env: { COOPER_API_KEY: "sk-secret", COOPER_BASE_URL: "https://gw/v1" },
+        apiKey: "sk-secret",
+        baseURL: "https://gw/v1",
         protocol: "anthropic-messages",
         model: "claude-sonnet-5-5",
         maxOutputTokens: 8000,
         showReasoning: true,
-        mode: "auto",
+        mode: "plan",
         context: { window: 128000, reserveOutputTokens: 4096, compact: false },
       }),
     );
 
     const settings = load();
     expect(settings.settings).toEqual({
-      env: { COOPER_API_KEY: "sk-secret", COOPER_BASE_URL: "https://gw/v1" },
+      apiKey: "sk-secret",
+      baseURL: "https://gw/v1",
       protocol: "anthropic-messages",
       model: "claude-sonnet-5-5",
       maxOutputTokens: 8000,
       showReasoning: true,
-      mode: "auto",
+      mode: "plan",
       context: { window: 128000, reserveOutputTokens: 4096, compact: false },
     });
     expect(settings.file).toBe(userConfigFile(home));
@@ -78,6 +80,19 @@ describe("loadSettings", () => {
     expect(() => load()).toThrow(/model/);
   });
 
+  it("ignores a legacy auto default with migration guidance", () => {
+    write(JSON.stringify({ mode: "auto", model: "m" }));
+    expect(load().settings).toEqual({ model: "m" });
+    expect(load().warnings).toEqual([
+      expect.stringMatching(/mode "auto".*ignored.*--mode auto/),
+    ]);
+  });
+
+  it("rejects other invalid mode defaults", () => {
+    write(JSON.stringify({ mode: "always" }));
+    expect(() => load()).toThrow(/mode/);
+  });
+
   it("rejects a non-object top level", () => {
     write("[]");
     expect(() => load()).toThrow(/expected a JSON object/);
@@ -90,24 +105,25 @@ describe("loadSettings", () => {
     expect(settings.warnings.some((w) => w.includes('"contex"'))).toBe(true);
   });
 
-  it("allows secrets inside env but flags them at the top level", () => {
+  it("accepts apiKey and warns about other secret fields without revealing them", () => {
     write(
       JSON.stringify({
-        env: { COOPER_API_KEY: "sk-kept" },
-        apiKey: "sk-misplaced",
+        env: { COOPER_API_KEY: "sk-legacy" },
+        apiKey: "sk-kept",
+        token: "sk-misplaced",
         model: "m",
       }),
     );
 
     const settings = load();
-    expect(settings.settings?.env).toEqual({ COOPER_API_KEY: "sk-kept" });
     expect(settings.settings).toEqual({
-      env: { COOPER_API_KEY: "sk-kept" },
+      apiKey: "sk-kept",
       model: "m",
     });
-    const warning = settings.warnings.find((w) => w.includes("apiKey"));
-    expect(warning).toMatch(/"env" object/);
-    // Neither secret value may be echoed back in a warning.
+    expect(settings.warnings).toEqual([
+      expect.stringMatching(/"env" is no longer supported/),
+      expect.stringMatching(/"token" looks like a secret/),
+    ]);
     expect(JSON.stringify(settings.warnings)).not.toContain("sk-");
   });
 

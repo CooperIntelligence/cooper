@@ -3,19 +3,7 @@ import path from "node:path";
 import { cooperHome } from "@cooper/core";
 import { z } from "zod";
 
-/**
- * The single settings file: `<home>/config.json` (home is the `cooperHome()`
- * constant — nothing may relocate it).
- *
- * Shape follows Claude Code's settings.json idea: every setting lives here.
- * Environment-variable-class values sit in the `env` object and are merged
- * into the process environment at the lowest precedence; everything else is a
- * top-level key. There is deliberately no workspace-scoped config: the
- * workspace is untrusted input and Cooper keeps zero ambient state there.
- *
- * `env` may hold credentials (`COOPER_API_KEY`) — that is the designed home
- * for them, so the secret sniffer only flags secret-looking *top-level* keys.
- */
+/** The user configuration file is the source of provider settings. */
 
 const contextSchema = z.object({
   window: z.number().int().positive().optional(),
@@ -25,13 +13,13 @@ const contextSchema = z.object({
 });
 
 const settingsSchema = z.object({
-  /** Environment-variable-class settings, e.g. COOPER_API_KEY, COOPER_BASE_URL. */
-  env: z.record(z.string(), z.string()).optional(),
   protocol: z.enum(["openai-chat", "anthropic-messages"]).optional(),
-  model: z.string().min(1).optional(),
+  model: z.string().trim().min(1).optional(),
+  baseURL: z.string().trim().min(1).optional(),
+  apiKey: z.string().trim().min(1).optional(),
   maxOutputTokens: z.number().int().positive().optional(),
   showReasoning: z.boolean().optional(),
-  mode: z.enum(["plan", "ask", "auto"]).optional(),
+  mode: z.enum(["plan", "ask"]).optional(),
   context: contextSchema.optional(),
 });
 
@@ -39,9 +27,10 @@ export type Settings = z.infer<typeof settingsSchema>;
 
 /** Shape used to report unknown keys (values are nested key names). */
 const KNOWN_SHAPE: Record<string, string[] | true> = {
-  env: true, // arbitrary variable names, never flagged
   protocol: true,
   model: true,
+  baseURL: true,
+  apiKey: true,
   maxOutputTokens: true,
   showReasoning: true,
   mode: true,
@@ -49,8 +38,7 @@ const KNOWN_SHAPE: Record<string, string[] | true> = {
 };
 
 // Whole-key matches only: substrings would eat legitimate names like
-// `maxOutputTokens`. Applied to top-level keys only — inside `env`, secrets
-// are exactly what belongs there.
+// `maxOutputTokens`.
 const SECRET_KEY =
   /^(api[-_]?key|key|token|secret|password|credential|credentials)$|[-_](token|secret|password|key)$|(apikey|token|secret|password)$/i;
 
@@ -124,13 +112,26 @@ function loadLayer(file: string): { settings: Settings; warnings: string[] } | n
 
   const warnings: string[] = [];
 
-  // Secrets belong in the `env` object; a stray top-level secret is a
-  // category mistake worth calling out (and never echoed back).
+  if (Object.hasOwn(raw, "env")) {
+    warnings.push(
+      `${file}: "env" is no longer supported (ignored). Move COOPER_BASE_URL and ` +
+        "COOPER_API_KEY to the top-level baseURL and apiKey fields.",
+    );
+    delete raw.env;
+  }
+
+  if (raw.mode === "auto") {
+    warnings.push(
+      `${file}: mode "auto" is no longer a valid default (ignored). ` +
+        "Use --mode auto or /auto in the TUI.",
+    );
+    delete raw.mode;
+  }
+
   for (const key of Object.keys(raw)) {
-    if (key !== "env" && SECRET_KEY.test(key)) {
+    if (key !== "apiKey" && SECRET_KEY.test(key)) {
       warnings.push(
-        `${file}: "${key}" looks like a secret; put credentials in the ` +
-          `"env" object (e.g. "env": { "COOPER_API_KEY": "…" }) instead (ignored).`,
+        `${file}: "${key}" looks like a secret (ignored). Use "apiKey" for the provider key.`,
       );
       delete raw[key];
     }

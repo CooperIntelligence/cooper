@@ -1,12 +1,9 @@
 import type { ApprovalMode } from "./config.js";
+import type { Settings } from "./settings.js";
 
 export type ParsedArgs = {
-  /** Explicit --mode. undefined means "fall back to COOPER_MODE, then ask". */
+  /** Explicit --mode; otherwise use the saved or configured mode. */
   mode: ApprovalMode | undefined;
-  /** Explicit --model. undefined means "fall back to env, then config.json". */
-  model: string | undefined;
-  /** Explicit --env-file: a file whose values override the ambient env. */
-  envFile: string | null;
   /** Workspace directory. undefined means "the launch directory". */
   cwd: string | undefined;
   /** Prompt for a non-interactive run. "-" means read stdin. null starts the TUI. */
@@ -49,8 +46,6 @@ function parseModeValue(value: string | undefined): ApprovalMode {
 export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     mode: undefined,
-    model: undefined,
-    envFile: null,
     cwd: undefined,
     prompt: null,
     showReasoning: false,
@@ -103,30 +98,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
           index += 1;
         }
         parsed.mode = parseModeValue(value);
-        break;
-      }
-
-      case "--model": {
-        let value = inline;
-        if (value === undefined) {
-          value = takeValue(index, name);
-          index += 1;
-        }
-        if (value.trim() === "") throw new Error("--model requires a name.");
-        parsed.model = value;
-        break;
-      }
-
-      case "--env-file": {
-        let value = inline;
-        if (value === undefined) {
-          value = takeValue(index, name);
-          index += 1;
-        }
-        if (value.trim() === "") {
-          throw new Error("--env-file requires a file path.");
-        }
-        parsed.envFile = value;
         break;
       }
 
@@ -242,18 +213,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return parsed;
 }
 
-/** Flag wins over COOPER_MODE, which wins over the settings files, then ask. */
-export function resolveMode(
-  flag: ApprovalMode | undefined,
-  envValue: string | undefined,
-  configuredMode?: ApprovalMode | null,
-): ApprovalMode {
-  return resolveModeForSession(flag, envValue, null, configuredMode).mode;
-}
-
 export type ModeResolution = {
   mode: ApprovalMode;
-  source: "flag" | "env" | "session" | "config" | "default";
+  source: "flag" | "session" | "config" | "default";
   /** A saved auto mode was deliberately not restored (fail closed). */
   sessionAutoIgnored: boolean;
 };
@@ -261,41 +223,25 @@ export type ModeResolution = {
 /**
  * Resolve the effective mode for a run that may be resuming a session.
  *
- * Precedence: explicit --mode > COOPER_MODE > saved plan/ask > mode from the
- * settings files > ask. A saved `auto` is never restored implicitly: a new
- * process must not start with every gated tool approved unless the user asks
- * for it again — either explicitly (flag/env) or durably (settings file).
+ * Precedence: explicit --mode > saved plan/ask > configured plan/ask > ask.
+ * Starting a new process in auto requires --mode auto.
  */
 export function resolveModeForSession(
   flag: ApprovalMode | undefined,
-  envValue: string | undefined,
   savedPreset: ApprovalMode | null | undefined,
-  configuredMode: ApprovalMode | null | undefined = null,
+  configuredMode?: Settings["mode"],
 ): ModeResolution {
   if (flag !== undefined) {
     return { mode: flag, source: "flag", sessionAutoIgnored: false };
   }
-  if (envValue !== undefined && envValue.trim() !== "") {
-    if (!isMode(envValue)) {
-      throw new Error(
-        `Invalid COOPER_MODE "${envValue}". Use ask, auto, or plan.`,
-      );
-    }
-    return { mode: envValue, source: "env", sessionAutoIgnored: false };
-  }
   if (savedPreset === "plan" || savedPreset === "ask") {
     return { mode: savedPreset, source: "session", sessionAutoIgnored: false };
   }
-  if (configuredMode !== null && configuredMode !== undefined) {
-    if (!isMode(configuredMode)) {
-      throw new Error(
-        `Invalid configured mode "${configuredMode}". Use ask, auto, or plan.`,
-      );
-    }
+  if (configuredMode === "plan" || configuredMode === "ask") {
     return {
       mode: configuredMode,
       source: "config",
-      sessionAutoIgnored: savedPreset === "auto" && configuredMode !== "auto",
+      sessionAutoIgnored: savedPreset === "auto",
     };
   }
   return {

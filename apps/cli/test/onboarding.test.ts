@@ -62,31 +62,27 @@ describe("mergeOnboardingConfig", () => {
     expect(mergeOnboardingConfig(null, result)).toEqual({
       protocol: "openai-chat",
       model: "my-model",
-      env: {
-        COOPER_API_KEY: "sk-new",
-        COOPER_BASE_URL: "https://api.openai.com/v1",
-      },
+      apiKey: "sk-new",
+      baseURL: "https://api.openai.com/v1",
     });
   });
 
   it("always overwrites model and baseURL — never leaves them missing", () => {
     const existing = {
       model: "stale-model",
-      env: { COOPER_BASE_URL: "https://stale.example" },
+      baseURL: "https://stale.example",
     };
     const merged = mergeOnboardingConfig(existing, result);
     expect(merged.model).toBe("my-model");
-    expect((merged.env as Record<string, string>).COOPER_BASE_URL).toBe(
-      "https://api.openai.com/v1",
-    );
+    expect(merged.baseURL).toBe("https://api.openai.com/v1");
   });
 
-  it("preserves existing settings and env entries", () => {
+  it("preserves existing preferences", () => {
     const existing = {
       protocol: "anthropic-messages",
       model: "old-model",
       context: { window: 1000 },
-      env: { COOPER_BASE_URL: "https://old.example", OTHER: "keep" },
+      baseURL: "https://old.example",
     };
     const merged = mergeOnboardingConfig(existing, {
       ...result,
@@ -98,11 +94,8 @@ describe("mergeOnboardingConfig", () => {
       protocol: "anthropic-messages",
       model: "claude-sonnet-5-5",
       context: { window: 1000 },
-      env: {
-        COOPER_API_KEY: "sk-new",
-        COOPER_BASE_URL: "https://new.example",
-        OTHER: "keep",
-      },
+      apiKey: "sk-new",
+      baseURL: "https://new.example",
     });
   });
 
@@ -138,10 +131,8 @@ describe("writeOnboardingConfig", () => {
     expect(parsed).toEqual({
       protocol: "anthropic-messages",
       model: "claude-sonnet-5-5",
-      env: {
-        COOPER_API_KEY: "sk-x",
-        COOPER_BASE_URL: "https://api.anthropic.com",
-      },
+      apiKey: "sk-x",
+      baseURL: "https://api.anthropic.com",
     });
   });
 
@@ -166,8 +157,8 @@ describe("writeOnboardingConfig", () => {
     expect(parsed.model).toBe("gateway-model");
     expect(parsed.mode).toBe("plan");
     expect(parsed.protocol).toBe("openai-chat");
-    expect(parsed.env.COOPER_API_KEY).toBe("sk-y");
-    expect(parsed.env.COOPER_BASE_URL).toBe("https://gw/v1");
+    expect(parsed.apiKey).toBe("sk-y");
+    expect(parsed.baseURL).toBe("https://gw/v1");
   });
 
   it("refuses to overwrite an unreadable config", () => {

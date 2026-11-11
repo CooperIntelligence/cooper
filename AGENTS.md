@@ -55,7 +55,9 @@
 11. Headless (`-p`) runs have no approver and must fail closed: build a
     non-interactive policy where `ask` denies gated tools. Only `auto` allows
     them; never default headless to `auto`. Resuming a session never restores
-    `auto` implicitly: only explicit `--mode auto` / `COOPER_MODE=auto` does.
+    `auto` implicitly. A new process requires explicit `--mode auto`;
+    an idle TUI can also switch via `/auto`. Config defaults accept only
+    `plan` or `ask`, and environment variables do not select the mode.
     `system-prompt.ts` describes the permission mechanism from the same policy
     instance the loop enforces; the current mode itself travels in a runtime
     notice (rule 18).

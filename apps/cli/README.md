@@ -25,16 +25,22 @@ API key, verifies the key against the endpoint, and writes
 
 ```json
 {
-  "env": { "COOPER_API_KEY": "sk-..." },
   "protocol": "openai-chat",
-  "model": "gpt-4o-mini"
+  "model": "gpt-4o-mini",
+  "baseURL": "https://api.openai.com/v1",
+  "apiKey": "sk-..."
 }
 ```
 
-No workspace files are ever read. Precedence per key:
-`--env-file` > environment > `config.json` > defaults. `model` has no
-default — it must be set explicitly (or via guided setup). Run `/status` in the
-TUI to see every effective value and where it came from.
+Both interactive and headless runs read provider settings from this file.
+For legacy configs, move the endpoint and key out of the old `env` block
+into `baseURL` and `apiKey`. Run `/status` in the TUI to inspect the
+effective configuration.
+
+Startup permission mode follows `--mode`, then a saved `plan` or `ask` when
+resuming, then the `config.json` default, then `ask`. Use `--mode auto` to
+enable automatic approvals for a new process. In an idle TUI, `/plan`,
+`/ask`, and `/auto` switch the mode for the current process.
 
 ## Documentation
 

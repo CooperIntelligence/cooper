@@ -226,10 +226,6 @@ export function formatStatus(options: {
     switch (source) {
       case "flag":
         return "flag";
-      case "env":
-        return "env";
-      case "config-env":
-        return "config env";
       case "config":
         return "config file";
       default:
@@ -238,7 +234,6 @@ export function formatStatus(options: {
   };
   const modeSourceLabel: Record<string, string> = {
     flag: "flag",
-    env: "env",
     session: "session",
     config: "config file",
     default: "default",
@@ -253,12 +248,7 @@ export function formatStatus(options: {
       config.baseURL,
       configSourceLabel(config.sources.baseURL),
     ],
-    // Never the key itself — only which variable supplied it.
-    [
-      "apiKey",
-      `set via ${config.apiKeyVariable}`,
-      configSourceLabel(config.sources.apiKey),
-    ],
+    ["apiKey", "set", configSourceLabel(config.sources.apiKey)],
     [
       "maxOutputTokens",
       String(config.maxOutputTokens),

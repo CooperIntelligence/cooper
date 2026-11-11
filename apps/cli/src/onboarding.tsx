@@ -90,24 +90,18 @@ export function mergeOnboardingConfig(
     existing !== null && typeof existing === "object" && !Array.isArray(existing)
       ? { ...(existing as Record<string, unknown>) }
       : {};
-  const rawEnv = base["env"];
-  const env: Record<string, string> =
-    rawEnv !== null && typeof rawEnv === "object" && !Array.isArray(rawEnv)
-      ? { ...(rawEnv as Record<string, string>) }
-      : {};
-  env["COOPER_API_KEY"] = result.apiKey;
   // baseURL is required: always write a concrete URL (placeholder-confirmed
   // official endpoints count — loadConfig never invents one).
   const trimmedBase = result.baseURL.trim();
   if (trimmedBase === "") {
     throw new Error("Onboarding result is missing baseURL.");
   }
-  env["COOPER_BASE_URL"] = trimmedBase;
   return {
     ...base,
     protocol: result.protocol,
     model: result.model,
-    env,
+    apiKey: result.apiKey,
+    baseURL: trimmedBase,
   };
 }
 
@@ -173,16 +167,20 @@ const MODEL_PLACEHOLDER: Record<ProtocolKind, string> = {
 };
 
 function OnboardingApp({
+  existing,
   onDone,
 }: {
+  existing: Partial<OnboardingResult>;
   onDone: (result: OnboardingResult | null) => void;
 }) {
   const { exit } = useApp();
   const [step, setStep] = useState<Step>("welcome");
-  const [protocolIndex, setProtocolIndex] = useState(0);
-  const [model, setModel] = useState("");
-  const [baseURL, setBaseURL] = useState("");
-  const [apiKey, setApiKey] = useState("");
+  const [protocolIndex, setProtocolIndex] = useState(
+    Math.max(0, PROTOCOLS.findIndex(({ value }) => value === existing.protocol)),
+  );
+  const [model, setModel] = useState(existing.model ?? "");
+  const [baseURL, setBaseURL] = useState(existing.baseURL ?? "");
+  const [apiKey, setApiKey] = useState(existing.apiKey ?? "");
   const [probeError, setProbeError] = useState("");
 
   const finish = (result: OnboardingResult | null) => {
@@ -267,7 +265,7 @@ function OnboardingApp({
       {step === "welcome" && (
         <Box flexDirection="column" marginTop={1}>
           <Text>
-            Missing API key or model. This one-time setup takes about a minute:
+            Complete the provider settings in config.json.
           </Text>
           <Text>
             {"  1. protocol   2. model   3. base URL   4. API key   5. verify"}
@@ -396,7 +394,9 @@ function OnboardingApp({
  * Runs the wizard to completion. Resolves with the chosen settings, or null
  * when the user aborts (the caller then prints manual instructions).
  */
-export function runOnboarding(): Promise<OnboardingResult | null> {
+export function runOnboarding(
+  existing: Partial<OnboardingResult>,
+): Promise<OnboardingResult | null> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: OnboardingResult | null) => {
@@ -404,7 +404,7 @@ export function runOnboarding(): Promise<OnboardingResult | null> {
       settled = true;
       resolve(result);
     };
-    const app = render(<OnboardingApp onDone={finish} />);
+    const app = render(<OnboardingApp existing={existing} onDone={finish} />);
     void app.waitUntilExit().then(() => finish(null));
   });
 }

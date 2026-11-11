@@ -67,10 +67,8 @@ Cooper 的审批模式原本在启动时确定一次：`App` 用启动参数构�
   `LoadedSession.preset` 读取最后一条有效记录。
 - `SessionWriter.appendPolicy()` 追加记录；写失败只显示通知，不中断对话。
 - **不持久化 session grant。** “always allow” 仍然是进程内状态，恢复后清零。
-- 恢复优先级：显式 `--mode` > `COOPER_MODE` > 会话记录的 `plan`/`ask` >
-  默认 `ask`。
-- **不隐式恢复 `auto`。** 如果会话最后记录是 `auto`，且没有显式 `--mode auto`
-  或 `COOPER_MODE=auto`，则以 `ask` 恢复并显示通知。
+- 恢复时只沿用会话记录的 `plan` 或 `ask`，跳过保存的 `auto`。启动优先级与
+  授权来源见 [Per-Process Auto Authorization](2026-11-11-per-process-auto-authorization.md)。
 
 ### CLI / TUI
 
@@ -89,8 +87,7 @@ Cooper 的审批模式原本在启动时确定一次：`App` 用启动参数构�
 
 - `-p` 不解析命令、不切换模式；系统提示同样模式无关，启动时追加当前模式 notice。
 - stdout 仍然只有答案；notice 和模式恢复信息写到 stderr。
-- 恢复时绝不隐式启用 auto；只有显式 `--mode auto` 或 `COOPER_MODE=auto` 才允许
-  gated tools。
+- 只有显式 `--mode auto` 才允许 gated tools，包括恢复会话时。
 
 ### 压缩
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   parseArgs,
-  resolveMode,
   resolveModeForSession,
 } from "../src/args.js";
 
@@ -9,8 +8,6 @@ describe("parseArgs", () => {
   it("defaults to the interactive TUI", () => {
     expect(parseArgs([])).toEqual({
       mode: undefined,
-      model: undefined,
-      envFile: null,
       cwd: undefined,
       prompt: null,
       showReasoning: false,
@@ -126,133 +123,65 @@ describe("parseArgs", () => {
   });
 });
 
-describe("--model", () => {
-  it("parses a model name for this run", () => {
-    expect(parseArgs(["--model", "gpt-x"]).model).toBe("gpt-x");
-    expect(parseArgs(["--model=gpt-x"]).model).toBe("gpt-x");
-    expect(parseArgs([]).model).toBeUndefined();
-  });
-
-  it("rejects an empty model", () => {
-    expect(() => parseArgs(["--model"])).toThrow(/requires a value/);
-    expect(() => parseArgs(["--model", ""])).toThrow(/requires a name/);
-  });
-});
-
-describe("--env-file", () => {
-  it("parses a file path", () => {
-    expect(parseArgs(["--env-file", "run.env"]).envFile).toBe("run.env");
-    expect(parseArgs(["--env-file=run.env"]).envFile).toBe("run.env");
-    expect(parseArgs([]).envFile).toBeNull();
-  });
-
-  it("rejects a missing value", () => {
-    expect(() => parseArgs(["--env-file"])).toThrow(/requires a value/);
-    expect(() => parseArgs(["--env-file", ""])).toThrow(/requires a file path/);
-  });
-});
-
-describe("resolveMode", () => {
-  it("prefers the flag over the environment", () => {
-    expect(resolveMode("plan", "auto")).toBe("plan");
-  });
-
-  it("falls back to COOPER_MODE", () => {
-    expect(resolveMode(undefined, "auto")).toBe("auto");
-  });
-
-  it("defaults to ask", () => {
-    expect(resolveMode(undefined, undefined)).toBe("ask");
-    expect(resolveMode(undefined, "  ")).toBe("ask");
-  });
-
-  it("rejects an invalid COOPER_MODE", () => {
-    expect(() => resolveMode(undefined, "yolo")).toThrow(/COOPER_MODE/);
-  });
+it("rejects the former provider override flags", () => {
+  expect(() => parseArgs(["--model=gpt-x"])).toThrow(/Unknown argument/);
+  expect(() => parseArgs(["--env-file", "run.env"])).toThrow(/Unknown argument/);
 });
 
 describe("resolveModeForSession", () => {
-  it("prefers the flag, then the environment, then the saved mode", () => {
-    expect(resolveModeForSession("auto", "plan", "ask")).toMatchObject({
-      mode: "auto",
-      source: "flag",
-    });
-    expect(resolveModeForSession(undefined, "auto", "plan")).toMatchObject({
-      mode: "auto",
-      source: "env",
-    });
-    expect(resolveModeForSession(undefined, undefined, "plan")).toMatchObject({
-      mode: "plan",
-      source: "session",
-    });
-    expect(resolveModeForSession(undefined, undefined, "ask")).toMatchObject({
-      mode: "ask",
-      source: "session",
-    });
-    expect(resolveModeForSession(undefined, undefined, null)).toMatchObject({
-      mode: "ask",
-      source: "default",
-    });
-  });
-
-  it("never restores a saved auto mode implicitly", () => {
-    expect(resolveModeForSession(undefined, undefined, "auto")).toEqual({
-      mode: "ask",
-      source: "default",
-      sessionAutoIgnored: true,
-    });
-    expect(resolveModeForSession("auto", undefined, "auto")).toMatchObject({
+  it("prefers the explicit flag to both session and configuration", () => {
+    expect(resolveModeForSession("auto", "plan", "ask")).toEqual({
       mode: "auto",
       source: "flag",
       sessionAutoIgnored: false,
     });
-    expect(resolveModeForSession(undefined, "auto", "auto")).toMatchObject({
-      mode: "auto",
-      source: "env",
-      sessionAutoIgnored: false,
+  });
+
+  it("restores plan or ask ahead of the configured default", () => {
+    expect(resolveModeForSession(undefined, "plan", "ask")).toMatchObject({
+      mode: "plan",
+      source: "session",
+    });
+    expect(resolveModeForSession(undefined, "ask", "plan")).toMatchObject({
+      mode: "ask",
+      source: "session",
     });
   });
 
-  it("rejects an invalid COOPER_MODE when resuming", () => {
-    expect(() =>
-      resolveModeForSession(undefined, "yolo", "ask"),
-    ).toThrow(/COOPER_MODE/);
-  });
-
-  it("falls back to the configured mode from settings files", () => {
-    expect(resolveModeForSession(undefined, undefined, null, "plan")).toEqual({
+  it("uses the configured default when no mode was saved", () => {
+    expect(resolveModeForSession(undefined, null, "plan")).toEqual({
       mode: "plan",
       source: "config",
       sessionAutoIgnored: false,
     });
-    // Saved plan/ask still beats the configured default.
-    expect(resolveModeForSession(undefined, undefined, "ask", "plan")).toMatchObject({
+  });
+
+  it("defaults to ask", () => {
+    expect(resolveModeForSession(undefined, null)).toEqual({
       mode: "ask",
-      source: "session",
-    });
-    // Env beats the configured mode.
-    expect(resolveModeForSession(undefined, "auto", null, "plan")).toMatchObject({
-      mode: "auto",
-      source: "env",
+      source: "default",
+      sessionAutoIgnored: false,
     });
   });
 
-  it("honours a durable configured auto but never a remembered one", () => {
-    expect(resolveModeForSession(undefined, undefined, "auto", "auto")).toEqual({
-      mode: "auto",
+  it("skips a saved auto and falls back to config or ask", () => {
+    expect(resolveModeForSession(undefined, "auto", "plan")).toEqual({
+      mode: "plan",
       source: "config",
-      sessionAutoIgnored: false,
+      sessionAutoIgnored: true,
     });
-    expect(resolveModeForSession(undefined, undefined, "auto", "ask")).toEqual({
+    expect(resolveModeForSession(undefined, "auto")).toEqual({
       mode: "ask",
-      source: "config",
+      source: "default",
       sessionAutoIgnored: true,
     });
   });
 
-  it("rejects an invalid configured mode", () => {
-    expect(() =>
-      resolveModeForSession(undefined, undefined, null, "yolo" as never),
-    ).toThrow(/configured mode/);
+  it("allows an explicit auto flag when resuming a saved auto session", () => {
+    expect(resolveModeForSession("auto", "auto")).toEqual({
+      mode: "auto",
+      source: "flag",
+      sessionAutoIgnored: false,
+    });
   });
 });
