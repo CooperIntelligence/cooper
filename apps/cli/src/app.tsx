@@ -715,6 +715,7 @@ export function App({
             config,
             mode: modeState,
             modeSource: modeSourceState,
+            contextTokens: estimateContextTokens(history.current, tools.map(toToolSpec)),
           }),
         );
         return;

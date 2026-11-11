@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import React, { useEffect, useState } from "react";
 import { Box, Text, render, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
+import { resolveContextWindow } from "@cooper/core";
 import type { ProtocolKind } from "./config.js";
 import { userConfigFile } from "./settings.js";
 
@@ -22,6 +24,8 @@ export type OnboardingResult = {
   apiKey: string;
   /** Always a concrete URL — the wizard never leaves this empty. */
   baseURL: string;
+  /** Explicit override supplied in the wizard. */
+  contextWindow?: number;
 };
 
 /** Official endpoint shown as a placeholder; still must be confirmed and written. */
@@ -31,7 +35,7 @@ export function defaultEndpoint(protocol: ProtocolKind): string {
     : "https://api.openai.com/v1";
 }
 
-/** The models listing request used to validate a key before saving it. */
+/** The models listing request used to check endpoint connectivity. */
 export function probeRequest(
   protocol: ProtocolKind,
   baseURL: string,
@@ -71,6 +75,7 @@ export async function probeEndpoint(
       headers,
       signal: AbortSignal.timeout(10_000),
     });
+    await response.body?.cancel();
     if (!response.ok) {
       return { ok: false, error: `HTTP ${response.status}` };
     }
@@ -96,6 +101,13 @@ export function mergeOnboardingConfig(
   if (trimmedBase === "") {
     throw new Error("Onboarding result is missing baseURL.");
   }
+  if (result.contextWindow !== undefined) {
+    const context = base.context;
+    const preferences = context !== null && typeof context === "object" && !Array.isArray(context)
+      ? context
+      : {};
+    base.context = { ...preferences, window: result.contextWindow };
+  }
   return {
     ...base,
     protocol: result.protocol,
@@ -106,19 +118,20 @@ export function mergeOnboardingConfig(
 }
 
 /**
- * Writes `config.json` (merging with whatever is there) with 0600
- * permissions — the file holds credentials from now on.
+ * Replaces config.json after the complete new file has been written and flushed.
+ * On POSIX the credential file is created with mode 0600.
  */
 export function writeOnboardingConfig(
   home: string | undefined,
   result: OnboardingResult,
 ): string {
   const file = userConfigFile(home);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const directory = path.dirname(file);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 
   let existing: unknown = null;
   try {
-    existing = JSON.parse(fs.readFileSync(file, "utf8"));
+    existing = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // Missing file starts fresh; malformed JSON is the user's to fix —
@@ -133,14 +146,23 @@ export function writeOnboardingConfig(
   }
 
   const merged = mergeOnboardingConfig(existing, result);
-  fs.writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`, {
-    mode: 0o600,
-  });
-  // writeFile's mode only applies on creation; re-assert on overwrite.
+  const temporary = path.join(directory, `.config-${randomUUID()}.tmp`);
+  const descriptor = fs.openSync(temporary, "wx", 0o600);
   try {
-    fs.chmodSync(file, 0o600);
-  } catch {
-    // Windows may not support chmod; the file still lives under ~/.cooper.
+    try {
+      fs.writeFileSync(descriptor, `${JSON.stringify(merged, null, 2)}\n`);
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {
+      // Preserve the original write or rename error.
+    }
+    throw error;
   }
   return file;
 }
@@ -149,6 +171,7 @@ type Step =
   | "welcome"
   | "protocol"
   | "model"
+  | "context"
   | "baseurl"
   | "key"
   | "checking"
@@ -179,8 +202,15 @@ function OnboardingApp({
     Math.max(0, PROTOCOLS.findIndex(({ value }) => value === existing.protocol)),
   );
   const [model, setModel] = useState(existing.model ?? "");
+  const [windowInput, setWindowInput] = useState(existing.contextWindow?.toString() ?? "");
+  const [contextWindow, setContextWindow] = useState<number>();
+  const [windowError, setWindowError] = useState(false);
   const [baseURL, setBaseURL] = useState(existing.baseURL ?? "");
   const [apiKey, setApiKey] = useState(existing.apiKey ?? "");
+  const [keyScope, setKeyScope] = useState({
+    protocol: existing.protocol,
+    baseURL: existing.baseURL,
+  });
   const [probeError, setProbeError] = useState("");
 
   const finish = (result: OnboardingResult | null) => {
@@ -190,7 +220,7 @@ function OnboardingApp({
 
   // Steps with a text input: single-letter keys (q) must not quit mid-typing.
   const isTextInputStep =
-    step === "model" || step === "baseurl" || step === "key";
+    step === "model" || step === "context" || step === "baseurl" || step === "key";
 
   useInput((input, key) => {
     if (key.escape || (input === "q" && !isTextInputStep)) {
@@ -212,7 +242,8 @@ function OnboardingApp({
         return;
       case "failed":
         if (input === "r") setStep("checking");
-        else if (input === "e") setStep("key");
+        else if (input === "e") setStep("protocol");
+        else if (input === "k") setStep("key");
         else if (input === "c") finish(currentResult());
         return;
       case "ready":
@@ -224,12 +255,15 @@ function OnboardingApp({
   });
 
   const protocol = PROTOCOLS[protocolIndex]?.value ?? "openai-chat";
+  const suggestedWindow = resolveContextWindow(model);
+  const windowPlaceholder = suggestedWindow.window.toLocaleString("en-US");
 
   const currentResult = (): OnboardingResult => ({
     protocol,
     model: model.trim(),
     apiKey,
     baseURL: baseURL.trim(),
+    contextWindow,
   });
 
   // Validation runs as an effect whenever we enter `checking`.
@@ -268,7 +302,7 @@ function OnboardingApp({
             Complete the provider settings in config.json.
           </Text>
           <Text>
-            {"  1. protocol   2. model   3. base URL   4. API key   5. verify"}
+            Choose a protocol and model, then configure the endpoint and API key.
           </Text>
           <Text dimColor>
             Everything is stored in ~/.cooper/config.json (never in the
@@ -305,7 +339,7 @@ function OnboardingApp({
             onSubmit={(value) => {
               if (value.trim() === "") return;
               setModel(value.trim());
-              setStep("baseurl");
+              setStep("context");
             }}
             placeholder={MODEL_PLACEHOLDER[protocol]}
           />
@@ -314,6 +348,41 @@ function OnboardingApp({
             {MODEL_PLACEHOLDER[protocol]}
           </Text>
           <Text dimColor>Enter to continue · Esc quit</Text>
+        </Box>
+      )}
+      {step === "context" && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>Total context window in tokens (optional)</Text>
+          <TextInput
+            value={windowInput}
+            placeholder={windowPlaceholder}
+            onChange={(value) => {
+              setWindowInput(value);
+              setWindowError(false);
+            }}
+            onSubmit={(value) => {
+              const trimmed = value.trim();
+              const entered = Number(trimmed);
+              if (trimmed !== "" && (
+                !/^\d+$/.test(trimmed) || !Number.isSafeInteger(entered) || entered <= 0
+              )) {
+                setWindowError(true);
+                return;
+              }
+              const tokens = trimmed === "" ? existing.contextWindow : entered;
+              setContextWindow(tokens === existing.contextWindow ? undefined : tokens);
+              setWindowInput(tokens?.toString() ?? "");
+              setStep("baseurl");
+            }}
+          />
+          {windowError && <Text color="red">Enter a positive whole number of tokens.</Text>}
+          <Text dimColor>
+            {existing.contextWindow !== undefined
+              ? "Enter keeps the saved window unless you enter a different value."
+              : suggestedWindow.assumed
+                ? `Leave blank to use the estimated ${windowPlaceholder} token window.`
+                : `Leave blank to use the model table's ${windowPlaceholder} token window.`}
+          </Text>
         </Box>
       )}
       {step === "baseurl" && (
@@ -327,6 +396,9 @@ function OnboardingApp({
               // explicit choice that gets written; never applied silently.
               const resolved =
                 value.trim() === "" ? defaultEndpoint(protocol) : value.trim();
+              if (keyScope.protocol !== protocol || keyScope.baseURL !== resolved) {
+                setApiKey("");
+              }
               setBaseURL(resolved);
               setStep("key");
             }}
@@ -347,23 +419,24 @@ function OnboardingApp({
             onSubmit={(value) => {
               if (value.trim() === "") return;
               setApiKey(value.trim());
+              setKeyScope({ protocol, baseURL });
               setStep("checking");
             }}
           />
-          <Text dimColor>{apiKey.length > 0 ? "*".repeat(apiKey.length) : ""}</Text>
-          <Text dimColor>Enter verifies the key · Esc quit</Text>
+          <Text dimColor>Enter checks access to the models endpoint · Esc quit</Text>
         </Box>
       )}
       {step === "checking" && (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="yellow">Verifying key against {probeRequest(protocol, baseURL, apiKey).url} …</Text>
+          <Text color="yellow">Checking {probeRequest(protocol, baseURL, apiKey).url} …</Text>
         </Box>
       )}
       {step === "failed" && (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="red">Verification failed: {probeError}</Text>
+          <Text color="red">Model listing failed: {probeError}</Text>
           <Text>
-            <Text bold>r</Text> retry · <Text bold>e</Text> edit key ·{" "}
+            <Text bold>r</Text> retry · <Text bold>e</Text> edit connection ·{" "}
+            <Text bold>k</Text> edit key ·{" "}
             <Text bold>c</Text> continue without verification ·{" "}
             <Text bold>q</Text> quit
           </Text>
@@ -371,7 +444,8 @@ function OnboardingApp({
       )}
       {step === "ready" && (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="green">✓ Key verified.</Text>
+          <Text color="green">✓ Model listing succeeded.</Text>
+          <Text dimColor>The selected model is checked on the first chat request.</Text>
           <Text>
             Will write {userConfigFile()} with protocol{" "}
             <Text bold>{protocol}</Text>, model{" "}

@@ -59,6 +59,10 @@ npm run dev          # 首次运行会进入引导：选协议 → 填 key → �
 
 引导把结果写进 `~/.cooper/config.json`，之后所有项目共用。CI 和脚本在启动前准备好同一个配置文件，填齐 `protocol`、`model`、`baseURL` 和 `apiKey`。
 
+填写模型后可指定总上下文窗口。已有 `context.window` 会预填，回车可保留。没有配置时可留空，Cooper 会使用模型表中的窗口，未知模型暂按 200,000 token 估算。手动填写的窗口会写入 `context.window`。
+
+引导用模型列表请求检查端点。失败后可按 `e` 返回修改连接参数，或按 `k` 单独修改密钥。所选模型在首轮对话时验证。保存时先完整写入同目录临时文件，再替换配置。POSIX 上新文件以 `0600` 创建，Windows 的访问权限由文件系统 ACL 决定。
+
 协议**显式**选择（不按模型名猜测，因为 Claude 也可能通过 OpenAI 兼容网关提供）。**`protocol`、`model`、`baseURL`、API key 四项都必须显式配置**，缺任何一项启动即报错（交互式进引导补齐，无头 fail closed）；官方端点只作为引导里的 **placeholder**，回车确认后写入，`loadConfig` 绝不静默代填。
 
 | 协议（`protocol`） | 端点（placeholder / 必填） | 模型 |
@@ -148,7 +152,7 @@ npm run dev -- --cwd ../my-app
 npm run dev -- -C ../my-app -p "跑一下测试"
 ```
 
-工作目录只决定：工具能访问的根、`run_command` 的执行目录、MCP 项目配置（需 `--mcp-project`）与会话归属。**不决定任何凭据或偏好配置的查找**——那些永远在 `~/.cooper/config.json` 和环境变量里。
+工作目录决定内置文件工具的根、`run_command` 的启动目录、MCP 项目配置（需 `--mcp-project`）与会话归属。凭据和偏好从 `~/.cooper/config.json` 读取。
 
 
 ## 会话持久化
@@ -217,7 +221,7 @@ TUI 空闲时可以直接切换：
 | `/resume <id>` | — | 切换到已保存会话（支持唯一 id 前缀）；保持当前权限模式 |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
-| `/status` | — | 显示生效配置：每个值、来源层（flag/env/config env/config file/default）与配置文件路径 |
+| `/status` | — | 显示当前上下文占用率、生效配置及其来源 |
 | `/exit` | — | 退出 TUI |
 
 输入以 `/` 开头时，输入框上方会浮出注册表候选（前缀匹配，含别名）：
@@ -285,6 +289,8 @@ TUI 空闲时可以直接切换：
 | `context.compact` | `true` |
 | `context.summaryModel` | 同主模型 |
 
+在 `~/.cooper/config.json` 中设置 `context.window` 来指定总上下文窗口。TUI 的 `/status` 用当前消息和工具定义的估算 token 数除以这个窗口，显示占用比例。压缩阈值仍按扣除输出预留后的预算计算。
+
 压缩发生时界面会显示 `⤓ context 92.4k → 18.1k tokens (summarize)`。摘要用英文生成：同样的信息量，中文的成本约为英文的三倍。
 
 ## 可用工具
@@ -301,7 +307,7 @@ TUI 空闲时可以直接切换：
 - `edit_file` — 精确字符串替换；默认要求唯一匹配，可设 `replace_all`
 - `run_command` — 在工作区内执行 shell 命令，默认超时 120s，输出上限 30k 字符
 
-所有工具都被限制在启动目录内，路径逃逸会被拒绝。
+内置文件工具和 `run_command` 的启动目录会校验真实路径，拒绝指向工作区外的符号链接和 Windows junction。获准启动的命令以当前操作系统用户的权限运行。
 
 ## MCP 工具
 

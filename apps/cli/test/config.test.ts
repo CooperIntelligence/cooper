@@ -69,10 +69,13 @@ describe("loadConfig", () => {
 
   it("keeps the existing provider fields available to onboarding", () => {
     const { model: _model, ...partial } = connection;
-    writeConfig(partial);
+    writeConfig({ ...partial, context: { window: 32_768 } });
 
     expect(() => loadConfig({ home })).toThrow(
-      expect.objectContaining({ missing: ["model"], settings: partial }),
+      expect.objectContaining({
+        missing: ["model"],
+        settings: { ...partial, model: undefined, contextWindow: 32_768 },
+      }),
     );
   });
 

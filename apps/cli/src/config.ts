@@ -42,7 +42,7 @@ export class IncompleteConfigError extends Error {
   readonly missing: readonly ConnectionField[];
 
   constructor(
-    readonly settings: ConnectionSettings,
+    readonly settings: ConnectionSettings & { contextWindow?: number },
     file: string,
     readonly warnings: readonly string[],
   ) {
@@ -63,7 +63,7 @@ export function loadConfig(options: { home?: string } = {}): Config {
   if (protocol === undefined || model === undefined ||
       baseURL === undefined || apiKey === undefined) {
     throw new IncompleteConfigError(
-      { protocol, model, baseURL, apiKey },
+      { protocol, model, baseURL, apiKey, contextWindow: settings?.context?.window },
       file ?? userConfigFile(options.home),
       warnings,
     );

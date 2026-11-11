@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultEndpoint,
   mergeOnboardingConfig,
@@ -99,6 +99,13 @@ describe("mergeOnboardingConfig", () => {
     });
   });
 
+  it("writes an explicit context window and preserves other context preferences", () => {
+    expect(mergeOnboardingConfig(
+      { context: { window: 128_000, compact: false, reserveOutputTokens: 2048 } },
+      { ...result, contextWindow: 32_768 },
+    ).context).toEqual({ window: 32_768, compact: false, reserveOutputTokens: 2048 });
+  });
+
   it("refuses a result without baseURL instead of dropping it", () => {
     expect(() =>
       mergeOnboardingConfig(null, { ...result, baseURL: "  " }),
@@ -173,5 +180,30 @@ describe("writeOnboardingConfig", () => {
         baseURL: "https://api.openai.com/v1",
       }),
     ).toThrow(/Refusing to overwrite/);
+  });
+
+  it("keeps the original config if a partial write fails", () => {
+    fs.mkdirSync(home, { recursive: true });
+    const file = path.join(home, "config.json");
+    const original = '{"mode":"plan"}\n';
+    fs.writeFileSync(file, original);
+
+    const write = fs.writeFileSync;
+    const interrupted = vi.spyOn(fs, "writeFileSync").mockImplementationOnce((target) => {
+      write(target, '{"protocol":');
+      throw new Error("simulated write interruption");
+    });
+    try {
+      expect(() => writeOnboardingConfig(home, {
+        protocol: "openai-chat",
+        model: "m",
+        apiKey: "sk-z",
+        baseURL: "https://api.openai.com/v1",
+      })).toThrow(/simulated write interruption/);
+    } finally {
+      interrupted.mockRestore();
+    }
+    expect(fs.readFileSync(file, "utf8")).toBe(original);
+    expect(fs.readdirSync(home)).toEqual(["config.json"]);
   });
 });

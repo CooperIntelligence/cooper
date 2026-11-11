@@ -282,8 +282,10 @@ describe("formatStatus", () => {
       config: baseConfig,
       mode: "plan",
       modeSource: "config",
+      contextTokens: 25_000,
     });
     expect(text).toContain("Mode: plan (config file)");
+    expect(text).toContain("Context usage (estimated): 25000 / 200000 tokens (12.5%)");
     expect(text).toContain("anthropic-messages");
     expect(text).toContain("claude-sonnet-5-5");
     expect(text).toContain("flag");
@@ -304,6 +306,7 @@ describe("formatStatus", () => {
       },
       mode: "ask",
       modeSource: "default",
+      contextTokens: 0,
     });
     expect(text).toContain("200000 (assumed)");
     expect(text).toContain("Settings file: none (built-in defaults)");

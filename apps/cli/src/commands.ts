@@ -219,8 +219,11 @@ export function formatStatus(options: {
   config: Config;
   mode: ApprovalMode;
   modeSource: ModeResolution["source"] | "command";
+  contextTokens: number;
 }): string {
-  const { config, mode, modeSource } = options;
+  const { config, mode, modeSource, contextTokens } = options;
+  const window = config.context.window;
+  const contextPercent = ((contextTokens / window) * 100).toFixed(1);
 
   const configSourceLabel = (source: ConfigSource | undefined): string => {
     switch (source) {
@@ -286,6 +289,7 @@ export function formatStatus(options: {
 
   const lines = [
     `Mode: ${mode} (${modeSourceLabel[modeSource] ?? modeSource})`,
+    `Context usage (estimated): ${contextTokens} / ${window} tokens (${contextPercent}%)`,
   ];
   for (const [name, value, source] of entries) {
     lines.push(`  ${name.padEnd(nameWidth)}  ${value.padEnd(valueWidth)}  ${source}`);
