@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   editFileTool,
+  grepTool,
+  listDirTool,
   readFileTool,
   writeFileTool,
 } from "../src/tools/fs.js";
@@ -190,5 +192,64 @@ describe("run_command", () => {
     await expect(
       runCommandTool.execute({ command: "echo x", cwd: ".." }, { root }),
     ).rejects.toThrow(/outside the workspace/);
+  });
+});
+
+describe("workspace path containment", () => {
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+
+  it("blocks outside links for reads, previews, writes, and command cwd", async () => {
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await fs.mkdir(workspace);
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "secret.txt"), "outside fixture");
+    await fs.symlink(outside, path.join(workspace, "escape"), linkType);
+    const ctx = { root: workspace };
+    const file = "escape/secret.txt";
+    const write = { path: file, content: "changed" };
+    const edit = { path: file, old_string: "fixture", new_string: "changed" };
+
+    await expect(listDirTool.execute({ path: "escape" }, ctx)).rejects.toThrow(/outside the workspace/);
+    await expect(readFileTool.execute({ path: file }, ctx)).rejects.toThrow(/outside the workspace/);
+    await expect(grepTool.execute({ path: "escape", pattern: "fixture" }, ctx)).rejects.toThrow(/outside the workspace/);
+    await expect(grepTool.execute({ pattern: "outside fixture" }, ctx)).resolves.toMatchObject({
+      content: expect.stringMatching(/^No matches/),
+    });
+    await expect(writeFileTool.preview?.(write, ctx)).resolves.toBeUndefined();
+    await expect(editFileTool.preview?.(edit, ctx)).resolves.toBeUndefined();
+    await expect(writeFileTool.execute(write, ctx)).rejects.toThrow(/outside the workspace/);
+    await expect(editFileTool.execute(edit, ctx)).rejects.toThrow(/outside the workspace/);
+    await expect(writeFileTool.execute({ path: "escape/new/file.txt", content: "new" }, ctx))
+      .rejects.toThrow(/outside the workspace/);
+    await expect(runCommandTool.execute({ cwd: "escape", command: "echo x" }, ctx))
+      .rejects.toThrow(/outside the workspace/);
+    expect(await fs.readdir(outside)).toEqual(["secret.txt"]);
+    expect(await fs.readFile(path.join(outside, "secret.txt"), "utf8")).toBe("outside fixture");
+  });
+
+  it("supports existing and new files through an internal link", async () => {
+    const target = path.join(root, "target");
+    await fs.mkdir(target);
+    await fs.symlink(target, path.join(root, "alias"), linkType);
+    const ctx = { root };
+    const file = "alias/new/file.txt";
+    await writeFileTool.execute({ path: file, content: "inside fixture" }, ctx);
+    await expect(readFileTool.execute({ path: file }, ctx)).resolves.toMatchObject({
+      content: "1 | inside fixture",
+    });
+    await expect(grepTool.execute({ path: "alias", pattern: "fixture" }, ctx))
+      .resolves.toMatchObject({ content: "alias/new/file.txt:1: inside fixture" });
+  });
+
+  it("refuses to create files through a dangling link", async () => {
+    const workspace = path.join(root, "workspace");
+    const missing = path.join(root, "missing");
+    await fs.mkdir(workspace);
+    await fs.symlink(missing, path.join(workspace, "dangling"), linkType);
+    await expect(
+      writeFileTool.execute({ path: "dangling/new.txt", content: "new" }, { root: workspace }),
+    ).rejects.toThrow(/dangling link/);
+    await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

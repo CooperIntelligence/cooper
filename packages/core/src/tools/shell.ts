@@ -148,7 +148,7 @@ export const runCommandTool: Tool<typeof runCommandSchema> = {
     return `$ ${input.command}${where}`;
   },
   async execute(input, ctx) {
-    const cwd = resolveInRoot(ctx.root, input.cwd ?? ".");
+    const cwd = await resolveInRoot(ctx.root, input.cwd ?? ".");
     const stat = await fs.stat(cwd).catch(() => null);
     if (!stat || !stat.isDirectory()) {
       throw new Error(`Not a directory: ${input.cwd ?? "."}`);

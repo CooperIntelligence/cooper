@@ -48,6 +48,7 @@ function oneLine(text: string, max = 80): string {
 }
 
 async function walkDirectory(
+  root: string,
   base: string,
   dir: string,
   depthLeft: number,
@@ -57,6 +58,7 @@ async function walkDirectory(
 
   let dirents;
   try {
+    if (await resolveInRoot(root, dir) !== dir) return;
     dirents = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return;
@@ -77,12 +79,13 @@ async function walkDirectory(
     entries.push(dirent.isDirectory() ? `${rel}/` : rel);
 
     if (dirent.isDirectory() && depthLeft > 1) {
-      await walkDirectory(base, fullPath, depthLeft - 1, entries);
+      await walkDirectory(root, base, fullPath, depthLeft - 1, entries);
     }
   }
 }
 
 async function collectFiles(
+  root: string,
   base: string,
   dir: string,
   include: string | undefined,
@@ -92,6 +95,7 @@ async function collectFiles(
 
   let dirents;
   try {
+    if (await resolveInRoot(root, dir) !== dir) return;
     dirents = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return;
@@ -102,7 +106,7 @@ async function collectFiles(
 
     if (dirent.isDirectory()) {
       if (IGNORED_DIRS.has(dirent.name)) continue;
-      await collectFiles(base, path.join(dir, dirent.name), include, files);
+      await collectFiles(root, base, path.join(dir, dirent.name), include, files);
       continue;
     }
 
@@ -142,10 +146,10 @@ export const listDirTool: Tool<typeof listDirSchema> = {
     return `List ${input.path ?? "."} (depth ${input.depth ?? 2})`;
   },
   async execute(input, ctx) {
-    const base = resolveInRoot(ctx.root, input.path ?? ".");
+    const base = await resolveInRoot(ctx.root, input.path ?? ".");
     const depth = input.depth ?? 2;
     const entries: string[] = [];
-    await walkDirectory(base, base, depth, entries);
+    await walkDirectory(await fs.realpath(ctx.root), base, base, depth, entries);
 
     if (entries.length === 0) return { content: "(empty directory)" };
 
@@ -185,7 +189,7 @@ export const readFileTool: Tool<typeof readFileSchema> = {
     return `Read ${input.path}${from}`;
   },
   async execute(input, ctx) {
-    const absolute = resolveInRoot(ctx.root, input.path);
+    const absolute = await resolveInRoot(ctx.root, input.path);
     const stat = await fs.stat(absolute);
     if (!stat.isFile()) {
       throw new Error(`Not a file: ${input.path}`);
@@ -279,12 +283,14 @@ export const grepTool: Tool<typeof grepSchema> = {
       );
     }
 
-    const target = resolveInRoot(ctx.root, input.path ?? ".");
+    const target = await resolveInRoot(ctx.root, input.path ?? ".");
+    const root = await fs.realpath(ctx.root);
+    const requestedPath = path.resolve(ctx.root, input.path ?? ".");
     const stat = await fs.stat(target);
     const files: string[] = [];
 
     if (stat.isDirectory()) {
-      await collectFiles(target, target, input.include, files);
+      await collectFiles(root, target, target, input.include, files);
     } else if (stat.isFile()) {
       files.push(target);
     } else {
@@ -297,17 +303,18 @@ export const grepTool: Tool<typeof grepSchema> = {
     for (const file of files) {
       if (matches.length >= maxResults) break;
 
-      const fileStat = await fs.stat(file);
-      if (fileStat.size > MAX_SEARCH_FILE_BYTES) continue;
-
       let text: string;
       try {
+        if (await resolveInRoot(root, file) !== file) continue;
+        const fileStat = await fs.stat(file);
+        if (!fileStat.isFile() || fileStat.size > MAX_SEARCH_FILE_BYTES) continue;
         text = await fs.readFile(file, "utf8");
       } catch {
         continue;
       }
 
-      const rel = toPosix(path.relative(ctx.root, file));
+      const displayedFile = path.join(requestedPath, path.relative(target, file));
+      const rel = toPosix(path.relative(ctx.root, displayedFile));
       const lines = text.split(/\r?\n/);
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index] ?? "";
@@ -320,7 +327,7 @@ export const grepTool: Tool<typeof grepSchema> = {
     if (matches.length === 0) {
       return {
         content: `No matches for /${input.pattern}/ in ${toPosix(
-          path.relative(ctx.root, target) || ".",
+          path.relative(ctx.root, requestedPath) || ".",
         )} (${files.length} file(s) searched)`,
       };
     }
@@ -355,17 +362,23 @@ export const writeFileTool: Tool<typeof writeFileSchema> = {
   async preview(input, ctx) {
     if (input.content.length > MAX_PREVIEW_CHARS) return undefined;
 
-    const absolute = resolveInRoot(ctx.root, input.path);
-    const stat = await fs.stat(absolute).catch(() => null);
-    if (stat !== null && (!stat.isFile() || stat.size > MAX_PREVIEW_CHARS)) {
+    try {
+      const absolute = await resolveInRoot(ctx.root, input.path);
+      const stat = await fs.stat(absolute).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (stat !== null && (!stat.isFile() || stat.size > MAX_PREVIEW_CHARS)) {
+        return undefined;
+      }
+      const before = stat === null ? "" : await fs.readFile(absolute, "utf8");
+      return { kind: "diff", path: input.path, before, after: input.content };
+    } catch {
       return undefined;
     }
-
-    const before = stat === null ? "" : await fs.readFile(absolute, "utf8");
-    return { kind: "diff", path: input.path, before, after: input.content };
   },
   async execute(input, ctx) {
-    const absolute = resolveInRoot(ctx.root, input.path);
+    const absolute = await resolveInRoot(ctx.root, input.path);
     const bytes = Buffer.byteLength(input.content, "utf8");
     if (bytes > MAX_FILE_BYTES) {
       throw new Error(`Content is too large (${bytes} bytes, limit ${MAX_FILE_BYTES}).`);
@@ -377,6 +390,9 @@ export const writeFileTool: Tool<typeof writeFileSchema> = {
     }
 
     await fs.mkdir(path.dirname(absolute), { recursive: true });
+    if (await resolveInRoot(ctx.root, input.path) !== absolute) {
+      throw new Error(`Path "${input.path}" changed while preparing the write`);
+    }
     await fs.writeFile(absolute, input.content, "utf8");
     return {
       content: `${existing ? "Updated" : "Created"} ${input.path} (${bytes} bytes)`,
@@ -438,36 +454,36 @@ export const editFileTool: Tool<typeof editFileSchema> = {
   async preview(input, ctx) {
     if (input.old_string.length === 0) return undefined;
 
-    const absolute = resolveInRoot(ctx.root, input.path);
-    const stat = await fs.stat(absolute).catch(() => null);
-    if (stat === null || !stat.isFile() || stat.size > MAX_PREVIEW_CHARS) {
+    try {
+      const absolute = await resolveInRoot(ctx.root, input.path);
+      const stat = await fs.stat(absolute);
+      if (!stat.isFile() || stat.size > MAX_PREVIEW_CHARS) return undefined;
+
+      const original = await fs.readFile(absolute, "utf8");
+      const count = countOccurrences(original, input.old_string);
+      // No match, or an ambiguous match: execute() will explain the error.
+      if (count === 0 || (count > 1 && input.replace_all !== true)) return undefined;
+      return {
+        kind: "diff",
+        path: input.path,
+        before: original,
+        after: applyEdit(
+          original,
+          input.old_string,
+          input.new_string,
+          input.replace_all === true,
+        ),
+      };
+    } catch {
       return undefined;
     }
-
-    const original = await fs.readFile(absolute, "utf8");
-    const count = countOccurrences(original, input.old_string);
-    // No match, or an ambiguous match: execute() will explain the error.
-    if (count === 0) return undefined;
-    if (count > 1 && input.replace_all !== true) return undefined;
-
-    return {
-      kind: "diff",
-      path: input.path,
-      before: original,
-      after: applyEdit(
-        original,
-        input.old_string,
-        input.new_string,
-        input.replace_all === true,
-      ),
-    };
   },
   async execute(input, ctx) {
     if (input.old_string.length === 0) {
       throw new Error("old_string must not be empty");
     }
 
-    const absolute = resolveInRoot(ctx.root, input.path);
+    const absolute = await resolveInRoot(ctx.root, input.path);
     const stat = await fs.stat(absolute).catch(() => null);
     if (!stat || !stat.isFile()) {
       throw new Error(`File not found: ${input.path}`);
@@ -497,6 +513,9 @@ export const editFileTool: Tool<typeof editFileSchema> = {
       input.replace_all === true,
     );
 
+    if (await resolveInRoot(ctx.root, input.path) !== absolute) {
+      throw new Error(`Path "${input.path}" changed while preparing the edit`);
+    }
     await fs.writeFile(absolute, updated, "utf8");
     return { content: `Replaced ${count} occurrence(s) in ${input.path}` };
   },
