@@ -26,7 +26,7 @@ packages/core/
   src/context/window.ts              模型窗口表
   src/instructions.ts                COOPER.md / AGENTS.md 加载
   src/session.ts                     会话持久化（JSONL、checkpoint、恢复）
-  src/home.ts                        COOPER_HOME / ~/.cooper 解析
+  src/home.ts                        ~/.cooper 常量锚点（不可被环境变量改写）
   src/mcp/config.ts                  MCP 配置与信任规则
   src/mcp/client.ts                  MCP 连接、工具列表、生命周期
   src/mcp/resources.ts               MCP resources 的共享工具与结果投影
@@ -43,8 +43,9 @@ apps/cli/
   src/stream-lines.ts                流式文本按行切分
   src/provider.ts                    根据配置构造 Provider
   src/mcp.ts                         加载可信 MCP 配置并组装工具
-  src/config.ts                      配置聚合（flag > env > 配置文件 > 默认）
-  src/settings.ts                    ~/.cooper/config.json 与项目层加载校验
+  src/config.ts                      配置聚合（flag > env > config.json > 默认）
+  src/settings.ts                    ~/.cooper/config.json 加载校验
+  src/onboarding.tsx                 首次运行引导（缺 key 时的向导）
 ```
 
 ## 快速开始
@@ -53,19 +54,19 @@ apps/cli/
 
 ```bash
 npm install
-cp .env.example .env        # Windows PowerShell: Copy-Item .env.example .env
-# 编辑 .env，至少填 COOPER_API_KEY
-npm run dev
+npm run dev          # 首次运行会进入引导：选协议 → 填 key → 验证并保存
 ```
 
-`COOPER_PROVIDER` **显式**选择协议，默认 `openai`（不按模型名猜测，因为 Claude 也可能通过 OpenAI 兼容网关提供）：
+引导把结果写进 `~/.cooper/config.json`（`0600` 权限），之后所有项目共用——**protocol、model、baseURL、API key 四项齐全**。CI / 脚本场景不需要引导：用环境变量或 `--env-file` 把这四项配全（`COOPER_PROTOCOL`、`COOPER_MODEL` / `--model`、`COOPER_BASE_URL`、`COOPER_API_KEY`）。
 
-| 协议 | 配置 | 默认模型 |
+协议**显式**选择（不按模型名猜测，因为 Claude 也可能通过 OpenAI 兼容网关提供）。**`protocol`、`model`、`baseURL`、API key 四项都必须显式配置**，缺任何一项启动即报错（交互式进引导补齐，无头 fail closed）；官方端点只作为引导里的 **placeholder**，回车确认后写入，`loadConfig` 绝不静默代填。
+
+| 协议（`protocol` / `COOPER_PROTOCOL`） | 端点（placeholder / 必填） | 模型 |
 |---|---|---|
-| OpenAI 兼容（默认） | `COOPER_API_KEY` 或 `OPENAI_API_KEY` | `gpt-4o-mini` |
-| Anthropic 原生 | `COOPER_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` | `claude-opus-5-5` |
+| `openai-chat` | `https://api.openai.com/v1`（引导 placeholder） | **必填**（无默认） |
+| `anthropic-messages` | `https://api.anthropic.com`（引导 placeholder） | **必填**（无默认） |
 
-`COOPER_BASE_URL` 支持任何 OpenAI 兼容端点，例如：
+任何 OpenAI 兼容端点通过 `COOPER_BASE_URL` 指定，例如：
 
 | 供应商 | COOPER_BASE_URL | COOPER_MODEL |
 |---|---|---|
@@ -73,33 +74,36 @@ npm run dev
 | DeepSeek | `https://api.deepseek.com` | `deepseek-flash` |
 | Moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
 
-Anthropic 原生协议使用 `ANTHROPIC_BASE_URL`（可选），输出上限由 `COOPER_MAX_OUTPUT_TOKENS` 控制（默认 64000）。同时设置时，`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` 优先于通用的 `COOPER_BASE_URL`，避免切换提供商时被旧的端点配置带偏。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
+输出上限由 `COOPER_MAX_OUTPUT_TOKENS` 控制（默认 64000）。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
 
 ## 配置
 
-配置分四个通道，各管一段生命周期：
+**只有一个配置文件：`~/.cooper/config.json`**（即 `cooperHome()` 常量锚点下的 `config.json`，不可被任何环境变量改写）。工作区不读取任何 Cooper 配置——宿主仓库的 `.env`、配置文件一概不碰。
 
 | 通道 | 放什么 | 生命周期 |
 |---|---|---|
-| `~/.cooper/config.json`（user 层） | 非密偏好：provider、model、baseURL、`apiKeyEnv`、调参、默认 mode | 长期，跨项目 |
-| `<workspace>/.cooper/config.json`（project 层，可提交） | 项目级覆盖（见下方限制） | 长期，随仓库 |
-| `.env` / shell 环境变量 | **只有 API key**；`COOPER_*` 变量保留为单次/CI 覆盖 | 长期（密钥）/ 临时 |
+| `~/.cooper/config.json` 顶层字段 | 非环境类偏好：`protocol`、`model`、`maxOutputTokens`、`showReasoning`、`mode`、`context` | 长期 |
+| `~/.cooper/config.json` 的 `env` 对象 | 环境变量类配置：`COOPER_API_KEY`、`COOPER_BASE_URL`… 启动时以**最低优先级**并入进程环境 | 长期（含密钥） |
+| shell 环境变量 | 单次/机器级覆盖，压倒一切文件内容 | 临时 |
+| `--env-file <path>` | 本跑专用的 env 文件，**压过** shell 变量（flag 语义） | 单次 |
 | CLI flag / 斜杠命令 | flag：单次运行（`--model`、`--mode`…）；命令：会话内（`/plan`、`/auto`…） | 单次 / 会话 |
 
-**每个 key 独立取最高优先级**：`flag > env > project 配置 > user 配置 > 内置默认`。`/status` 显示每个生效值及其来源层。
+**每个 key 独立取最高优先级**：`--env-file > shell 环境 > config.json > 内置默认`（`env` 对象先并入环境、再参与比较，所以永远输给真实环境变量）。`/status` 显示每个生效值及其来源（`flag` / `env` / `config env` / `config file` / `default`）。
 
 配置文件示例（JSON，严格校验；未知字段告警并忽略，JSON 损坏直接报错）：
 
 ```jsonc
 // ~/.cooper/config.json
 {
-  "provider": "anthropic",          // 协议，显式，不按模型名猜
-  "model": "claude-sonnet-5-5",
-  "baseURL": "https://gateway.example/v1",
-  "apiKeyEnv": "CORP_KEY",          // 指针：去哪个 env 变量找 key
+  "env": {                          // 环境变量类配置，密钥放这里
+    "COOPER_API_KEY": "sk-…",
+    "COOPER_BASE_URL": "https://gateway.example/v1"   // 必填，无静默默认
+  },
+  "protocol": "openai-chat",        // openai-chat | anthropic-messages
+  "model": "gpt-4o-mini",
   "maxOutputTokens": 64000,
   "showReasoning": false,
-  "mode": "ask",                    // user 层可为 plan|ask|auto
+  "mode": "ask",                    // plan | ask | auto
   "context": {
     "window": 200000,               // 省略则按模型表，未知模型假设 200k
     "reserveOutputTokens": 16384,
@@ -111,10 +115,10 @@ Anthropic 原生协议使用 `ANTHROPIC_BASE_URL`（可选），输出上限由 
 
 规则：
 
-- **API key 永远只从 env 读**（bring your own key）。配置里只写 `apiKeyEnv` 指针；解析顺序：指针指向的变量 → `COOPER_API_KEY` → `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`。配置文件里出现 `apiKey` 之类的密钥字段会告警并忽略。
-- **project 层不能碰网络**：`provider`、`baseURL`、`apiKeyEnv` 只允许 user 层 / env / flag。clone 下来的仓库无法把你的 key 重定向到自己的服务器（与 MCP 需要 `--mcp-project` 同一威胁模型）。project 层出现这些字段会告警并忽略。
-- **project 层不能设 `mode: "auto"`**：仓库不能自我放行；auto 只能来自 `--mode auto`、`COOPER_MODE`、TUI `/auto` 或 user 层配置。
-- mode 优先级：`--mode` > `COOPER_MODE` > 会话保存的 plan/ask > 配置文件 > `ask`。会话保存的 `auto` 仍不隐式恢复（落空到配置层再决定）。
+- **密钥的家是 `config.json` 的 `env` 对象**（或 shell / `--env-file`），文件以 `0600` 写入、位于 `~/.cooper`，永不进仓库。顶层误写 `apiKey` 之类会告警并忽略（提示挪进 `env`）。
+- **环境变量压倒一切**：真实 shell 变量（含 `--env-file` 注入的）永远赢过 `config.json`。
+- mode 优先级：`--mode` > `COOPER_MODE` > 会话保存的 plan/ask > 配置文件的 `mode` > `ask`。会话保存的 `auto` 仍不隐式恢复（落空到配置层，配置里显式写了 `auto` 才生效）。
+- **`COOPER_HOME` 已移除**：数据目录固定为 `~/.cooper`。曾设置过该变量的用户会被忽略（pre-1.0 破坏性变更）。
 
 ## 运行方式
 
@@ -157,13 +161,13 @@ npm run dev -- --cwd ../my-app
 npm run dev -- -C ../my-app -p "跑一下测试"
 ```
 
-工作目录同时决定：工具能访问的根、`run_command` 的执行目录、`.env` 的查找起点。
+工作目录只决定：工具能访问的根、`run_command` 的执行目录、MCP 项目配置（需 `--mcp-project`）与会话归属。**不决定任何凭据或偏好配置的查找**——那些永远在 `~/.cooper/config.json` 和环境变量里。
 
-`.env` 查找顺序（先命中者生效；真实环境变量永远优先于任何文件）：
+临时注入一批环境变量用 `--env-file`（格式即 dotenv，值压过 shell 环境）：
 
-1. `<工作目录>/.env`
-2. `<工作目录>/../../.env`（兼容 monorepo）
-3. Cooper 自己的 `.env`（所以换项目时不必复制密钥）
+```bash
+cooper --env-file ci.env -p "fix the tests"
+```
 
 ## 会话持久化
 
@@ -176,7 +180,7 @@ npm run dev -- -p --resume <id> "接着改"
 npm run dev -- --no-session         # 本次不落盘
 ```
 
-- 存储位置：`~/.cooper/projects/<工作区标识>/sessions/<id>.jsonl`。工作区标识由路径生成，同一工作区共享；`COOPER_HOME` 可以换根目录。
+- 存储位置：`~/.cooper/projects/<工作区标识>/sessions/<id>.jsonl`。工作区标识由路径生成，同一工作区共享；`~/.cooper` 是固定常量，不可改写。
 - 每个会话是一个 **JSONL 追加文件**，崩溃时最多丢最后一行。恢复时会忽略损坏的行，并丢弃缺少工具结果的残缺尾部（否则下一次请求会被 API 拒绝）。
 - TUI 横幅和无头模式的 stderr 都会打印会话 id。
 - 会话绑定工作目录：在别的工作区 `--resume` 会报错，不会把路径错配到另一个项目。
@@ -231,7 +235,7 @@ TUI 空闲时可以直接切换：
 | `/resume <id>` | — | 切换到已保存会话（支持唯一 id 前缀）；保持当前权限模式 |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
-| `/status` | — | 显示生效配置：每个值、来源层（flag/env/project/user/default）与配置文件路径 |
+| `/status` | — | 显示生效配置：每个值、来源层（flag/env/config env/config file/default）与配置文件路径 |
 | `/exit` | — | 退出 TUI |
 
 输入以 `/` 开头时，输入框上方会浮出注册表候选（前缀匹配，含别名）：
@@ -292,7 +296,7 @@ TUI 空闲时可以直接切换：
 
 **token 估算**不依赖 tokenizer：CJK 按约 1.1 token/字符、其余按 3.6 字符/token，再加上消息结构开销和工具 schema。端点返回 `usage` 时用真实值做指数滑动平均修正；不支持的端点会自动降级（`stream_options` 被拒后重试一次并记住）。
 
-| 变量（env 覆盖，优先于配置文件） | 默认 | 配置文件对应字段 |
+| 变量（env 覆盖，优先于 `config.json`） | 默认 | `config.json` 对应字段 |
 |---|---|---|
 | `COOPER_CONTEXT_WINDOW` | 按模型表，否则 200000 | `context.window` |
 | `COOPER_CONTEXT_RESERVE` | 16384 | `context.reserveOutputTokens` |

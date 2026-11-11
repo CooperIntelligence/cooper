@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import {
   DEFAULT_CONTEXT_WINDOW,
@@ -8,60 +6,27 @@ import {
   type ContextSettings,
   type PermissionPreset,
 } from "@cooper/core";
-import { loadSettings, type LoadedSettings } from "./settings.js";
-
-let envLoaded = false;
-
-/** Nearest .env at or above `start`, so the CLI finds its own credentials. */
-function findEnvFileUpwards(start: string, levels = 5): string | null {
-  let dir = start;
-  for (let depth = 0; depth < levels; depth += 1) {
-    const candidate = path.join(dir, ".env");
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-export function loadEnvFiles(): void {
-  if (envLoaded) return;
-  envLoaded = true;
-
-  // Works both when the CLI runs from apps/cli (npm workspace) and from the
-  // repository root (tsx apps/cli/src/index.tsx).
-  const candidates = [
-    path.resolve(process.cwd(), ".env"),
-    path.resolve(process.cwd(), "../../.env"),
-  ];
-
-  // `--cwd` may point at a project with no .env of its own, so fall back to
-  // the one next to the CLI rather than forcing credentials to be copied.
-  const cliEnv = findEnvFileUpwards(path.dirname(fileURLToPath(import.meta.url)));
-  if (cliEnv !== null) candidates.push(cliEnv);
-
-  // dotenv never overrides existing values, so the first file defining a key
-  // wins, and real environment variables always win over any file.
-  for (const file of candidates) {
-    dotenv.config({ path: file, quiet: true });
-  }
-}
+import { loadSettings, userConfigFile } from "./settings.js";
 
 /** ask: prompt before writes/commands · auto: allow everything · plan: read-only */
 export type ApprovalMode = PermissionPreset;
 
-export type ProviderKind = "openai" | "anthropic";
+/** The wire protocol Cooper speaks; one provider at a time (v1). */
+export type ProtocolKind = "openai-chat" | "anthropic-messages";
 
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
-const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
+const DEFAULT_PROTOCOL: ProtocolKind = "openai-chat";
 export const DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
 
 /** Which layer supplied an effective value; surfaced by `/status`. */
-export type ConfigSource = "flag" | "env" | "project" | "user" | "default";
+export type ConfigSource =
+  | "flag"
+  | "env"
+  | "config-env"
+  | "config"
+  | "default";
 
 export type ConfigKey =
-  | "provider"
+  | "protocol"
   | "baseURL"
   | "model"
   | "apiKey"
@@ -73,11 +38,12 @@ export type ConfigKey =
   | "context.summaryModel";
 
 export type Config = {
-  provider: ProviderKind;
+  protocol: ProtocolKind;
   apiKey: string;
-  /** Which environment variable supplied the key (never the value itself). */
+  /** Which name supplied the key (never the value itself). */
   apiKeyVariable: string;
-  baseURL: string | undefined;
+  /** Always explicit after a successful load — no silent protocol default. */
+  baseURL: string;
   model: string;
   /** Anthropic `max_tokens`; streaming keeps a high ceiling safe. */
   maxOutputTokens: number;
@@ -87,21 +53,20 @@ export type Config = {
   /** Stream reasoning text instead of showing only an indicator. */
   showReasoning: boolean;
   /**
-   * Approval mode from the settings files (project beats user; the project
-   * layer can never carry `auto`). undefined when no file sets one — the
+   * Approval mode from `config.json`; undefined when unset — the
    * session/env/flag resolution in `resolveModeForSession` then decides.
    */
   defaultMode: ApprovalMode | undefined;
   /** Per-key provenance for `/status`. */
   sources: Partial<Record<ConfigKey, ConfigSource>>;
-  /** Warnings from the settings files (unknown keys, dropped fields, …). */
+  /** Warnings from the settings file (unknown keys, misplaced secrets, …). */
   settingsWarnings: string[];
-  /** Paths of the settings files that exist, for `/status`. */
-  settingsFiles: { user: string | null; project: string | null };
+  /** Path of the settings file that loaded, for `/status`. */
+  settingsFile: string | null;
 };
 
 export type ConfigOverrides = {
-  /** `--model`; beats every file and env layer. */
+  /** `--model`; beats every env and file layer. */
   model?: string;
 };
 
@@ -134,173 +99,230 @@ function envFlagValue(value: string | undefined): boolean | undefined {
  * can also be served through an OpenAI-compatible gateway, and those two
  * paths need different request shapes.
  */
-export function resolveProvider(value: string | undefined): ProviderKind {
+export function resolveProtocol(value: string | undefined): ProtocolKind {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === undefined || normalized === "") return "openai";
-  if (normalized === "openai" || normalized === "anthropic") {
+  if (normalized === undefined || normalized === "") return DEFAULT_PROTOCOL;
+  if (normalized === "openai-chat" || normalized === "anthropic-messages") {
     return normalized;
   }
   throw new Error(
-    `Invalid COOPER_PROVIDER "${value}". Use "openai" or "anthropic".`,
+    `Invalid protocol "${value}". Use "openai-chat" or "anthropic-messages".`,
   );
 }
 
-const EMPTY_SETTINGS: LoadedSettings = {
-  user: null,
-  project: null,
-  userFile: null,
-  projectFile: null,
-  warnings: [],
-};
+/**
+ * Loads an env file for one run (`--env-file`). Unlike dotenv's normal
+ * behaviour the file **wins** over the ambient environment: it is an
+ * explicit per-run override, not a defaults layer.
+ */
+export function applyEnvFile(
+  file: string,
+  target: NodeJS.ProcessEnv = process.env,
+): void {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Env file not found: ${file}`);
+    }
+    throw error;
+  }
+  const parsed = dotenv.parse(text);
+  for (const [name, value] of Object.entries(parsed)) {
+    target[name] = value;
+  }
+}
+
+/**
+ * Thrown when any required endpoint-contract field is missing after
+ * flag/env/config resolution: `protocol`, `model`, `baseURL`, `apiKey`.
+ *
+ * None of them have built-in defaults — guessing (e.g. `gpt-4o-mini` or
+ * `api.openai.com` against a third-party gateway) fails only at request time.
+ * The interactive surface catches this to launch onboarding; headless reports
+ * every missing field and fails closed.
+ */
+export class IncompleteConfigError extends Error {
+  /** Missing field names, stable order: protocol, model, baseURL, apiKey. */
+  readonly missing: readonly string[];
+
+  constructor(missing: readonly string[], file: string) {
+    const list = missing.join(", ");
+    super(
+      `Incomplete configuration (missing: ${list}). ` +
+        `Set them in ${file} or the environment, ` +
+        `or run cooper interactively once to be guided through setup.`,
+    );
+    this.name = "IncompleteConfigError";
+    this.missing = missing;
+  }
+}
 
 /**
  * Resolves the effective configuration for one run.
  *
- * Per-key precedence: overrides (flags) > env > project settings file >
- * user settings file > built-in defaults. The API key is the exception: it
- * only ever comes from the environment (`settings.user.apiKeyEnv` names
- * which variable to try first), never from a file.
+ * Precedence per key: overrides (flags) > environment > `config.json` top
+ * level > built-in defaults. The environment itself is layered first: the
+ * config file's `env` block fills gaps but never overrides ambient variables
+ * (shell and `--env-file` both land there before this runs).
  */
 export function loadConfig(
   options: {
     env?: NodeJS.ProcessEnv;
-    loadEnv?: boolean;
-    /** Workspace root; enables the project/user settings files. */
-    root?: string;
+    /** Overrides the `cooperHome()` anchor; tests only. */
+    home?: string;
     overrides?: ConfigOverrides;
   } = {},
 ): Config {
-  if (options.loadEnv !== false) loadEnvFiles();
-  const env = options.env ?? process.env;
-  const settings =
-    options.root !== undefined
-      ? loadSettings({ root: options.root, env })
-      : EMPTY_SETTINGS;
-  const { user, project } = settings;
+  const rawEnv = options.env ?? process.env;
+  const settings = loadSettings({ home: options.home });
+  const configEnv = settings.settings?.env ?? {};
+
+  // Effective env: ambient wins, config.env fills the gaps.
+  const env: NodeJS.ProcessEnv = { ...configEnv, ...rawEnv };
+  // Mirror into the live process env so child processes (run_command) see
+  // the configured values too — only when operating on the real environment.
+  if (rawEnv === process.env) {
+    for (const [name, value] of Object.entries(configEnv)) {
+      if (process.env[name] === undefined) process.env[name] = value;
+    }
+  }
+
+  /** Source of an env-class value: ambient env vs the config `env` block. */
+  const envSource = (name: string): "env" | "config-env" =>
+    nonEmpty(rawEnv[name]) !== undefined ? "env" : "config-env";
+
   const sources: Partial<Record<ConfigKey, ConfigSource>> = {};
+  const file = settings.file ?? userConfigFile(options.home);
+  /** Missing required fields, filled during resolution, thrown together. */
+  const missing: string[] = [];
 
-  // --- provider (env and user only; the project layer may not redirect) ---
-  const providerEnv = nonEmpty(env.COOPER_PROVIDER);
-  const provider =
-    providerEnv !== undefined
-      ? resolveProvider(providerEnv)
-      : (user?.provider ?? "openai");
-  sources.provider =
-    providerEnv !== undefined ? "env" : user?.provider ? "user" : "default";
+  // --- protocol (config/env only; no flag in v1; no default) ---
+  const protocolEnv = nonEmpty(env.COOPER_PROTOCOL);
+  const protocol =
+    protocolEnv !== undefined
+      ? resolveProtocol(protocolEnv)
+      : settings.settings?.protocol;
+  if (protocol === undefined) {
+    missing.push("protocol");
+  } else {
+    sources.protocol =
+      protocolEnv !== undefined ? envSource("COOPER_PROTOCOL") : "config";
+  }
 
-  // --- model ---
+  // --- endpoint: explicit always; no silent protocol default ---
+  const baseURL = nonEmpty(env.COOPER_BASE_URL);
+  if (baseURL === undefined) {
+    missing.push("baseURL");
+  } else {
+    sources.baseURL = envSource("COOPER_BASE_URL");
+  }
+
+  // --- credentials: env-class only, ambient first ---
+  const apiKey = nonEmpty(env.COOPER_API_KEY);
+  if (apiKey === undefined) {
+    missing.push("apiKey");
+  } else {
+    sources.apiKey = envSource("COOPER_API_KEY");
+  }
+  const apiKeyVariable = "COOPER_API_KEY";
+
+  // --- model: required, never guessed from protocol or vendor ---
   const flagModel = nonEmpty(options.overrides?.model);
   const envModel = nonEmpty(env.COOPER_MODEL);
-  const providerEnvModel = nonEmpty(
-    provider === "anthropic" ? env.ANTHROPIC_MODEL : env.OPENAI_MODEL,
-  );
-  const model =
-    flagModel ??
-    envModel ??
-    providerEnvModel ??
-    project?.model ??
-    user?.model ??
-    (provider === "anthropic" ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_OPENAI_MODEL);
-  sources.model =
-    flagModel !== undefined
-      ? "flag"
-      : envModel !== undefined || providerEnvModel !== undefined
-        ? "env"
-        : project?.model !== undefined
-          ? "project"
-          : user?.model !== undefined
-            ? "user"
-            : "default";
-
-  // --- endpoint ---
-  const envBase =
-    (provider === "anthropic"
-      ? nonEmpty(env.ANTHROPIC_BASE_URL)
-      : nonEmpty(env.OPENAI_BASE_URL)) ?? nonEmpty(env.COOPER_BASE_URL);
-  const baseURL = envBase ?? user?.baseURL;
-  sources.baseURL =
-    envBase !== undefined ? "env" : user?.baseURL !== undefined ? "user" : "default";
-
-  // --- credentials: env only, pointer first, then the classic fallbacks ---
-  const keyPointer = user?.apiKeyEnv;
-  const pointerValue = keyPointer !== undefined ? nonEmpty(env[keyPointer]) : undefined;
-  const providerKeyVar =
-    provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
-  const apiKeyVariable =
-    pointerValue !== undefined
-      ? (keyPointer as string)
-      : nonEmpty(env.COOPER_API_KEY) !== undefined
-        ? "COOPER_API_KEY"
-        : providerKeyVar;
-  const apiKey =
-    pointerValue ??
-    nonEmpty(env.COOPER_API_KEY) ??
-    (provider === "anthropic"
-      ? nonEmpty(env.ANTHROPIC_API_KEY)
-      : nonEmpty(env.OPENAI_API_KEY)) ??
-    "";
-  if (!apiKey.trim()) {
-    if (keyPointer !== undefined) {
-      throw new Error(`No API key found. Set ${keyPointer}.`);
-    }
-    throw new Error(
-      provider === "anthropic"
-        ? "No API key found. Set COOPER_API_KEY or ANTHROPIC_API_KEY."
-        : "No API key found. Copy .env.example to .env and set COOPER_API_KEY (or OPENAI_API_KEY).",
-    );
+  const configModel = nonEmpty(settings.settings?.model);
+  const model = flagModel ?? envModel ?? configModel;
+  if (model === undefined) {
+    missing.push("model");
+  } else {
+    sources.model =
+      flagModel !== undefined
+        ? "flag"
+        : envModel !== undefined
+          ? envSource("COOPER_MODEL")
+          : "config";
   }
-  sources.apiKey = "env";
+
+  // Report every gap at once so a broken config is fixed in one pass.
+  if (missing.length > 0) {
+    throw new IncompleteConfigError(missing, file);
+  }
+  // Narrowed: all four resolved above.
+  const resolvedProtocol = protocol as ProtocolKind;
+  const resolvedBaseURL = baseURL as string;
+  const resolvedApiKey = apiKey as string;
+  const resolvedModel = model as string;
 
   // --- max output tokens ---
   const envMax = nonEmpty(env.COOPER_MAX_OUTPUT_TOKENS);
+  const configMax = settings.settings?.maxOutputTokens;
   const maxOutputTokens =
     envMax !== undefined
       ? positiveInt(envMax, DEFAULT_MAX_OUTPUT_TOKENS)
-      : (project?.maxOutputTokens ?? user?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
+      : (configMax ?? DEFAULT_MAX_OUTPUT_TOKENS);
   sources.maxOutputTokens =
-    envMax !== undefined ? "env" : project?.maxOutputTokens !== undefined ? "project" : user?.maxOutputTokens !== undefined ? "user" : "default";
+    envMax !== undefined
+      ? envSource("COOPER_MAX_OUTPUT_TOKENS")
+      : configMax !== undefined
+        ? "config"
+        : "default";
 
   // --- context budget ---
   const envWindow = nonEmpty(env.COOPER_CONTEXT_WINDOW);
-  const projectWindow = project?.context?.window;
-  const userWindow = user?.context?.window;
+  const configWindow = settings.settings?.context?.window;
   let window: number;
   let assumed: boolean;
   if (envWindow !== undefined) {
     window = positiveInt(envWindow, DEFAULT_CONTEXT_WINDOW);
     assumed = false;
-  } else if (projectWindow !== undefined || userWindow !== undefined) {
-    window = (projectWindow ?? userWindow) as number;
+  } else if (configWindow !== undefined) {
+    window = configWindow;
     assumed = false;
   } else {
-    const resolved = resolveContextWindow(model);
+    const resolved = resolveContextWindow(resolvedModel);
     window = resolved.window;
     assumed = resolved.assumed;
   }
   sources["context.window"] =
-    envWindow !== undefined ? "env" : projectWindow !== undefined ? "project" : userWindow !== undefined ? "user" : "default";
+    envWindow !== undefined
+      ? envSource("COOPER_CONTEXT_WINDOW")
+      : configWindow !== undefined
+        ? "config"
+        : "default";
 
   const envReserve = nonEmpty(env.COOPER_CONTEXT_RESERVE);
+  const configReserve = settings.settings?.context?.reserveOutputTokens;
   const reserveOutputTokens =
     envReserve !== undefined
       ? positiveInt(envReserve, 16_384)
-      : (project?.context?.reserveOutputTokens ??
-        user?.context?.reserveOutputTokens ??
-        16_384);
+      : (configReserve ?? 16_384);
   sources["context.reserveOutputTokens"] =
-    envReserve !== undefined ? "env" : project?.context?.reserveOutputTokens !== undefined ? "project" : user?.context?.reserveOutputTokens !== undefined ? "user" : "default";
+    envReserve !== undefined
+      ? envSource("COOPER_CONTEXT_RESERVE")
+      : configReserve !== undefined
+        ? "config"
+        : "default";
 
   const envCompact = envFlagValue(env.COOPER_CONTEXT_COMPACT);
-  const compact =
-    envCompact ?? project?.context?.compact ?? user?.context?.compact ?? true;
+  const configCompact = settings.settings?.context?.compact;
+  const compact = envCompact ?? configCompact ?? true;
   sources["context.compact"] =
-    envCompact !== undefined ? "env" : project?.context?.compact !== undefined ? "project" : user?.context?.compact !== undefined ? "user" : "default";
+    envCompact !== undefined
+      ? envSource("COOPER_CONTEXT_COMPACT")
+      : configCompact !== undefined
+        ? "config"
+        : "default";
 
   const envSummary = nonEmpty(env.COOPER_SUMMARY_MODEL);
-  const summaryModel =
-    envSummary ?? project?.context?.summaryModel ?? user?.context?.summaryModel ?? undefined;
+  const configSummary = settings.settings?.context?.summaryModel;
+  const summaryModel = envSummary ?? configSummary ?? undefined;
   sources["context.summaryModel"] =
-    envSummary !== undefined ? "env" : project?.context?.summaryModel !== undefined ? "project" : user?.context?.summaryModel !== undefined ? "user" : "default";
+    envSummary !== undefined
+      ? envSource("COOPER_SUMMARY_MODEL")
+      : configSummary !== undefined
+        ? "config"
+        : "default";
 
   const context: ContextSettings = {
     window,
@@ -311,24 +333,28 @@ export function loadConfig(
 
   // --- display ---
   const envShowReasoning = envFlagValue(env.COOPER_SHOW_REASONING);
-  const showReasoning =
-    envShowReasoning ?? project?.showReasoning ?? user?.showReasoning ?? false;
+  const configShowReasoning = settings.settings?.showReasoning;
+  const showReasoning = envShowReasoning ?? configShowReasoning ?? false;
   sources.showReasoning =
-    envShowReasoning !== undefined ? "env" : project?.showReasoning !== undefined ? "project" : user?.showReasoning !== undefined ? "user" : "default";
+    envShowReasoning !== undefined
+      ? envSource("COOPER_SHOW_REASONING")
+      : configShowReasoning !== undefined
+        ? "config"
+        : "default";
 
   return {
-    provider,
-    apiKey,
+    protocol: resolvedProtocol,
+    apiKey: resolvedApiKey,
     apiKeyVariable,
-    baseURL,
-    model,
+    baseURL: resolvedBaseURL,
+    model: resolvedModel,
     maxOutputTokens,
     context,
     contextWindowAssumed: assumed,
     showReasoning,
-    defaultMode: project?.mode ?? user?.mode,
+    defaultMode: settings.settings?.mode,
     sources,
     settingsWarnings: settings.warnings,
-    settingsFiles: { user: settings.userFile, project: settings.projectFile },
+    settingsFile: settings.file,
   };
 }

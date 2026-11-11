@@ -17,10 +17,10 @@ import type { Config } from "../src/config.js";
 import { runHeadless } from "../src/headless.js";
 
 const config: Config = {
-  provider: "openai",
+  protocol: "openai-chat",
   apiKey: "test-key",
   apiKeyVariable: "COOPER_API_KEY",
-  baseURL: undefined,
+  baseURL: "https://api.openai.com/v1",
   model: "test-model",
   maxOutputTokens: 64_000,
   context: { window: 200_000 },
@@ -29,7 +29,7 @@ const config: Config = {
   defaultMode: undefined,
   sources: {},
   settingsWarnings: [],
-  settingsFiles: { user: null, project: null },
+  settingsFile: null,
 };
 
 const noInstructions: LoadedInstructions = { text: "", sources: [] };

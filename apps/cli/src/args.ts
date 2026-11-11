@@ -3,8 +3,10 @@ import type { ApprovalMode } from "./config.js";
 export type ParsedArgs = {
   /** Explicit --mode. undefined means "fall back to COOPER_MODE, then ask". */
   mode: ApprovalMode | undefined;
-  /** Explicit --model. undefined means "fall back to env, then settings files". */
+  /** Explicit --model. undefined means "fall back to env, then config.json". */
   model: string | undefined;
+  /** Explicit --env-file: a file whose values override the ambient env. */
+  envFile: string | null;
   /** Workspace directory. undefined means "the launch directory". */
   cwd: string | undefined;
   /** Prompt for a non-interactive run. "-" means read stdin. null starts the TUI. */
@@ -48,6 +50,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     mode: undefined,
     model: undefined,
+    envFile: null,
     cwd: undefined,
     prompt: null,
     showReasoning: false,
@@ -111,6 +114,19 @@ export function parseArgs(argv: string[]): ParsedArgs {
         }
         if (value.trim() === "") throw new Error("--model requires a name.");
         parsed.model = value;
+        break;
+      }
+
+      case "--env-file": {
+        let value = inline;
+        if (value === undefined) {
+          value = takeValue(index, name);
+          index += 1;
+        }
+        if (value.trim() === "") {
+          throw new Error("--env-file requires a file path.");
+        }
+        parsed.envFile = value;
         break;
       }
 

@@ -337,6 +337,9 @@ export function App({
       `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set COOPER_CONTEXT_WINDOW to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
       `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
       `${mcpLine}\n` +
+      (config.settingsFile === null
+        ? "No config file yet — /status shows effective settings; setup writes ~/.cooper/config.json.\n"
+        : "") +
       sessionText
     );
   };

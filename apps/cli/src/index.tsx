@@ -20,14 +20,20 @@ import {
   type ParsedArgs,
 } from "./args.js";
 import {
+  IncompleteConfigError,
+  applyEnvFile,
   loadConfig,
-  loadEnvFiles,
   type ApprovalMode,
   type Config,
 } from "./config.js";
 import { runHeadless } from "./headless.js";
 import { prepareTools, type PreparedTools } from "./mcp.js";
+import {
+  runOnboarding,
+  writeOnboardingConfig,
+} from "./onboarding.js";
 import { createProvider } from "./provider.js";
+import { userConfigFile } from "./settings.js";
 
 const HELP = `Cooper — a terminal coding agent
 
@@ -38,7 +44,8 @@ Usage:
 
 Options:
   -m, --mode <mode>   ask (default) | auto | plan
-      --model <name>  model for this run (overrides env and config files)
+      --model <name>  model for this run (overrides env and config)
+      --env-file <f>  load env vars from <f>; overrides the ambient env
   -C, --cwd <dir>     workspace directory (default: current directory)
   -p, --print [text]  non-interactive; omit text or use "-" for stdin
   -r, --resume <id>   continue a saved session
@@ -59,22 +66,24 @@ Modes:
   With -p nobody can answer an approval prompt, so ask denies writes and
   commands; pass --mode auto for unattended edits.
 
-Environment:
-  COOPER_PROVIDER   openai (default) | anthropic
-  COOPER_API_KEY    API key (falls back to OPENAI_API_KEY / ANTHROPIC_API_KEY)
-  COOPER_BASE_URL   Endpoint override (provider-specific env wins)
-  COOPER_MODEL      Model name (default: gpt-4o-mini or claude-opus-5-5)
-  COOPER_MAX_OUTPUT_TOKENS
-                    Anthropic max_tokens (default 64000)
-  COOPER_MODE       Default approval mode (flag wins)
-  COOPER_SHOW_REASONING
-                    Set to 1 to show reasoning summaries by default
-  COOPER_HOME       Data directory (default: ~/.cooper)
+Configuration:
+  Everything lives in ~/.cooper/config.json (protocol, model, context, and
+  an "env" object for COOPER_API_KEY / COOPER_BASE_URL). Precedence per key:
+  --env-file > environment > config.json > defaults. model has no default —
+  it must come from --model, COOPER_MODEL, or config.json. No workspace files
+  are read. Run cooper interactively once to be guided through setup.
 
-.env is read from the workspace, then from the directory next to Cooper.
-Long-term preferences live in ~/.cooper/config.json (and optionally
-<workspace>/.cooper/config.json); .env holds API keys. Precedence per key:
-flag > env > project config > user config > defaults.
+Environment:
+  COOPER_API_KEY     API key (or set it under "env" in config.json)
+  COOPER_PROTOCOL    openai-chat (default) | anthropic-messages
+  COOPER_BASE_URL    Endpoint URL (required; no silent default)
+  COOPER_MODEL       Model name (required; no built-in default)
+  COOPER_MAX_OUTPUT_TOKENS
+                     Anthropic max_tokens (default 64000)
+  COOPER_MODE        Default approval mode (flag wins)
+  COOPER_SHOW_REASONING
+                     Set to 1 to show reasoning summaries by default
+
 Sessions are saved by default; use --no-session to keep a run ephemeral.
 `;
 
@@ -161,8 +170,35 @@ async function main(): Promise<void> {
   let session: SessionWriter | null = null;
   let resumed: LoadedSession | null = null;
   try {
-    loadEnvFiles();
-    config = loadConfig({ root, overrides: { model: args.model } });
+    // --env-file is an explicit per-run override: it wins over the ambient
+    // environment, so apply it before any config resolution reads env.
+    if (args.envFile !== null) applyEnvFile(args.envFile);
+
+    // Any missing required field (protocol/model/baseURL/apiKey) + interactive
+    // TUI is the one entry point into onboarding; headless and every other
+    // config error fail closed as before.
+    try {
+      config = loadConfig({ overrides: { model: args.model } });
+    } catch (error) {
+      const interactiveTui =
+        error instanceof IncompleteConfigError &&
+        args.prompt === null &&
+        process.stdin.isTTY === true &&
+        process.stdout.isTTY === true;
+      if (!interactiveTui) throw error;
+
+      const result = await runOnboarding();
+      if (result === null) {
+        fail(
+          `Setup cancelled. Set protocol, model, baseURL, and ` +
+            `COOPER_API_KEY in ${userConfigFile()} (or the environment), ` +
+            `then run cooper again.`,
+        );
+      }
+      writeOnboardingConfig(undefined, result);
+      config = loadConfig({ overrides: { model: args.model } });
+    }
+
     for (const warning of config.settingsWarnings) {
       console.error(`warning: ${warning}`);
     }

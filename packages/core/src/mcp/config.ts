@@ -25,7 +25,7 @@ export type McpServerConfig =
 export type LoadMcpConfigOptions = {
   /** Workspace root, used for the project config and relative explicit paths. */
   root: string;
-  /** Overrides `COOPER_HOME`. */
+  /** Overrides the `cooperHome()` anchor; tests only. */
   home?: string;
   /** Explicit config files (repeatable CLI flag). Missing files are errors. */
   explicit?: string[];
@@ -175,8 +175,8 @@ function parseFile(file: string): ParseResult {
  */
 export function loadMcpConfig(options: LoadMcpConfigOptions): LoadedMcpConfig {
   const root = path.resolve(options.root);
-  // `cooperHome()` already resolves to `~/.cooper` (or `$COOPER_HOME`), so the
-  // user config is directly inside it.
+  // `cooperHome()` is the fixed `~/.cooper` anchor, so the user config sits
+  // directly inside it.
   const home = options.home ?? cooperHome();
   const userFile = path.join(home, "mcp.json");
   const projectFile = path.join(root, ".cooper", "mcp.json");

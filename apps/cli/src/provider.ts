@@ -7,7 +7,7 @@ import type { Config } from "./config.js";
 
 /** Builds the provider once per run; every surface shares the result. */
 export function createProvider(config: Config): Provider {
-  if (config.provider === "anthropic") {
+  if (config.protocol === "anthropic-messages") {
     return new AnthropicProvider({
       apiKey: config.apiKey,
       baseURL: config.baseURL,

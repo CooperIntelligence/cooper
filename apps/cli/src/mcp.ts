@@ -29,6 +29,8 @@ export async function prepareTools(options: {
   root: string;
   explicit: string[];
   loadProject: boolean;
+  /** Overrides the `cooperHome()` anchor; tests only. */
+  home?: string;
 }): Promise<PreparedTools> {
   const config = loadMcpConfig(options);
   const base: McpReport = {

@@ -228,10 +228,10 @@ export function formatStatus(options: {
         return "flag";
       case "env":
         return "env";
-      case "project":
-        return "project file";
-      case "user":
-        return "user file";
+      case "config-env":
+        return "config env";
+      case "config":
+        return "config file";
       default:
         return "default";
     }
@@ -246,11 +246,11 @@ export function formatStatus(options: {
   };
 
   const entries: [name: string, value: string, source: string][] = [
-    ["provider", config.provider, configSourceLabel(config.sources.provider)],
+    ["protocol", config.protocol, configSourceLabel(config.sources.protocol)],
     ["model", config.model, configSourceLabel(config.sources.model)],
     [
       "baseURL",
-      config.baseURL ?? "(provider default)",
+      config.baseURL,
       configSourceLabel(config.sources.baseURL),
     ],
     // Never the key itself — only which variable supplied it.
@@ -301,15 +301,9 @@ export function formatStatus(options: {
     lines.push(`  ${name.padEnd(nameWidth)}  ${value.padEnd(valueWidth)}  ${source}`);
   }
 
-  const files = [
-    config.settingsFiles.user !== null
-      ? `user: ${config.settingsFiles.user}`
-      : null,
-    config.settingsFiles.project !== null
-      ? `project: ${config.settingsFiles.project}`
-      : null,
-  ].filter((file): file is string => file !== null);
-  lines.push(`Settings files: ${files.length > 0 ? files.join(" · ") : "none"}`);
+  lines.push(
+    `Settings file: ${config.settingsFile ?? "none (built-in defaults)"}`,
+  );
   for (const warning of config.settingsWarnings) {
     lines.push(`Warning: ${warning}`);
   }

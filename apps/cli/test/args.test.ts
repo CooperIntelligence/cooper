@@ -9,6 +9,8 @@ describe("parseArgs", () => {
   it("defaults to the interactive TUI", () => {
     expect(parseArgs([])).toEqual({
       mode: undefined,
+      model: undefined,
+      envFile: null,
       cwd: undefined,
       prompt: null,
       showReasoning: false,
@@ -134,6 +136,19 @@ describe("--model", () => {
   it("rejects an empty model", () => {
     expect(() => parseArgs(["--model"])).toThrow(/requires a value/);
     expect(() => parseArgs(["--model", ""])).toThrow(/requires a name/);
+  });
+});
+
+describe("--env-file", () => {
+  it("parses a file path", () => {
+    expect(parseArgs(["--env-file", "run.env"]).envFile).toBe("run.env");
+    expect(parseArgs(["--env-file=run.env"]).envFile).toBe("run.env");
+    expect(parseArgs([]).envFile).toBeNull();
+  });
+
+  it("rejects a missing value", () => {
+    expect(() => parseArgs(["--env-file"])).toThrow(/requires a value/);
+    expect(() => parseArgs(["--env-file", ""])).toThrow(/requires a file path/);
   });
 });
 
