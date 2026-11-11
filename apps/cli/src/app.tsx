@@ -36,6 +36,7 @@ import {
   type ParsedCommand,
 } from "./commands.js";
 import { buildPreviewRows } from "./preview.js";
+import { createMarkdownFormatter, type MarkdownLine } from "./markdown.js";
 import type { ModeResolution } from "./args.js";
 import type { ApprovalMode, Config } from "./config.js";
 import type { McpReport } from "./mcp.js";
@@ -73,7 +74,44 @@ function previewLines(text: string, maxLines = 6): string[] {
   return shown;
 }
 
-function ItemRow({ item }: { item: UiItem }) {
+function ReplyLine({ line, live }: { line: MarkdownLine; live: boolean }) {
+  if (line.kind === "code-label") {
+    return <Text dimColor wrap="truncate-end">{line.text}</Text>;
+  }
+  if (line.kind === "code") {
+    return <Text>{line.text || " "}</Text>;
+  }
+
+  const text = (
+    <Text
+      bold={line.kind === "heading"}
+      color={line.kind === "heading" ? "cyan" : undefined}
+      wrap={live ? "truncate-end" : "wrap"}
+    >
+      {line.spans.length === 0
+        ? " "
+        : line.spans.map((span, index) => (
+            <Text
+              key={index}
+              bold={span.bold}
+              italic={span.italic}
+              color={span.code ? "cyan" : undefined}
+            >
+              {span.text}
+            </Text>
+          ))}
+    </Text>
+  );
+  if (line.kind !== "list") return text;
+  return (
+    <Box>
+      <Text>{line.prefix}</Text>
+      <Box flexShrink={1}>{text}</Box>
+    </Box>
+  );
+}
+
+function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
   if (item.kind === "user") {
     return (
       <Box marginTop={1}>
@@ -93,7 +131,7 @@ function ItemRow({ item }: { item: UiItem }) {
             Cooper
           </Text>
         ) : null}
-        <Text wrap="wrap">{item.text.length > 0 ? item.text : " "}</Text>
+        <ReplyLine line={item.line} live={live} />
       </Box>
     );
   }
@@ -847,17 +885,20 @@ export function App({
     let lineStarted = false;
     let liveLineId: number | null = null;
     let sawText = false;
+    let formatLine = createMarkdownFormatter();
 
     // Reasoning is display-only: it never enters the conversation history.
     let reasoningBuffer = "";
     let reasoningChars = 0;
     let lastHintAt = 0;
 
-    const commitLine = (line: string) => {
+    const commitLine = (text: string) => {
+      const line = formatLine(text);
+      if (line === null) return;
       push({
         id: nextId.current++,
         kind: "assistant-line",
-        text: line,
+        line,
         first: !lineStarted,
       });
       lineStarted = true;
@@ -879,7 +920,7 @@ export function App({
       setLive({
         id: liveLineId,
         kind: "assistant-line",
-        text: preview,
+        line: { kind: "text", spans: [{ text: preview }] },
         first: !lineStarted,
       });
     };
@@ -909,6 +950,7 @@ export function App({
       liveLineId = null;
       lineStarted = false;
       sawText = false;
+      formatLine = createMarkdownFormatter();
     };
 
     const showLiveReasoning = () => {
@@ -1073,7 +1115,7 @@ export function App({
       resolveApproval("deny");
       setLive(null);
       if (controller.signal.aborted) {
-        if (lineBuffer.trim().length > 0) {
+        if (lineBuffer.length > 0) {
           commitLine(lineBuffer);
         }
         push({
@@ -1118,7 +1160,7 @@ export function App({
         </Box>
       ) : null}
 
-      {live ? <ItemRow item={live} /> : null}
+      {live ? <ItemRow item={live} live /> : null}
       {pendingApproval ? <ApprovalPanel request={pendingApproval} /> : null}
 
       <Box marginTop={1}>

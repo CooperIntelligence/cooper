@@ -3,6 +3,7 @@ import {
   toolCallIndex,
   type LoadedSession,
 } from "@cooper/core";
+import { createMarkdownFormatter } from "./markdown.js";
 import { splitContent } from "./stream-lines.js";
 import type { ToolStatus, UiItem } from "./ui-types.js";
 
@@ -56,14 +57,19 @@ export function buildResumeView(
 
     if (message.role === "assistant") {
       if (message.content.length === 0) continue;
-      splitContent(message.content).forEach((line, lineIndex) => {
+      const formatLine = createMarkdownFormatter();
+      let first = true;
+      for (const text of splitContent(message.content)) {
+        const line = formatLine(text);
+        if (line === null) continue;
         items.push({
           id: id++,
           kind: "assistant-line",
-          text: line,
-          first: lineIndex === 0,
+          line,
+          first,
         });
-      });
+        first = false;
+      }
       continue;
     }
 
