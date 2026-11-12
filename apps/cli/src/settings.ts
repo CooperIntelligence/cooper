@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { commandShellKinds, cooperHome } from "@cooper/core";
@@ -54,6 +55,12 @@ export type LoadedSettings = {
   warnings: string[];
 };
 
+export type SettingsDocument = {
+  file: string;
+  contents: string | null;
+  raw: Record<string, unknown>;
+};
+
 /** `config.json` under `home`; tests pass their own directory. */
 export function userConfigFile(home: string = cooperHome()): string {
   return path.join(home, "config.json");
@@ -94,27 +101,36 @@ function formatIssues(file: string, error: z.ZodError): string {
   return `Invalid settings in ${file}: ${detail}`;
 }
 
-function loadLayer(file: string): { settings: Settings; warnings: string[] } | null {
-  let text: string;
+function readContents(file: string): string | null {
   try {
-    text = fs.readFileSync(file, "utf8");
+    return fs.readFileSync(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+export function readSettingsDocument(home?: string): SettingsDocument {
+  const file = userConfigFile(home);
+  const contents = readContents(file);
+  if (contents === null) return { file, contents, raw: {} };
 
   let raw: unknown;
   try {
     // Strip a BOM so a Windows-saved file still parses.
-    raw = JSON.parse(text.replace(/^\uFEFF/, ""));
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid JSON in ${file}: ${detail}`);
+    raw = JSON.parse(contents.replace(/^\uFEFF/, ""));
+  } catch {
+    // A parser error can quote the file contents, including credentials.
+    throw new Error(`Invalid JSON in ${file}. Check the file's JSON syntax.`);
   }
   if (!isPlainObject(raw)) {
     throw new Error(`Invalid settings in ${file}: expected a JSON object.`);
   }
+  return { file, contents, raw };
+}
 
+export function parseSettings(values: Record<string, unknown>, file: string): LoadedSettings {
+  const raw = { ...values };
   const warnings: string[] = [];
 
   if (Object.hasOwn(raw, "env")) {
@@ -150,7 +166,7 @@ function loadLayer(file: string): { settings: Settings; warnings: string[] } | n
 
   const parsed = settingsSchema.safeParse(raw);
   if (!parsed.success) throw new Error(formatIssues(file, parsed.error));
-  return { settings: parsed.data, warnings };
+  return { settings: parsed.data, file, warnings };
 }
 
 /**
@@ -160,11 +176,40 @@ function loadLayer(file: string): { settings: Settings; warnings: string[] } | n
 export function loadSettings(
   options: { home?: string } = {},
 ): LoadedSettings {
-  const file = userConfigFile(options.home);
-  const layer = loadLayer(file);
-  return {
-    settings: layer?.settings ?? null,
-    file: layer !== null ? file : null,
-    warnings: layer?.warnings ?? [],
-  };
+  const { file, contents, raw } = readSettingsDocument(options.home);
+  return contents === null
+    ? { settings: null, file: null, warnings: [] }
+    : parseSettings(raw, file);
+}
+
+/** Replace the file after flushing the new contents and checking for concurrent edits. */
+export function writeSettingsDocument(
+  document: SettingsDocument,
+  values: Record<string, unknown>,
+): string {
+  const { file, contents } = document;
+  const directory = path.dirname(file);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const temporary = path.join(directory, `.config-${randomUUID()}.tmp`);
+  const descriptor = fs.openSync(temporary, "wx", 0o600);
+  try {
+    try {
+      fs.writeFileSync(descriptor, `${JSON.stringify(values, null, 2)}\n`);
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    if (readContents(file) !== contents) {
+      throw new Error("config.json changed. Reopen the configuration editor and try again.");
+    }
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {
+      // Preserve the original write or rename error.
+    }
+    throw error;
+  }
+  return file;
 }

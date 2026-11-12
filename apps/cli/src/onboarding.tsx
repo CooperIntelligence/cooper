@@ -1,12 +1,9 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import React, { useEffect, useState } from "react";
 import { Box, Text, render, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { resolveContextWindow } from "@cooper/core";
 import type { ProtocolKind } from "./config.js";
-import { userConfigFile } from "./settings.js";
+import { readSettingsDocument, userConfigFile, writeSettingsDocument } from "./settings.js";
 
 /**
  * First-run setup: shown when any of protocol/model/baseURL/apiKey is
@@ -125,46 +122,14 @@ export function writeOnboardingConfig(
   home: string | undefined,
   result: OnboardingResult,
 ): string {
-  const file = userConfigFile(home);
-  const directory = path.dirname(file);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-
-  let existing: unknown = null;
+  let document;
   try {
-    existing = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    document = readSettingsDocument(home);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    // Missing file starts fresh; malformed JSON is the user's to fix —
-    // do not silently overwrite a config we could not read.
-    if (code !== "ENOENT") {
-      throw new Error(
-        `Refusing to overwrite unreadable settings at ${file}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Refusing to overwrite unreadable settings. ${detail}`);
   }
-
-  const merged = mergeOnboardingConfig(existing, result);
-  const temporary = path.join(directory, `.config-${randomUUID()}.tmp`);
-  const descriptor = fs.openSync(temporary, "wx", 0o600);
-  try {
-    try {
-      fs.writeFileSync(descriptor, `${JSON.stringify(merged, null, 2)}\n`);
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
-    fs.renameSync(temporary, file);
-  } catch (error) {
-    try {
-      fs.unlinkSync(temporary);
-    } catch {
-      // Preserve the original write or rename error.
-    }
-    throw error;
-  }
-  return file;
+  return writeSettingsDocument(document, mergeOnboardingConfig(document.raw, result));
 }
 
 type Step =

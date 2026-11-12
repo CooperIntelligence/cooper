@@ -84,7 +84,11 @@ OpenAI 兼容端点通过 `baseURL` 指定，例如：
 
 TUI 和 headless 都从 **`~/.cooper/config.json`** 读取 provider 配置。旧版的环境变量、`env` 对象、`--env-file` 和 `--model` 已移除。工作区的 `.env` 和 provider 配置文件不会被加载。
 
-`/status` 显示生效值和来源，密钥只显示是否已设置。
+在 TUI 空闲时输入 `/config`，用 ↑/↓ 浏览字段，按 Enter 编辑，再按 Enter 暂存该字段。回到字段浏览时按 Ctrl+S 保存到 `~/.cooper/config.json` 并立即应用，或按 Esc 放弃草稿。可以用 `/config model` 或 `/config apiKey` 直接跳到指定字段，API 密钥输入有遮罩。
+
+下一轮会沿用当前会话历史，并使用新的模型连接、上下文设置、推理显示和命令 shell。切换端点后，会话历史会随下一轮请求发送到新端点。校验或保存失败时，Cooper 会继续使用上一份配置。用其他工具编辑文件后，可以执行 `/reload` 应用。
+
+`/status` 显示生效值和来源，密钥只显示是否已设置。`mode` 是启动默认值，当前模式可用 `/plan`、`/ask` 或 `/auto` 切换。启动参数 `--show-reasoning` 仍优先。
 
 配置文件示例（JSON，严格校验；未知字段告警并忽略，JSON 损坏直接报错）：
 
@@ -222,6 +226,8 @@ TUI 空闲时可以直接切换：
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
 | `/status` | — | 显示当前上下文占用率、生效配置及其来源 |
+| `/config [setting]` | — | 在 TUI 内编辑、保存并应用用户配置 |
+| `/reload` | — | 重新读取用户配置，应用于后续对话 |
 | `/exit` | — | 退出 TUI |
 
 输入以 `/` 开头时，输入框上方会浮出注册表候选（前缀匹配，含别名）：

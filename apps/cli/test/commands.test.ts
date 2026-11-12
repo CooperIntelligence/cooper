@@ -69,7 +69,7 @@ describe("parseCommand", () => {
   });
 
   it("parses the first batch of operational commands", () => {
-    for (const name of ["clear", "compact", "sessions", "resume", "mcp", "tools", "exit"] as const) {
+    for (const name of ["clear", "compact", "sessions", "resume", "mcp", "tools", "config", "reload", "exit"] as const) {
       expect(parseCommand(`/${name}`)).toEqual({
         kind: "command",
         name,
@@ -137,10 +137,11 @@ describe("filterCommands", () => {
   });
 
   it("matches name and alias prefixes case-insensitively", () => {
-    // `/re` hits `resume` by name and `clear` by its alias `reset`.
+    // `/re` matches `resume`, `reload`, and the `reset` alias for `clear`.
     expect(filterCommands("/re").map((spec) => spec.name)).toEqual([
       "clear",
       "resume",
+      "reload",
     ]);
     expect(filterCommands("/resu").map((spec) => spec.name)).toEqual([
       "resume",
@@ -158,6 +159,7 @@ describe("filterCommands", () => {
     expect(filterCommands("/c").map((spec) => spec.name)).toEqual([
       "clear",
       "compact",
+      "config",
     ]);
     expect(filterCommands("/s").map((spec) => spec.name)).toEqual([
       "sessions",

@@ -5,8 +5,11 @@ import {
 } from "@cooper/core";
 import type { Config } from "./config.js";
 
-/** Builds the provider once per run; every surface shares the result. */
-export function createProvider(config: Config): Provider {
+/** Builds the adapter for the effective provider settings. */
+export function createProvider(
+  config: Config,
+  options: { allowLegacyThinking?: boolean } = {},
+): Provider {
   // The SDKs can read ambient options such as custom authorization headers
   // even when an explicit endpoint and API key are supplied. Isolate their
   // synchronous constructors without changing the environment of tools.
@@ -21,6 +24,7 @@ export function createProvider(config: Config): Provider {
         apiKey: config.apiKey,
         baseURL: config.baseURL,
         maxTokens: config.maxOutputTokens,
+        allowLegacyThinking: options.allowLegacyThinking,
       });
     }
     return new OpenAICompatibleProvider({

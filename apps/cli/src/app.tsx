@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Box, Static, Text, useApp, useInput } from "ink";
+import { Box, Static, Text, useApp, useInput, useWindowSize } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import {
   PermissionPolicy,
   SessionWriter,
+  createRunCommandTool,
   estimateContextTokens,
   listSessions,
   permissionModeNotice,
@@ -35,12 +36,15 @@ import {
   parseCommand,
   type ParsedCommand,
 } from "./commands.js";
-import { buildPreviewRows } from "./preview.js";
+import { buildPreviewRows, MAX_PREVIEW_ROWS } from "./preview.js";
 import { createMarkdownFormatter, type MarkdownLine } from "./markdown.js";
 import type { ModeResolution } from "./args.js";
-import type { ApprovalMode, Config } from "./config.js";
+import { loadConfig, resolveConfig, type ApprovalMode, type Config } from "./config.js";
+import { ConfigEditor, configFieldIndex } from "./config-editor.js";
 import type { McpReport } from "./mcp.js";
+import { createProvider } from "./provider.js";
 import { buildResumeView } from "./session-view.js";
+import { parseSettings, readSettingsDocument, writeSettingsDocument, type SettingsDocument } from "./settings.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 import type { UiItem } from "./ui-types.js";
@@ -196,8 +200,13 @@ function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
 }
 
 export function ApprovalPanel({ request }: { request: ApprovalRequest }) {
+  const { rows } = useWindowSize();
   const preview = request.preview;
-  const diff = preview?.kind === "diff" ? buildPreviewRows(preview) : null;
+  // Reserve the panel's borders, header, summary, path, overflow count,
+  // approval keys, and the cursor row before allocating rows to the diff.
+  const maxDiffRows = Math.max(0, Math.min(MAX_PREVIEW_ROWS, rows - 11));
+  const diff = preview?.kind === "diff" ? buildPreviewRows(preview, maxDiffRows) : null;
+  const summary = diff === null ? request.summary : request.summary.split(/\r?\n/, 1)[0];
 
   return (
     <Box
@@ -207,14 +216,14 @@ export function ApprovalPanel({ request }: { request: ApprovalRequest }) {
       borderColor="yellow"
       paddingX={1}
     >
-      <Text bold color="yellow">
+      <Text bold color="yellow" wrap="truncate-end">
         Approve {request.toolName}?
       </Text>
-      <Text wrap="wrap">{request.summary}</Text>
+      <Text wrap={diff === null ? "wrap" : "truncate-end"}>{summary}</Text>
 
       {preview?.kind === "diff" && diff !== null ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>
+          <Text dimColor wrap="truncate-end">
             {preview.path} · +{diff.added} −{diff.removed}
           </Text>
           {diff.rows.length > 0 ? (
@@ -235,9 +244,9 @@ export function ApprovalPanel({ request }: { request: ApprovalRequest }) {
                 {row.text}
               </Text>
             ))
-          ) : (
+          ) : diff.hidden === 0 ? (
             <Text dimColor>No changes.</Text>
-          )}
+          ) : null}
           {diff.hidden > 0 ? (
             <Text dimColor>… {diff.hidden} more line(s)</Text>
           ) : null}
@@ -245,8 +254,8 @@ export function ApprovalPanel({ request }: { request: ApprovalRequest }) {
       ) : null}
 
       <Box marginTop={1}>
-        <Text dimColor>
-          y allow once · a always allow {request.toolName} · n / esc deny
+        <Text dimColor wrap="truncate-end">
+          y allow once · a always allow this tool · n / esc deny
         </Text>
       </Box>
     </Box>
@@ -261,14 +270,14 @@ export function ApprovalPanel({ request }: { request: ApprovalRequest }) {
  * fullscreen-clear path and stamping duplicated copies into scrollback.
  */
 export function App({
-  config,
+  config: initialConfig,
   root,
   mode,
   modeSource,
   instructions,
-  showReasoning,
-  provider,
-  tools,
+  showReasoningFlag,
+  provider: initialProvider,
+  tools: initialTools,
   mcp,
   modeNotice,
   session,
@@ -280,8 +289,8 @@ export function App({
   /** Where the startup mode came from (flag/env/session/config/default). */
   modeSource: ModeResolution["source"];
   instructions: LoadedInstructions;
-  showReasoning: boolean;
-  /** Built once by the entry point so every surface uses the same adapter. */
+  showReasoningFlag: boolean;
+  /** Provider created by the entry point from the initial configuration. */
   provider: Provider;
   /** Built-in tools plus any connected MCP tools. */
   tools: Tool[];
@@ -295,6 +304,12 @@ export function App({
   resumed: LoadedSession | null;
 }) {
   const { exit } = useApp();
+  const active = useRef({
+    config: initialConfig,
+    provider: initialProvider,
+    tools: initialTools,
+  });
+  const [configEdit, setConfigEdit] = useState<{ document: SettingsDocument; field: number } | null>(null);
   // The TUI is interactive by definition; the policy is the single source of
   // the permission decisions. Its preset changes at runtime, but the system
   // prompt deliberately stays mode-neutral.
@@ -352,6 +367,7 @@ export function App({
   // Server tools are `mcp__<server>__<tool>`; Cooper's shared resource
   // tools are `mcp_*`, so both belong in the MCP count.
   const buildBannerText = (sessionText: string): string => {
+    const { config, tools } = active.current;
     const mcpToolCount = tools.filter((tool) =>
       tool.name.startsWith("mcp_"),
     ).length;
@@ -495,6 +511,69 @@ export function App({
     pushCommitted({ id: nextId.current++, kind: "notice", tone, text });
   };
 
+  const prepareConfig = (config: Config) => {
+    const current = active.current;
+    const provider = config.protocol === current.config.protocol &&
+      config.baseURL === current.config.baseURL &&
+      config.apiKey === current.config.apiKey &&
+      config.model === current.config.model &&
+      config.maxOutputTokens === current.config.maxOutputTokens
+      ? current.provider
+      : createProvider(config, { allowLegacyThinking: false });
+    const commandTool = createRunCommandTool(config.shell);
+    const tools = current.tools.map((tool) =>
+      tool.name === commandTool.name ? commandTool : tool,
+    );
+    return { config, provider, tools };
+  };
+
+  const reportConfig = (config: Config, action: string) => {
+    notice(`Configuration ${action} · ${config.model} (${config.protocol})`);
+    for (const warning of config.settingsWarnings) notice(`Warning: ${warning}`);
+  };
+
+  const reloadConfig = () => {
+    try {
+      const config = loadConfig({ showReasoning: showReasoningFlag });
+      active.current = prepareConfig(config);
+      reportConfig(config, "reloaded");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      notice(`Could not reload configuration. Still using the previous settings. ${detail}`, "error");
+    }
+  };
+
+  const openConfig = (name: string) => {
+    const field = configFieldIndex(name);
+    if (field < 0) {
+      notice("Unknown setting. Run /config to browse editable settings.", "error");
+      return;
+    }
+    try {
+      setConfigEdit({ document: readSettingsDocument(), field });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      notice(`Could not open configuration. ${detail}`, "error");
+    }
+  };
+
+  const saveConfig = (values: Record<string, unknown>) => {
+    if (configEdit === null) return;
+    const { document } = configEdit;
+    try {
+      const settings = parseSettings(values, document.file);
+      const config = resolveConfig(settings, { showReasoning: showReasoningFlag });
+      const next = prepareConfig(config);
+      writeSettingsDocument(document, values);
+      active.current = next;
+      setConfigEdit(null);
+      reportConfig(config, "saved and applied");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      notice(`Could not save configuration. ${detail}`, "error");
+    }
+  };
+
   /**
    * /clear (aliases /new, /reset): a new conversation, not a truncated one.
    * The old session file is left intact for --sessions / --resume; only the
@@ -504,7 +583,7 @@ export function App({
     let writer: SessionWriter | null = null;
     if (sessionsEnabled) {
       try {
-        writer = SessionWriter.create({ cwd: root, model: config.model });
+        writer = SessionWriter.create({ cwd: root, model: active.current.config.model });
       } catch (error) {
         notice(
           `Could not start a new session: ${error instanceof Error ? error.message : String(error)}`,
@@ -640,6 +719,7 @@ export function App({
   };
 
   const compactNow = async () => {
+    const { config, provider, tools } = active.current;
     const contextConfig = resolveContextConfig(config.context);
     if (!contextConfig.enabled) {
       notice("Context compaction is off (context.compact is false).");
@@ -745,9 +825,10 @@ export function App({
         notice(formatMcp(mcp));
         return;
       case "tools":
-        notice(formatTools(tools));
+        notice(formatTools(active.current.tools));
         return;
-      case "status":
+      case "status": {
+        const { config, tools } = active.current;
         notice(
           formatStatus({
             config,
@@ -756,6 +837,13 @@ export function App({
             contextTokens: estimateContextTokens(history.current, tools.map(toToolSpec)),
           }),
         );
+        return;
+      }
+      case "reload":
+        reloadConfig();
+        return;
+      case "config":
+        openConfig(command.args);
         return;
       case "exit":
         exit();
@@ -785,6 +873,7 @@ export function App({
   };
 
   useInput((inputChar, key) => {
+    if (configEdit !== null) return;
     if (approvalResolver.current) {
       if (key.ctrl && inputChar === "c") {
         abortRef.current?.abort();
@@ -845,6 +934,7 @@ export function App({
   });
 
   const submit = async (value: string) => {
+    if (configEdit !== null) return;
     const parsed = parseCommand(value);
     if (parsed.kind !== "prompt") {
       setInput("");
@@ -863,6 +953,8 @@ export function App({
 
     const text = parsed.text.trim();
     if (!text || busyRef.current) return;
+    const { config, provider, tools } = active.current;
+    const { showReasoning } = config;
 
     // Guards against a second submit landing before React re-renders and
     // unmounts the input (e.g. Enter key repeat).
@@ -1152,7 +1244,7 @@ export function App({
         {(item) => <ItemRow key={item.id} item={item} />}
       </Static>
 
-      {liveReasoning !== null ? (
+      {liveReasoning !== null && !pendingApproval ? (
         <Box>
           <Text color="gray" dimColor wrap="truncate-end">
             {`· ${liveReasoning}`}
@@ -1160,11 +1252,18 @@ export function App({
         </Box>
       ) : null}
 
-      {live ? <ItemRow item={live} live /> : null}
-      {pendingApproval ? <ApprovalPanel request={pendingApproval} /> : null}
-
-      <Box marginTop={1}>
-        {busy ? (
+      {live && !pendingApproval ? <ItemRow item={live} live /> : null}
+      <Box marginTop={pendingApproval ? 0 : 1}>
+        {pendingApproval ? (
+          <ApprovalPanel request={pendingApproval} />
+        ) : configEdit !== null ? (
+          <ConfigEditor
+            initial={configEdit.document.raw}
+            initialIndex={configEdit.field}
+            onSave={saveConfig}
+            onCancel={() => setConfigEdit(null)}
+          />
+        ) : busy ? (
           <Text>
             <Text color="yellow">
               <Spinner type="dots" />
