@@ -48,6 +48,11 @@ export function estimateMessageTokens(message: Message): number {
         estimateTextTokens(call.arguments);
     }
   }
+  // Continuation payloads are resent on every request and billed as input
+  // tokens. Encrypted/signed blocks are opaque but still occupy the window.
+  if (message.role === "assistant" && message.continuation !== undefined) {
+    tokens += estimateTextTokens(JSON.stringify(message.continuation.payload));
+  }
   return tokens;
 }
 

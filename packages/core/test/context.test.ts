@@ -16,6 +16,7 @@ import {
 } from "../src/context/budget.js";
 import { pruneToolOutputs } from "../src/context/prune.js";
 import { chunkMessages } from "../src/context/summarize.js";
+import { groupMessages } from "../src/context/groups.js";
 
 class ScriptedProvider implements Provider {
   readonly requests: ChatRequest[] = [];
@@ -81,19 +82,6 @@ function chatHistory(pairs: number, chars: number): Message[] {
     messages.push({ role: "assistant", content: "a".repeat(chars) });
   }
   return messages;
-}
-
-function orphanToolMessages(messages: Message[]): number {
-  const known = new Set<string>();
-  let orphans = 0;
-  for (const message of messages) {
-    if (message.role === "assistant") {
-      for (const call of message.toolCalls ?? []) known.add(call.id);
-    } else if (message.role === "tool" && !known.has(message.toolCallId)) {
-      orphans += 1;
-    }
-  }
-  return orphans;
 }
 
 describe("pruneToolOutputs", () => {
@@ -261,11 +249,18 @@ describe("prepareContext", () => {
     });
 
     expect(actions.some((action) => action.action === "truncate")).toBe(true);
-    expect(orphanToolMessages(messages)).toBe(0);
     expect(messages[0]?.role).toBe("system");
+    expect(estimateConversationTokens(messages)).toBeLessThanOrEqual(30_000 * 0.92);
+    for (const { messages: [first, ...rest] } of groupMessages(messages)) {
+      expect(first?.role).not.toBe("tool");
+      if (first?.role !== "assistant") continue;
+      const expectedIds = first.toolCalls?.map((call) => call.id) ?? [];
+      expect(rest.map((message) => message.role === "tool" ? message.toolCallId : null).sort())
+        .toEqual(expectedIds.sort());
+    }
   });
 
-  it("leaves the transcript alone when compaction cannot pay for itself", async () => {
+  it("stubs an oversized recent result and keeps its tool-call group intact", async () => {
     const messages: Message[] = [
       SYSTEM,
       { role: "user", content: "read this" },
@@ -276,7 +271,6 @@ describe("prepareContext", () => {
       },
       { role: "tool", toolCallId: "c", content: "x".repeat(20_000) },
     ];
-    const before = estimateConversationTokens(messages);
     const provider = new ScriptedProvider("summary");
 
     const actions = await prepareContext({
@@ -287,11 +281,32 @@ describe("prepareContext", () => {
       config: resolveContextConfig({ window: 6000, reserveOutputTokens: 0 }),
     });
 
-    // A lone tool result dominates the window: summarizing the tiny prefix
-    // would cost more than it saves, and dropping the request would not help.
-    expect(actions).toEqual([]);
+    expect(actions.map((action) => action.action)).toContain("prune");
     expect(provider.requests).toHaveLength(0);
-    expect(estimateConversationTokens(messages)).toBe(before);
+    expect(estimateConversationTokens(messages)).toBeLessThanOrEqual(6000 * 0.92);
+    expect(messages).toEqual([
+      SYSTEM,
+      { role: "user", content: "read this" },
+      { role: "assistant", content: "", toolCalls: [{ id: "c", name: "read_file", arguments: "{}" }] },
+      { role: "tool", toolCallId: "c", content: expect.stringContaining("elided") },
+    ]);
+  });
+
+  it("rejects an irreducible oversized prompt without changing it", async () => {
+    const latest: Message = { role: "user", content: "word ".repeat(8000) };
+    const messages: Message[] = [SYSTEM, { role: "user", content: "prior" }, latest];
+    const original = structuredClone(messages);
+    const provider = new ScriptedProvider("summary");
+
+    await expect(prepareContext({
+      messages,
+      tools: [],
+      provider,
+      model: "test",
+      config: resolveContextConfig({ window: 2048, reserveOutputTokens: 0 }),
+    })).rejects.toThrow(/context.*limit/i);
+    expect(messages).toEqual(original);
+    expect(provider.requests).toHaveLength(0);
   });
 
   it("can be disabled entirely", async () => {

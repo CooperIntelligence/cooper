@@ -7,6 +7,8 @@ export type PruneOptions = {
   keepRecent?: number;
   /** Results shorter than this are not worth stubbing. */
   minChars?: number;
+  /** Preserve the history before this index. */
+  startIndex?: number;
 };
 
 export type PruneStats = {
@@ -36,7 +38,7 @@ export function pruneToolOutputs(
   const calls = toolCallIndex(messages);
 
   const toolIndices: number[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
+  for (let index = options.startIndex ?? 0; index < messages.length; index += 1) {
     if (messages[index]?.role === "tool") toolIndices.push(index);
   }
 
@@ -61,10 +63,12 @@ export function pruneToolOutputs(
       `[Tool result elided to save context: ${label} returned ` +
       `${message.content.length} chars (~${before} tokens). ` +
       `Re-run the tool if you need the details.]`;
-    message.content = stub;
+    const reclaimed = before - estimateTextTokens(stub);
+    if (reclaimed <= 0) continue;
+    messages[index] = { ...message, content: stub };
 
     pruned += 1;
-    reclaimedTokens += Math.max(0, before - estimateTextTokens(stub));
+    reclaimedTokens += reclaimed;
   }
 
   return { pruned, reclaimedTokens };

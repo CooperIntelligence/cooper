@@ -1,6 +1,7 @@
 import {
   AnthropicProvider,
   OpenAICompatibleProvider,
+  OpenAIResponsesProvider,
   type Provider,
 } from "@cooper/core";
 import type { Config } from "./config.js";
@@ -25,6 +26,14 @@ export function createProvider(
         baseURL: config.baseURL,
         maxTokens: config.maxOutputTokens,
         allowLegacyThinking: options.allowLegacyThinking,
+      });
+    }
+    if (config.protocol === "openai-responses") {
+      return new OpenAIResponsesProvider({
+        apiKey: config.apiKey,
+        baseURL: config.baseURL,
+        maxOutputTokens: config.sources.maxOutputTokens === "config" ? config.maxOutputTokens : undefined,
+        requestReasoningSummary: config.showReasoning,
       });
     }
     return new OpenAICompatibleProvider({

@@ -6,20 +6,22 @@ import type {
   TextBlock,
   Tool,
   ToolResultBlockParam,
-  ToolUseBlock,
 } from "@anthropic-ai/sdk/resources/messages";
-import type {
-  Message,
-  ProviderData,
-  ToolCall,
-  ToolSpec,
-} from "../types.js";
+import type { Message, ToolCall, ToolSpec } from "../types.js";
 import type {
   ChatRequest,
   Provider,
   ProviderEvent,
   TokenUsage,
 } from "./types.js";
+import {
+  canonicalJson,
+  extendHistoryHash,
+  hashAssistantFields,
+  historySeed,
+  matchesOwner,
+  type Continuation,
+} from "./continuation.js";
 
 export type AnthropicProviderOptions = {
   apiKey: string;
@@ -70,19 +72,25 @@ type ThinkingScope = {
 };
 
 /**
- * Signed thinking blocks are protocol data: Anthropic requires them to be
- * replayed unchanged with tool results. They are stored in `providerData`,
- * never rendered, and never sent to another provider (AGENTS.md rule 15).
+ * Legacy path for session files written before `Message.continuation`: signed
+ * thinking blocks used to live under `providerData.anthropic.thinking`. New
+ * code never writes this shape; it is only read when the caller explicitly
+ * allows legacy data.
  */
-function replayThinking(message: Message, scope?: ThinkingScope): ContentBlockParam[] {
+function replayLegacyThinking(
+  message: Message,
+  scope?: ThinkingScope,
+): ContentBlockParam[] {
   if (message.role !== "assistant" || message.providerData === undefined) {
     return [];
   }
   const anthropic = message.providerData["anthropic"];
   if (!isRecord(anthropic)) return [];
   if (scope !== undefined) {
-    const legacy = anthropic.endpoint === undefined && anthropic.model === undefined;
-    const matches = anthropic.endpoint === scope.endpoint && anthropic.model === scope.model;
+    const legacy =
+      anthropic.endpoint === undefined && anthropic.model === undefined;
+    const matches =
+      anthropic.endpoint === scope.endpoint && anthropic.model === scope.model;
     if (!matches && !(legacy && scope.allowLegacy)) return [];
   }
   const blocks = anthropic["thinking"];
@@ -111,21 +119,48 @@ function replayThinking(message: Message, scope?: ThinkingScope): ContentBlockPa
   return out;
 }
 
-function extractThinking(
-  content: readonly Anthropic.ContentBlock[],
-): ContentBlockParam[] {
-  const blocks: ContentBlockParam[] = [];
-  for (const block of content) {
-    if (block.type === "thinking") {
-      blocks.push({
-        type: "thinking",
-        thinking: block.thinking,
-        signature: block.signature,
-      });
-    } else if (block.type === "redacted_thinking") {
-      blocks.push({ type: "redacted_thinking", data: block.data });
-    }
+function payloadContent(
+  continuation: Continuation,
+  message: Extract<Message, { role: "assistant" }>,
+): ContentBlockParam[] | null {
+  if (!isRecord(continuation.payload)) return null;
+  const content = continuation.payload["content"];
+  if (!Array.isArray(content)) return null;
+  if (!content.every(isRecord)) return null;
+  const blocks = content as unknown as ContentBlockParam[];
+
+  // The payload must describe the same visible message. A mismatch means a
+  // corrupted or hand-edited continuation; rebuild from the visible fields
+  // instead of sending a different assistant turn than the UI shows.
+  const toolUseIds = blocks
+    .filter((block) => block.type === "tool_use")
+    .map((block) => block.id);
+  const calls = message.toolCalls ?? [];
+  if (
+    toolUseIds.length !== calls.length ||
+    toolUseIds.some((id, index) => id !== calls[index]?.id)
+  ) {
+    return null;
   }
+  const callsById = new Map(calls.map((call) => [call.id, call]));
+  for (const block of blocks) {
+    if (block.type !== "tool_use") continue;
+    const call = callsById.get(block.id);
+    if (call === undefined) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(call.arguments);
+    } catch {
+      return null;
+    }
+    if (canonicalJson(block.input) !== canonicalJson(parsed)) return null;
+  }
+  const text = blocks
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+  if (text !== message.content) return null;
+
   return blocks;
 }
 
@@ -136,32 +171,54 @@ function extractThinking(
  *   - assistant text + tool calls become text/tool_use blocks
  *   - consecutive tool results become ONE user message with multiple
  *     tool_result blocks (splitting parallel results breaks tool use)
+ *
+ * The function also maintains the rolling hash of the exact wire prefix. A
+ * continuation is only replayed when its `historyAnchor` matches that hash;
+ * any edit before the assistant message (compaction, a regenerated system
+ * prompt, a changed tool list) therefore drops the stale thinking blocks
+ * instead of letting them reach the API.
  */
-export function toAnthropicMessages(messages: Message[], scope?: ThinkingScope): {
+export function toAnthropicMessages(
+  messages: Message[],
+  scope?: ThinkingScope,
+  tools: ToolSpec[] = [],
+): {
   system: string | undefined;
   messages: MessageParam[];
+  historyHash: string;
 } {
   const systemParts: string[] = [];
+  for (const message of messages) {
+    if (message.role === "system") systemParts.push(message.content);
+  }
+  const system =
+    systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
+
   const out: MessageParam[] = [];
   let toolResults: ToolResultBlockParam[] = [];
+  let historyHash = historySeed(system, tools);
+
+  const pushWire = (wire: MessageParam) => {
+    out.push(wire);
+    historyHash = extendHistoryHash(historyHash, wire);
+  };
 
   const flushToolResults = () => {
     if (toolResults.length === 0) return;
-    out.push({ role: "user", content: toolResults });
+    const wire: MessageParam = { role: "user", content: toolResults };
     toolResults = [];
+    pushWire(wire);
   };
 
   for (const message of messages) {
-    if (message.role === "system") {
-      systemParts.push(message.content);
-      continue;
-    }
+    if (message.role === "system") continue;
 
     if (message.role === "tool") {
       toolResults.push({
         type: "tool_result",
         tool_use_id: message.toolCallId,
         content: message.content,
+        ...(message.isError === true ? { is_error: true } : {}),
       });
       continue;
     }
@@ -169,34 +226,71 @@ export function toAnthropicMessages(messages: Message[], scope?: ThinkingScope):
     flushToolResults();
 
     if (message.role === "user") {
-      out.push({ role: "user", content: message.content });
+      pushWire({ role: "user", content: message.content });
       continue;
     }
 
-    const content: ContentBlockParam[] = replayThinking(message, scope);
-    if (message.content.length > 0) {
-      content.push({ type: "text", text: message.content });
-    }
-    for (const call of message.toolCalls ?? []) {
-      content.push({
-        type: "tool_use",
-        id: call.id,
-        name: call.name,
-        input: parseToolInput(call.arguments),
-      });
+    const continuation = message.continuation;
+    const payload =
+      continuation !== undefined &&
+      continuation.protocol === "anthropic-messages" &&
+      continuation.scope === "prefix" &&
+      continuation.messageAnchor ===
+        hashAssistantFields(message.content, message.toolCalls)
+        ? payloadContent(continuation, message)
+        : null;
+    const exact =
+      payload !== null &&
+      continuation !== undefined &&
+      continuation.stale !== true &&
+      (scope === undefined ||
+        matchesOwner(continuation, {
+          protocol: "anthropic-messages",
+          endpoint: scope.endpoint,
+          model: scope.model,
+        })) &&
+      continuation.historyAnchor !== undefined &&
+      continuation.historyAnchor === historyHash;
+
+    let content: ContentBlockParam[];
+    if (exact && payload !== null) {
+      // Echo the assistant turn exactly as it was received. Do not merge text,
+      // move thinking blocks, reorder tool_use, or filter redacted_thinking.
+      content = payload;
+    } else if (payload !== null) {
+      // The protocol is the same but the prefix/model changed (compaction,
+      // resume, model switch). Keep the visible blocks exactly as received and
+      // drop only the stale thinking blocks; rebuilding the message would lose
+      // block order.
+      content = payload.filter(
+        (block) => block.type !== "thinking" && block.type !== "redacted_thinking",
+      );
+    } else {
+      content =
+        scope === undefined || scope.allowLegacy
+          ? replayLegacyThinking(message, scope)
+          : [];
+      if (message.content.length > 0) {
+        content.push({ type: "text", text: message.content });
+      }
+      for (const call of message.toolCalls ?? []) {
+        content.push({
+          type: "tool_use",
+          id: call.id,
+          name: call.name,
+          input: parseToolInput(call.arguments),
+        });
+      }
     }
 
     if (content.length > 0) {
-      out.push({ role: "assistant", content });
+      pushWire({ role: "assistant", content });
     }
   }
 
   flushToolResults();
 
-  return {
-    system: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
-    messages: out,
-  };
+  return { system, messages: out, historyHash };
 }
 
 export function toAnthropicTools(tools: ToolSpec[]): Tool[] {
@@ -239,15 +333,47 @@ export class AnthropicProvider implements Provider {
       });
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.endpoint = createHash("sha256").update(this.client.baseURL).digest("hex");
-    this.allowLegacyThinking = options.allowLegacyThinking ?? true;
+    // Default must be fail-closed: a block whose origin is unknown could
+    // otherwise be replayed to a different endpoint, which is both a protocol
+    // error and a chain-of-thought leak.
+    this.allowLegacyThinking = options.allowLegacyThinking ?? false;
+  }
+
+  protectedToolHistoryLength(request: ChatRequest): number {
+    const { messages, model } = request;
+    const latest = messages.findLastIndex((message) => message.role === "assistant");
+    if (latest < 0 || messages[latest + 1]?.role !== "tool") return 0;
+
+    // A tool round can contain several assistant/tool exchanges. Earlier
+    // thinking in that round also has to survive until Claude finishes it.
+    for (let index = latest; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role !== "assistant") continue;
+      if (!message.toolCalls?.length) break;
+      const state = message.continuation;
+      if (
+        state?.scope === "prefix" && !state.stale && state.historyAnchor !== undefined &&
+        matchesOwner(state, { protocol: "anthropic-messages", endpoint: this.endpoint, model }) &&
+        state.messageAnchor === hashAssistantFields(message.content, message.toolCalls) &&
+        payloadContent(state, message)?.some((block) =>
+          (block.type === "thinking" && Boolean(block.signature)) || block.type === "redacted_thinking")
+      ) {
+        return latest + 1;
+      }
+    }
+    return 0;
   }
 
   async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
-    const { system, messages } = toAnthropicMessages(request.messages, {
-      endpoint: this.endpoint,
-      model: request.model,
-      allowLegacy: this.allowLegacyThinking,
-    });
+    const { system, messages, historyHash } = toAnthropicMessages(
+      request.messages,
+      {
+        endpoint: this.endpoint,
+        model: request.model,
+        allowLegacy: this.allowLegacyThinking,
+      },
+      request.tools,
+    );
 
     const params: Anthropic.MessageStreamParams = {
       model: request.model,
@@ -267,6 +393,7 @@ export class AnthropicProvider implements Provider {
     const stream = this.client.messages.stream(params, {
       signal: request.signal,
     });
+    const toolInputDeltas = new Map<number, string>();
 
     for await (const event of stream) {
       if (event.type === "content_block_start") {
@@ -285,6 +412,8 @@ export class AnthropicProvider implements Provider {
         yield { type: "text", delta: event.delta.text };
       } else if (event.delta.type === "thinking_delta") {
         yield { type: "reasoning", delta: event.delta.thinking };
+      } else if (event.delta.type === "input_json_delta") {
+        toolInputDeltas.set(event.index, (toolInputDeltas.get(event.index) ?? "") + event.delta.partial_json);
       }
     }
 
@@ -294,18 +423,46 @@ export class AnthropicProvider implements Provider {
       .map((block) => block.text)
       .join("");
 
-    const toolCalls: ToolCall[] = message.content
-      .filter((block): block is ToolUseBlock => block.type === "tool_use")
-      .map((block) => ({
-        id: block.id,
-        name: block.name,
-        arguments: JSON.stringify(block.input ?? {}),
-      }));
+    const toolCalls: ToolCall[] = [];
+    for (const [index, block] of message.content.entries()) {
+      if (block.type !== "tool_use") continue;
+      if (message.stop_reason !== "tool_use") {
+        throw new Error(`Anthropic Messages returned an unfinished tool call (stop_reason: ${message.stop_reason}).`);
+      }
+      const rawInput = toolInputDeltas.get(index);
+      // The SDK exposes a partially parsed object during streaming. Check the
+      // original JSON so an incomplete argument cannot silently become `{}`.
+      let input: unknown;
+      try {
+        input = rawInput ? JSON.parse(rawInput) : block.input;
+      } catch {
+        throw new Error("Anthropic Messages returned malformed tool arguments.");
+      }
+      if (!isRecord(input) || !block.id.trim() || !block.name.trim()) {
+        throw new Error("Anthropic Messages returned an incomplete tool call.");
+      }
+      toolCalls.push({ id: block.id, name: block.name, arguments: JSON.stringify(input) });
+    }
+    if (message.stop_reason === "tool_use" && (
+      toolCalls.length === 0 || new Set(toolCalls.map((call) => call.id)).size !== toolCalls.length
+    )) {
+      throw new Error("Anthropic Messages returned missing or duplicate tool calls.");
+    }
 
-    const thinking = extractThinking(message.content);
-    const providerData: ProviderData | undefined =
-      thinking.length > 0
-        ? { anthropic: { thinking, endpoint: this.endpoint, model: request.model } }
+    // Store the complete ordered content, not just the thinking blocks. The
+    // next request must echo text/thinking/tool_use exactly as received.
+    const truncated = message.stop_reason === "max_tokens" || message.stop_reason === "model_context_window_exceeded";
+    const continuation: Continuation | undefined =
+      !truncated && message.content.length > 0
+        ? {
+            protocol: "anthropic-messages",
+            endpoint: this.endpoint,
+            model: request.model,
+            scope: "prefix",
+            messageAnchor: hashAssistantFields(content, toolCalls),
+            historyAnchor: historyHash,
+            payload: { content: message.content },
+          }
         : undefined;
 
     yield {
@@ -313,7 +470,7 @@ export class AnthropicProvider implements Provider {
       message: {
         content,
         toolCalls,
-        ...(providerData !== undefined ? { providerData } : {}),
+        ...(continuation !== undefined ? { continuation } : {}),
       },
       finishReason: message.stop_reason,
       usage: toUsage(message.usage),

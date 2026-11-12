@@ -269,7 +269,9 @@ export function formatStatus(options: {
     ["apiKey", "set", configSourceLabel(config.sources.apiKey)],
     [
       "maxOutputTokens",
-      String(config.maxOutputTokens),
+      config.protocol === "openai-responses" && config.sources.maxOutputTokens !== "config"
+        ? "provider default"
+        : String(config.maxOutputTokens),
       configSourceLabel(config.sources.maxOutputTokens),
     ],
     [

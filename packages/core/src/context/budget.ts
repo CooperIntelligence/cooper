@@ -1,4 +1,5 @@
 import type { Message, ToolSpec } from "../types.js";
+import { invalidatePrefixContinuations } from "../provider/continuation.js";
 import type { Provider } from "../provider/types.js";
 import { latestRuntimeNotice } from "../runtime-notice.js";
 import {
@@ -109,16 +110,19 @@ const SUMMARY_BUDGET_TOKENS = 1200;
  *
  *   1. prune old tool output (local, free)
  *   2. summarize the older half (one model call)
- *   3. drop whole groups (local, always succeeds)
+ *   3. trim oversized pending tool results and drop whole older groups
  *
- * Mutates the array in place so the caller's session history stays in sync
- * with what will actually be sent.
+ * Commit only if the resulting history fits. The caller can then checkpoint
+ * the effective history, and an irreducible request never reaches the model.
  */
 export async function prepareContext(
   options: PrepareContextOptions,
 ): Promise<ContextAction[]> {
-  const { messages, tools, config, force = false } = options;
+  const { tools, provider, model, config, force = false } = options;
   if (!config.enabled) return [];
+  const messages = options.messages.slice();
+  const protectedLength = provider.protectedToolHistoryLength?.({ model, messages, tools }) ?? 0;
+  const canEditPrefix = protectedLength === 0;
 
   // The latest mode notice must survive compaction: the model needs to know
   // whether it is in plan/ask/auto even after its original turn is summarized.
@@ -131,7 +135,7 @@ export async function prepareContext(
     Math.floor(config.window * 0.25),
   );
   const usable = Math.max(
-    2048,
+    1,
     options.budgetOverride ?? config.window - reserve,
   );
   const estimate = () => estimateContextTokens(messages, tools, calibration);
@@ -145,7 +149,7 @@ export async function prepareContext(
   const actions: ContextAction[] = [];
 
   // 1. Prune tool output, escalating to a smaller tail if one pass is not enough.
-  if (force || current > pruneLimit) {
+  if (canEditPrefix && (force || current > pruneLimit)) {
     const before = current;
     for (const keepRecent of [config.keepRecentToolResults, 4, 2]) {
       if (current <= (force ? summarizeLimit : pruneLimit)) break;
@@ -159,7 +163,7 @@ export async function prepareContext(
   }
 
   // 2. Summarize the prefix, keeping the recent tail verbatim.
-  if (force || current > summarizeLimit) {
+  if (canEditPrefix && (force || current > summarizeLimit)) {
     const before = current;
     const systemEnd = leadingSystemCount(messages);
     const keepTokens = Math.max(
@@ -220,8 +224,19 @@ export async function prepareContext(
     }
   }
 
+  // Only newly appended tool results can shrink during a protected round.
+  // A large pending result can also be stubbed before dropping older groups.
+  if (current > hardLimit) {
+    const startIndex = protectedLength || messages.findLastIndex((message) => message.role !== "tool") + 1;
+    const before = current;
+    if (pruneToolOutputs(messages, { startIndex, keepRecent: 0, minChars: 0 }).pruned > 0) {
+      current = estimate();
+      actions.push({ action: "prune", before, after: current });
+    }
+  }
+
   // 3. Drop whole groups until under target. Always leaves the newest group.
-  if (force || current > hardLimit) {
+  if (canEditPrefix && (force || current > hardLimit)) {
     const before = current;
     const systemEnd = leadingSystemCount(messages);
     const original = messages.slice();
@@ -270,5 +285,16 @@ export async function prepareContext(
     current = estimate();
   }
 
+  if (current > hardLimit) {
+    const detail = canEditPrefix ? "" : " The active tool round requires its original history.";
+    throw new Error(`Context exceeds the configured limit (${current} estimated tokens, limit ${Math.floor(hardLimit)}).${detail}`);
+  }
+
+  options.signal?.throwIfAborted();
+  if (actions.length > 0) {
+    if (canEditPrefix) invalidatePrefixContinuations(messages);
+    options.messages.length = 0;
+    for (const message of messages) options.messages.push(message);
+  }
   return actions;
 }

@@ -211,12 +211,18 @@ describe("SessionWriter", () => {
     ]);
   });
 
-  it("round-trips opaque provider continuation data", () => {
+  it("round-trips protocol continuation data", () => {
     const { home, cwd } = makeWorkspace();
     const writer = createSession({ cwd, model: "test-model", home });
-    const providerData = {
-      anthropic: {
-        thinking: [
+    const continuation = {
+      protocol: "anthropic-messages" as const,
+      endpoint: "endpoint",
+      model: "test-model",
+      scope: "prefix" as const,
+      messageAnchor: "message-anchor",
+      historyAnchor: "history-anchor",
+      payload: {
+        content: [
           { type: "thinking", thinking: "plan", signature: "sig-1" },
         ],
       },
@@ -227,13 +233,13 @@ describe("SessionWriter", () => {
         type: "assistant-done",
         content: "answer",
         toolCalls: [],
-        providerData,
+        continuation,
       },
       [],
     );
 
     expect(loadSession(writer.file).messages).toEqual([
-      { role: "assistant", content: "answer", providerData },
+      { role: "assistant", content: "answer", continuation },
     ]);
   });
 
@@ -264,6 +270,38 @@ describe("SessionWriter", () => {
       { role: "tool", toolCallId: "call_1", content: "contents" },
     ]);
     expect(loaded.toolUi.get(1)).toEqual(toolUi);
+  });
+
+  it("restores a failed tool result from a tool event and a checkpoint", () => {
+    const { home, cwd } = makeWorkspace();
+    const writer = createSession({ cwd, model: "test-model", home });
+    const assistant = { role: "assistant" as const, content: "", toolCalls: [toolCall] };
+    const result = { role: "tool" as const, toolCallId: toolCall.id, content: "lookup failed" };
+    writer.appendMessage(assistant);
+    writer.recordEvent({
+      type: "tool-end", call: toolCall, summary: "read a.ts", result: { content: result.content, isError: true },
+      isError: true, denied: false, durationMs: 7,
+    }, []);
+
+    const expected = [assistant, { ...result, isError: true }];
+    const loaded = loadSession(writer.file);
+    expect(loaded.messages).toEqual(expected);
+    writer.appendCheckpoint("prune", loaded.messages);
+    expect(loadSession(writer.file).messages).toEqual(expected);
+  });
+
+  it("keeps legacy tool failure metadata from changing the original request history", () => {
+    const { home, cwd } = makeWorkspace();
+    const writer = createSession({ cwd, model: "test-model", home });
+    const assistant = { role: "assistant" as const, content: "", toolCalls: [toolCall] };
+    const result = { role: "tool" as const, toolCallId: toolCall.id, content: "lookup failed" };
+    writer.appendMessage(assistant);
+    writer.appendMessage(result, { ...toolUi, isError: true });
+
+    const loaded = loadSession(writer.file);
+    // Adding the flag retroactively would change the prefix of later signed turns.
+    expect(loaded.messages).toEqual([assistant, result]);
+    expect(loaded.toolUi.get(1)?.isError).toBe(true);
   });
 });
 

@@ -517,7 +517,10 @@ export function App({
       config.baseURL === current.config.baseURL &&
       config.apiKey === current.config.apiKey &&
       config.model === current.config.model &&
-      config.maxOutputTokens === current.config.maxOutputTokens
+      config.maxOutputTokens === current.config.maxOutputTokens &&
+      (config.protocol !== "openai-responses" ||
+        (config.showReasoning === current.config.showReasoning &&
+          config.sources.maxOutputTokens === current.config.sources.maxOutputTokens))
       ? current.provider
       : createProvider(config, { allowLegacyThinking: false });
     const commandTool = createRunCommandTool(config.shell);
@@ -732,7 +735,7 @@ export function App({
       contextConfig.reserveOutputTokens,
       Math.floor(contextConfig.window * 0.25),
     );
-    const usable = Math.max(2048, contextConfig.window - reserve);
+    const usable = Math.max(1, contextConfig.window - reserve);
     const summarizeLimit = usable * contextConfig.summarizeAt;
     if (estimate <= summarizeLimit) {
       notice(

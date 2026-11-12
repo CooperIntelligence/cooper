@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import Anthropic from "@anthropic-ai/sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { runAgent } from "../src/agent.js";
+import { PermissionPolicy } from "../src/permissions.js";
 import {
   AnthropicProvider,
   supportsAdaptiveThinking,
   toAnthropicMessages,
 } from "../src/provider/anthropic.js";
+import { hashAssistantFields } from "../src/provider/continuation.js";
 import type { ProviderEvent } from "../src/provider/types.js";
 import type { Message } from "../src/types.js";
 
@@ -53,6 +58,64 @@ function textEvents(text: string, index = 0): string {
     }) +
     sse("content_block_stop", { type: "content_block_stop", index })
   );
+}
+
+function toolEvents(json: string, index = 0, id = "toolu_current"): string {
+  return (
+    sse("content_block_start", {
+      type: "content_block_start",
+      index,
+      content_block: { type: "tool_use", id, name: "echo", input: {} },
+    }) +
+    sse("content_block_delta", {
+      type: "content_block_delta",
+      index,
+      delta: { type: "input_json_delta", partial_json: json },
+    }) +
+    sse("content_block_stop", { type: "content_block_stop", index })
+  );
+}
+
+function thinkingEvents(block: { type: "thinking" | "redacted_thinking"; [field: string]: string }, index = 0): string {
+  return sse("content_block_start", { type: "content_block_start", index, content_block: block }) +
+    sse("content_block_stop", { type: "content_block_stop", index });
+}
+
+function agentFixture(responses: string[]) {
+  const bodies: { messages: unknown[] }[] = [];
+  const client = new Anthropic({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      const response = responses[bodies.length];
+      bodies.push(JSON.parse(String(init?.body)));
+      if (response === undefined) throw new Error("Unexpected Messages request");
+      return new Response(response, { headers: { "content-type": "text/event-stream" } });
+    },
+    maxRetries: 0,
+  });
+  const execute = vi.fn(async () => ({ content: "lookup failed", isError: true }));
+  const provider = new AnthropicProvider({ apiKey: "test", client });
+  return {
+    bodies,
+    execute,
+    async run(messages: Message[], contextBudget: Parameters<typeof runAgent>[0]["contextBudget"] = false) {
+      for await (const _event of runAgent({
+        provider,
+        model: "test-model",
+        messages,
+        tools: [{
+          name: "echo", description: "Test tool", capabilities: ["read"],
+          inputSchema: z.object({ text: z.string().optional() }),
+          summarize: () => "echo", execute,
+        }],
+        context: { root: process.cwd() },
+        permissions: new PermissionPolicy({ preset: "plan", interactive: false }),
+        contextBudget,
+      })) {
+        // Consume the full agent run so any tool execution and follow-up are observed.
+      }
+    },
+  };
 }
 
 type Captured = { url: string; body: Record<string, unknown> };
@@ -193,6 +256,54 @@ describe("toAnthropicMessages", () => {
     });
   });
 
+  it("drops thinking blocks when the request prefix changed", () => {
+    const call = { id: "call_1", name: "echo", arguments: '{"text":"hi"}' };
+    const message: Message = {
+      role: "assistant",
+      content: "answer",
+      toolCalls: [call],
+      continuation: {
+        protocol: "anthropic-messages",
+        endpoint: "endpoint",
+        model: "claude-opus-5-5",
+        scope: "prefix",
+        messageAnchor: hashAssistantFields("answer", [call]),
+        historyAnchor: "stale-anchor",
+        payload: {
+          content: [
+            { type: "thinking", thinking: "plan", signature: "sig" },
+            { type: "text", text: "answer" },
+            {
+              type: "tool_use",
+              id: "call_1",
+              name: "echo",
+              input: { text: "hi" },
+            },
+          ],
+        },
+      },
+    };
+
+    const converted = toAnthropicMessages(
+      [{ role: "user", content: "go" }, message],
+      { endpoint: "endpoint", model: "claude-opus-5-5", allowLegacy: false },
+      [],
+    );
+
+    expect(converted.messages[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "text", text: "answer" },
+        {
+          type: "tool_use",
+          id: "call_1",
+          name: "echo",
+          input: { text: "hi" },
+        },
+      ],
+    });
+  });
+
   it("falls back to an empty object for malformed tool arguments", () => {
     const converted = toAnthropicMessages([
       {
@@ -210,6 +321,95 @@ describe("toAnthropicMessages", () => {
 });
 
 describe("AnthropicProvider", () => {
+  it.each([
+    ["max_tokens", messageEnd("max_tokens", 5), "unfinished tool call"],
+    ["malformed arguments", messageEnd("tool_use", 5), "malformed tool arguments"],
+    ["missing message_stop", "", "stream ended without producing a Message"],
+  ])("does not execute or record a tool after %s", async (_case, end, error) => {
+    const { bodies, execute, run } = agentFixture([
+      messageStart + toolEvents('{"text":') + end,
+      messageStart + textEvents("unexpected follow-up") + messageEnd("end_turn", 3),
+    ]);
+    const messages: Message[] = [{ role: "user", content: "go" }];
+
+    await expect(run(messages)).rejects.toThrow(error);
+    expect(execute).not.toHaveBeenCalled();
+    expect(bodies).toHaveLength(1);
+    expect(messages).toEqual([{ role: "user", content: "go" }]);
+  });
+
+  it("preserves the signed request prefix and flags failed results when pruning would change the prefix", async () => {
+    const signed = { type: "thinking", thinking: "plan", signature: "sig-original" } as const;
+    const redacted = { type: "redacted_thinking", data: "opaque-data" } as const;
+    const { bodies, execute, run } = agentFixture([
+      messageStart + thinkingEvents(signed) + thinkingEvents(redacted, 1) +
+        toolEvents("{}", 2) + messageEnd("tool_use", 5),
+      messageStart + textEvents("recovered") + messageEnd("end_turn", 3),
+    ]);
+    const messages: Message[] = [
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "", toolCalls: [{ id: "toolu_old", name: "echo", arguments: "{}" }] },
+      { role: "tool", toolCallId: "toolu_old", content: "old result ".repeat(1000) },
+      { role: "assistant", content: "old answer" },
+      { role: "user", content: "go" },
+    ];
+
+    await run(messages, { window: 16_000, pruneAt: 0.1, summarizeAt: 0.9, keepRecentToolResults: 1 });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.messages).toEqual([
+      ...bodies[0]!.messages,
+      { role: "assistant", content: [signed, redacted, { type: "tool_use", id: "toolu_current", name: "echo", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_current", content: "lookup failed", is_error: true }] },
+    ]);
+  });
+
+  it("shrinks only the latest result when a multi-step signed tool round exceeds the budget", async () => {
+    const signed = { type: "thinking", thinking: "plan", signature: "sig-original" } as const;
+    const { bodies, execute, run } = agentFixture([
+      messageStart + thinkingEvents(signed) + toolEvents("{}", 1) + messageEnd("tool_use", 5),
+      messageStart + toolEvents("{}", 0, "toolu_second") + messageEnd("tool_use", 5),
+      messageStart + textEvents("recovered") + messageEnd("end_turn", 3),
+    ]);
+    execute.mockResolvedValueOnce({ content: "first result", isError: false });
+    execute.mockResolvedValueOnce({ content: "oversized result ".repeat(3000), isError: true });
+    const messages: Message[] = [{ role: "user", content: "original request ".repeat(200) }];
+
+    await run(messages, { window: 8000, reserveOutputTokens: 0 });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(bodies).toHaveLength(3);
+    expect(bodies[2]?.messages).toEqual([
+      ...bodies[1]!.messages,
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_second", name: "echo", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_second", content: expect.stringContaining("elided"), is_error: true }] },
+    ]);
+    expect(bodies[1]?.messages).toContainEqual({
+      role: "assistant",
+      content: [signed, { type: "tool_use", id: "toolu_current", name: "echo", input: {} }],
+    });
+  });
+
+  it("does not replay an unfinished thinking block from a text-only max_tokens response", async () => {
+    const { bodies, run } = agentFixture([
+      messageStart + thinkingEvents({ type: "thinking", thinking: "unfinished", signature: "" }) +
+        textEvents("partial answer", 1) + messageEnd("max_tokens", 5),
+      messageStart + textEvents("recovered") + messageEnd("end_turn", 3),
+    ]);
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    await run(messages);
+    expect(messages.at(-1)).toEqual({ role: "assistant", content: "partial answer" });
+
+    messages.push({ role: "user", content: "continue" });
+    await run(messages);
+    expect(bodies[1]?.messages).toEqual([
+      { role: "user", content: "go" },
+      { role: "assistant", content: [{ type: "text", text: "partial answer" }] },
+      { role: "user", content: "continue" },
+    ]);
+  });
+
   it("normalizes thinking, text, tool calls, and usage", async () => {
     const { server, baseURL, requests } = await startServer(
       () =>
@@ -276,17 +476,28 @@ describe("AnthropicProvider", () => {
     expect(text).toBe("Hello");
 
     const done = events.find((event) => event.type === "done");
-    expect(done?.type === "done" ? done.message : null).toEqual({
+    expect(done?.type === "done" ? done.message : null).toMatchObject({
       content: "Hello",
       toolCalls: [
         { id: "call_1", name: "echo", arguments: '{"text":"hi"}' },
       ],
-      providerData: {
-        anthropic: {
-          endpoint: createHash("sha256").update(baseURL).digest("hex"),
-          model: "claude-opus-5-5",
-          thinking: [
+      continuation: {
+        protocol: "anthropic-messages",
+        endpoint: createHash("sha256").update(baseURL).digest("hex"),
+        model: "claude-opus-5-5",
+        scope: "prefix",
+        messageAnchor: expect.any(String),
+        historyAnchor: expect.any(String),
+        payload: {
+          content: [
             { type: "thinking", thinking: "pondering", signature: "sig-1" },
+            { type: "text", text: "Hello" },
+            {
+              type: "tool_use",
+              id: "call_1",
+              name: "echo",
+              input: { text: "hi" },
+            },
           ],
         },
       },

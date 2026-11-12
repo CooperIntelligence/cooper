@@ -68,7 +68,7 @@ Modes:
 
 Configuration:
   Set protocol, model, baseURL, and apiKey in ~/.cooper/config.json.
-  The supported protocols are openai-chat and anthropic-messages.
+  The supported protocols are openai-chat, anthropic-messages, and openai-responses.
   Run cooper interactively to complete setup.
   Use /config in the TUI to edit and apply settings.
   Use /reload to apply edits made to config.json elsewhere.

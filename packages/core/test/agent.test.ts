@@ -61,6 +61,27 @@ class ScriptedProvider implements Provider {
 }
 
 describe("runAgent", () => {
+  it("does not record an assistant message when the provider never completes", async () => {
+    const messages: Message[] = [{ role: "user", content: "go" }];
+    const provider: Provider = {
+      async *stream() {
+        yield { type: "text", delta: "partial answer" };
+      },
+    };
+
+    async function run() {
+      for await (const _event of runAgent({
+        provider, model: "test-model", tools: [], messages,
+        context: { root: process.cwd() }, permissions: nonInteractive,
+      })) {
+        // Drain the stream to observe whether the partial answer is committed.
+      }
+    }
+
+    await expect(run()).rejects.toThrow("Provider stream ended before completion");
+    expect(messages).toEqual([{ role: "user", content: "go" }]);
+  });
+
   it("executes tool calls and feeds results back to the model", async () => {
     const messages: Message[] = [
       { role: "system", content: "test" },
@@ -110,10 +131,16 @@ describe("runAgent", () => {
     expect(messages[4]).toMatchObject({ role: "assistant", content: "All done." });
   });
 
-  it("carries opaque provider continuation data into history and events", async () => {
-    const providerData = {
-      anthropic: {
-        thinking: [
+  it("carries protocol continuation into history and events", async () => {
+    const continuation = {
+      protocol: "anthropic-messages" as const,
+      endpoint: "endpoint",
+      model: "test-model",
+      scope: "prefix" as const,
+      messageAnchor: "message-anchor",
+      historyAnchor: "history-anchor",
+      payload: {
+        content: [
           { type: "thinking", thinking: "plan", signature: "sig-1" },
         ],
       },
@@ -122,7 +149,7 @@ describe("runAgent", () => {
       async *stream() {
         yield {
           type: "done",
-          message: { content: "answer", toolCalls: [], providerData },
+          message: { content: "answer", toolCalls: [], continuation },
           finishReason: "end_turn",
         };
       },
@@ -145,12 +172,12 @@ describe("runAgent", () => {
     expect(messages[1]).toEqual({
       role: "assistant",
       content: "answer",
-      providerData,
+      continuation,
     });
     const done = events.find((event) => event.type === "assistant-done");
-    expect(done?.type === "assistant-done" ? done.providerData : null).toEqual(
-      providerData,
-    );
+    expect(
+      done?.type === "assistant-done" ? done.continuation : null,
+    ).toEqual(continuation);
   });
 });
 
@@ -324,8 +351,8 @@ describe("reasoning", () => {
     );
     expect(reasoning).toHaveLength(1);
 
-    // The history must not contain the reasoning text: DeepSeek rejects it
-    // being sent back, and it is not part of the conversation.
+    // Display reasoning must not become conversation content. Protocol
+    // continuation is carried separately; this provider emits none.
     expect(
       messages.every((message) => !message.content.includes("secret")),
     ).toBe(true);

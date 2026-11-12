@@ -1,9 +1,12 @@
 import type { Message, ProviderData, ToolCall, ToolSpec } from "../types.js";
+import type { Continuation } from "./continuation.js";
 
 export type AssistantMessage = {
   content: string;
   toolCalls: ToolCall[];
-  /** Opaque continuation data (e.g. Anthropic signed thinking blocks). */
+  /** Protocol state that must be replayed to the same provider. */
+  continuation?: Continuation;
+  /** Legacy continuation data read from older sessions. */
   providerData?: ProviderData;
 };
 
@@ -23,11 +26,7 @@ export type TokenUsage = {
 
 export type ProviderEvent =
   | { type: "text"; delta: string }
-  /**
-   * A reasoning/thinking summary. Never part of the conversation history:
-   * providers such as DeepSeek reject `reasoning_content` being sent back,
-   * and unfaithful reasoning must not become context for later turns.
-   */
+  /** Display-only reasoning text. The adapter handles protocol continuation data. */
   | { type: "reasoning"; delta: string }
   | {
       type: "done";
@@ -44,4 +43,6 @@ export type ProviderEvent =
  */
 export interface Provider {
   stream(request: ChatRequest): AsyncIterable<ProviderEvent>;
+  /** Number of leading history messages to keep verbatim during a tool round. */
+  protectedToolHistoryLength?(request: ChatRequest): number;
 }

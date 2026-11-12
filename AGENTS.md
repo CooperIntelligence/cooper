@@ -74,20 +74,27 @@
     approves the actual effect, not a summary. A preview must be side-effect
     free, must not throw, and may return `undefined` when it cannot be
     produced. Diff rendering lives in the host (`apps/cli/src/preview.ts`).
-15. Reasoning/thinking text is display-only. It must never be appended to
-    `messages` or persisted: DeepSeek rejects `reasoning_content` being sent
-    back, and unfaithful reasoning must not become context for later turns.
-    It also must never reach headless stdout, which stays answer-only.
-    Narrow exception: provider-required signed continuation blocks (Anthropic
-    thinking blocks) live in `Message.providerData`, are replayed only to the
-    provider that produced them, are never rendered as conversation history,
-    and are never sent to a different provider.
+15. Display reasoning and protocol continuation are different data.
+    - Display reasoning (`reasoning-delta`) is ephemeral: never in `messages`,
+      session files, or headless stdout. Headless stdout carries only the answer.
+    - Protocol continuation is the exact payload the provider requires on the
+      next request: unsigned `reasoning_content` (DeepSeek, Kimi, GLM, Qwen),
+      OpenRouter `reasoning_details`, Anthropic signed thinking blocks,
+      OpenAI Responses reasoning items, and Gemini thought signatures.
+      It lives in `Message.continuation`, is persisted, and is replayed only to
+      the same protocol / endpoint / model. It is never rendered as
+      conversation history.
+    - Display reasoning must never be used as continuation, and continuation
+      must never be shown to the user.
 16. Session files are append-only JSONL under Cooper's home directory. Never
-    persist user-facing reasoning or in-session "always allow" state. Signed
-    provider continuation blocks in `providerData` are protocol data and may
-    be persisted so a resumed session can replay them. The effective permission
-    preset is persisted as a `policy` record; model-visible runtime notices are
-    persisted with `Message.runtime` and filtered from user-facing views.
+    persist user-facing display reasoning or in-session "always allow" state.
+    Protocol continuation payloads — including unsigned `reasoning_content` and
+    encrypted or signed blocks — are protocol data and may be persisted so a
+    resumed session can replay them. Validate their owner and anchors before
+    replay; never send a payload to a different protocol, endpoint, or model.
+    The effective permission preset is persisted as a `policy` record;
+    model-visible runtime notices are persisted with `Message.runtime` and
+    filtered from user-facing views.
     Write a checkpoint after compaction so resume starts from the effective
     history, and repair an incomplete trailing tool-call group on load instead
     of replaying it (the chat protocol requires every call to have its results).

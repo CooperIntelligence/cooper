@@ -1,5 +1,6 @@
 import type { Message, ProviderData, ToolCall } from "./types.js";
 import type { Provider, TokenUsage } from "./provider/types.js";
+import type { Continuation } from "./provider/continuation.js";
 import {
   DEFAULT_CONTEXT_CONFIG,
   estimateContextTokens,
@@ -52,7 +53,9 @@ export type AgentEvent =
       content: string;
       toolCalls: ToolCall[];
       usage?: TokenUsage;
-      /** Opaque provider data that must be replayed to the same provider. */
+      /** Protocol state that must be replayed to the same provider. */
+      continuation?: Continuation;
+      /** Legacy continuation data from older adapters/sessions. */
       providerData?: ProviderData;
     }
   | { type: "tool-start"; call: ToolCall; summary: string }
@@ -201,7 +204,8 @@ export async function* runAgent(
     yield { type: "turn-start", turn };
 
     if (contextConfig) {
-      for (const action of await compact(false)) {
+      const actions = await compact(false);
+      for (const action of actions) {
         yield { type: "context-compacted", ...action };
       }
     }
@@ -209,6 +213,7 @@ export async function* runAgent(
     let content = "";
     let toolCalls: ToolCall[] = [];
     let usage: TokenUsage | undefined;
+    let continuation: Continuation | undefined;
     let providerData: ProviderData | undefined;
     let emittedText = false;
     let retried = false;
@@ -217,12 +222,14 @@ export async function* runAgent(
       content = "";
       toolCalls = [];
       usage = undefined;
+      continuation = undefined;
       providerData = undefined;
       emittedText = false;
 
       const estimated = estimateContextTokens(messages, specs, calibration);
 
       try {
+        let completed = false;
         for await (const event of provider.stream({
           model,
           messages,
@@ -236,9 +243,11 @@ export async function* runAgent(
           } else if (event.type === "reasoning") {
             yield { type: "reasoning-delta", delta: event.delta };
           } else if (event.type === "done") {
+            completed = true;
             content = event.message.content;
             toolCalls = event.message.toolCalls;
             usage = event.usage;
+            continuation = event.message.continuation;
             providerData = event.message.providerData;
             if (event.usage?.inputTokens) {
               calibration = updateCalibration(
@@ -249,6 +258,7 @@ export async function* runAgent(
             }
           }
         }
+        if (!completed) throw new Error("Provider stream ended before completion.");
         break;
       } catch (error) {
         // The window we assumed may be larger than the real one. Compact hard
@@ -264,7 +274,7 @@ export async function* runAgent(
           // smaller than that. Compact to half of it and try again.
           const actions = await compact(
             true,
-            Math.max(2048, Math.floor(estimated / 2)),
+            Math.floor(estimated / 2),
           );
           if (actions.length === 0) throw error;
           for (const action of actions) {
@@ -282,12 +292,20 @@ export async function* runAgent(
             role: "assistant",
             content,
             toolCalls,
-            ...(providerData !== undefined ? { providerData } : {}),
+            ...(continuation !== undefined
+              ? { continuation }
+              : providerData !== undefined
+                ? { providerData }
+                : {}),
           }
         : {
             role: "assistant",
             content,
-            ...(providerData !== undefined ? { providerData } : {}),
+            ...(continuation !== undefined
+              ? { continuation }
+              : providerData !== undefined
+                ? { providerData }
+                : {}),
           },
     );
     yield {
@@ -295,6 +313,7 @@ export async function* runAgent(
       content,
       toolCalls,
       usage,
+      ...(continuation !== undefined ? { continuation } : {}),
       ...(providerData !== undefined ? { providerData } : {}),
     };
 
@@ -390,6 +409,7 @@ export async function* runAgent(
         role: "tool",
         toolCallId: call.id,
         content: result.content,
+        ...(result.isError === true ? { isError: true } : {}),
       });
       yield {
         type: "tool-end",

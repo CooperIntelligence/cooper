@@ -54,6 +54,25 @@ describe("estimateMessageTokens", () => {
       estimateMessageTokens(plain),
     );
   });
+
+  it("counts protocol continuation payloads as input tokens", () => {
+    const plain: Message = { role: "assistant", content: "answer" };
+    const withContinuation: Message = {
+      role: "assistant",
+      content: "answer",
+      continuation: {
+        protocol: "openai-chat",
+        endpoint: "endpoint",
+        model: "model",
+        scope: "message",
+        messageAnchor: "anchor",
+        payload: { reasoningContent: "x".repeat(1000) },
+      },
+    };
+    expect(estimateMessageTokens(withContinuation)).toBeGreaterThan(
+      estimateMessageTokens(plain) + 200,
+    );
+  });
 });
 
 describe("estimateConversationTokens", () => {

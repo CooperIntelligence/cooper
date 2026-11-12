@@ -13,7 +13,7 @@ type Field = {
 
 const FIELDS: readonly Field[] = [
   { name: "model", required: true },
-  { name: "protocol", hint: "openai-chat or anthropic-messages", required: true },
+  { name: "protocol", hint: "openai-chat, anthropic-messages, or openai-responses", required: true },
   { name: "baseURL", hint: "HTTP or HTTPS URL", required: true },
   { name: "apiKey", hint: "Replacement key", required: true },
   { name: "maxOutputTokens", kind: "number" },

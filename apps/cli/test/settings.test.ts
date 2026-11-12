@@ -72,11 +72,13 @@ describe("loadSettings", () => {
     expect(settings.warnings).toEqual([]);
   });
 
-  it("accepts both protocols and rejects unknown ones", () => {
-    write(JSON.stringify({ protocol: "openai-chat" }));
-    expect(load().settings?.protocol).toBe("openai-chat");
+  it("accepts supported protocols and rejects unknown ones", () => {
+    for (const protocol of ["openai-chat", "anthropic-messages", "openai-responses"]) {
+      write(JSON.stringify({ protocol }));
+      expect(load().settings?.protocol).toBe(protocol);
+    }
 
-    write(JSON.stringify({ protocol: "openai-responses" }));
+    write(JSON.stringify({ protocol: "unknown-protocol" }));
     expect(() => load()).toThrow(/protocol/);
   });
 

@@ -14,7 +14,7 @@ const contextSchema = z.object({
 });
 
 const settingsSchema = z.object({
-  protocol: z.enum(["openai-chat", "anthropic-messages"]).optional(),
+  protocol: z.enum(["openai-chat", "anthropic-messages", "openai-responses"]).optional(),
   model: z.string().trim().min(1).optional(),
   baseURL: z.string().trim().min(1).optional(),
   apiKey: z.string().trim().min(1).optional(),

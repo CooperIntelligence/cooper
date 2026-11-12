@@ -68,6 +68,7 @@ npm run dev          # 首次运行会进入引导：选协议 → 填 key → �
 | 协议（`protocol`） | 端点（placeholder / 必填） | 模型 |
 |---|---|---|
 | `openai-chat` | `https://api.openai.com/v1`（引导 placeholder） | **必填**（无默认） |
+| `openai-responses` | `https://api.openai.com/v1`（引导 placeholder） | **必填**（无默认） |
 | `anthropic-messages` | `https://api.anthropic.com`（引导 placeholder） | **必填**（无默认） |
 
 OpenAI 兼容端点通过 `baseURL` 指定，例如：
@@ -78,7 +79,11 @@ OpenAI 兼容端点通过 `baseURL` 指定，例如：
 | DeepSeek | `https://api.deepseek.com` | `deepseek-flash` |
 | Moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
 
-输出上限由 `maxOutputTokens` 控制（默认 64000）。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
+DeepSeek 的 Chat Completions 在思考模式下要求带 `tools` 的请求回传历史 `reasoning_content`。适配器会把该字段保存在 assistant 消息的 `continuation` 中，并在同一个 endpoint/model 下原样回传；缺少它时端点会返回 HTTP 400。参见 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/#tool-calls)。
+
+`anthropic-messages` 将 `maxOutputTokens`（默认 64000）作为 `max_tokens` 发送。对支持 adaptive thinking 的 Claude 模型，适配器会请求摘要式 thinking，`--show-reasoning` 因此可用；旧模型自动省略该参数。
+
+使用 `openai-responses` 时，`baseURL` 填 API 根路径，由 SDK 添加 `/responses`。显式配置 `maxOutputTokens` 时发送 `max_output_tokens`，省略时使用服务端默认值。`--show-reasoning` 会请求模型提供推理摘要。若端点拒绝摘要参数，Cooper 会省略该参数重试一次。
 
 ## 配置
 
@@ -175,7 +180,7 @@ npm run dev -- --no-session         # 本次不落盘
 - TUI 横幅和无头模式的 stderr 都会打印会话 id。
 - 会话绑定工作目录：在别的工作区 `--resume` 会报错，不会把路径错配到另一个项目。
 - 上下文压缩后会追加一条 **checkpoint**（压缩后的消息快照）。恢复时以最后一个 checkpoint 为基底再回放后续消息，既保持与退出时一致的上下文，也避免恢复时再花一次摘要调用。
-- **面向用户的推理内容不落盘**（规则 15）。Anthropic 的签名 thinking 块是协议续传数据，作为 `providerData` 随消息保存；它不会显示，也不会发往其他厂商。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
+- 推理展示事件只在运行期间使用，不落盘。适配器把端点要求续传的 payload（`reasoning_content`、完整 assistant `content` 等）保存在 `Message.continuation` 中，随消息持久化，恢复视图会过滤它。**“本次会话始终允许”也不落盘**：重启后权限重新询问，不会因为旧会话静默放行工具。
 - system 提示不落盘，恢复时按工作目录和项目指令重新生成；它不包含当前模式，保持字节稳定以复用 provider 的 prompt cache。
 - 当前模式作为 `policy` 记录追加到会话；模型看到的模式说明是带 `runtime: "permission-mode"` 的 `<cooper-runtime>` 消息，TUI 和恢复视图会过滤它，不把它显示成用户输入。
 - 启动时用 `--resume` 恢复会话，可以沿用保存的 `plan` 或 `ask`。保存的 `auto` 会被跳过，继续使用配置默认值或 `ask`。开启 `auto` 需要本次启动传入 `--mode auto`，或在空闲的 TUI 内输入 `/auto`。
@@ -261,16 +266,16 @@ TUI 空闲时可以直接切换：
 
 ## 推理内容
 
-支持 `reasoning_content` / `reasoning` 字段的端点（DeepSeek、Kimi、Qwen、OpenRouter 等）会额外返回模型的推理摘要。
+部分兼容端点通过 `reasoning_content` 或 `reasoning` 返回推理文本。Claude 也可以返回 thinking 摘要。
 
 - **默认**：不显示文本，只在运行时显示 `reasoning 12.3k chars` 的进度提示；端点报告推理 token 数时，每轮结束留一行 `· reasoned 1.2k tokens`
 - **`--show-reasoning`**（或配置 `showReasoning: true`）：按完整行以暗灰色提交到滚动区；无头模式写到 stderr，stdout 仍然只有答案
 
-**推理内容永远不进入对话历史**，也不会被将来的会话持久化保存。三个原因：DeepSeek 明确要求 `reasoning_content` 不能回传；回传只会白白消耗上下文；推理摘要未必忠实反映模型的实际计算，让它变成后续轮次的上下文会污染判断。
+推理展示事件只用于实时输出。续传字段由适配器按端点的协议要求处理。
 
-唯一例外是 Anthropic 的**签名 thinking 块**：带工具调用时 API 要求原样回传。适配器把它们作为不透明协议数据保存在 assistant 的 `providerData` 中，只回传 Anthropic，不渲染进历史、不混入文本、不发往其他厂商；恢复 Anthropic 会话时也会一并保存，否则下一次请求可能被拒绝。
-
-不是所有端点都返回推理文本——OpenAI 的推理模型通过 chat completions 只给 token 计数，Anthropic 返回的是摘要。所以这是"有就显示、没有就沉默"的能力，不能当成核心功能依赖。
+- **Chat Completions**。OpenAI 官方接口通过 `tool_calls` 和 `tool_call_id` 衔接工具调用与结果，assistant 消息格式没有 `reasoning_content`。DeepSeek 的思考模式在请求带 `tools` 时要求完整回传保留历史中的 `reasoning_content`，也包括未调用工具的历史轮次。请求不带 `tools` 时，DeepSeek 会忽略该字段。适配器在 `Message.continuation` 中保存端点返回的 `reasoning_content` / `reasoning_details`，只回传给同一个 endpoint 和 model。[OpenAI API 参考](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) · [DeepSeek 思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)
+- **Messages**。工具续传要求按原顺序回传完整 assistant `content`。Claude 的签名 `thinking` 和 `redacted_thinking` 块也须原样保留。适配器在 `continuation` 中保存完整有序的 `content` 并原样回传，不再拼接文本和工具调用。Claude 的部分模型还会校验生成 thinking 块时的请求前缀；本地压缩后适配器会保留可见块、丢弃失效的 thinking 块，而不是重放旧签名。DeepSeek 的 Messages 兼容端点同样要求在思考模式下续传完整 assistant `content`。[Claude 工具续传](https://platform.claude.com/docs/en/build-with-claude/thinking-tool-workflows) · [Claude 前缀校验](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking) · [DeepSeek Messages](https://api-docs.deepseek.com/guides/anthropic_api/)
+- **Responses**。`openai-responses` 通过 `POST /responses` 流式生成文本，支持 Cooper 的本地工具和 MCP 工具。工具结果以 `function_call_output` 和对应的 `call_id` 回传。Cooper 使用 `store: false`，按原顺序在 `input` 中回放同一端点、同一模型返回的 items，包括 OpenAI 的 `encrypted_content` 或兼容端点返回的 `reasoning_text`。历史压缩或前缀变更后会跳过失效的推理项。[OpenAI 推理续传](https://developers.openai.com/api/docs/guides/reasoning) · [DeepSeek Responses](https://api-docs.deepseek.com/guides/responses_api/)
 
 ## 上下文管理
 
@@ -402,5 +407,5 @@ npm test                                   # core + cli 单元测试
 3. 工具统一实现 `Tool` 接口，输入用 zod 定义，自动转成 JSON Schema 交给模型；MCP 工具直接透传服务器的 JSON Schema。
 4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。MCP 服务器暴露的 tools 一律声明 `execute`，不信任服务器标注；Cooper 自己的 MCP resources 适配器是 `read`。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
-6. Provider 统一实现 `Provider` 接口，厂商差异只存在于适配器内部。Anthropic 的签名 thinking 块存放在 `providerData`，只回传给 Anthropic。
+6. Provider 统一实现 `Provider` 接口。协议续传数据存放在 `Message.continuation` 中，并按协议、endpoint、model 和历史 anchor 校验；不匹配的 payload 不会被重放。
 7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，描述权限机制但不写死当前模式，TUI 与无头模式共用。当前模式作为追加的 `<cooper-runtime>` 通知进入对话，避免切换模式时让 provider 的 prompt cache 整体失效。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。

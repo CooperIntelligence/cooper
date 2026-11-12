@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentEvent } from "./agent.js";
 import { cooperHome } from "./home.js";
 import type { PermissionPreset } from "./permissions.js";
+import { isContinuation } from "./provider/continuation.js";
 import type { Message, RuntimeNoticeKind, ToolCall } from "./types.js";
 
 export { cooperHome } from "./home.js";
@@ -23,8 +24,11 @@ export { cooperHome } from "./home.js";
  * every tool call to have its results, so replaying a half-finished group
  * would make every later request fail.
  *
- * Reasoning text is never stored here (see AGENTS.md rule 15). "Always allow
- * this tool" is deliberately not stored either: permissions are per process.
+ * Reasoning display text is never stored here (see AGENTS.md rule 15).
+ * Protocol continuation payloads (`reasoning_content`, signed thinking blocks,
+ * encrypted items) are stored so a resumed session can replay them. "Always
+ * allow this tool" is deliberately not stored either: permissions are per
+ * process.
  */
 
 const SESSION_VERSION = 1;
@@ -236,8 +240,12 @@ function parseMessage(value: unknown): Message | null {
       if (!isString(value.content)) return null;
       const toolCalls = parseToolCalls(value.toolCalls);
       if (toolCalls === null) return null;
-      // Opaque provider continuation data (e.g. signed Anthropic thinking
-      // blocks) is preserved verbatim so a resumed session can replay it.
+      // Protocol continuation data must survive a resume: a tool loop that
+      // cannot replay its reasoning is rejected by DeepSeek/Kimi/Anthropic.
+      const continuation = isContinuation(value.continuation)
+        ? value.continuation
+        : undefined;
+      // Legacy sessions stored Anthropic thinking blocks under `providerData`.
       const providerData = isRecord(value.providerData)
         ? value.providerData
         : undefined;
@@ -245,6 +253,7 @@ function parseMessage(value: unknown): Message | null {
         role: "assistant",
         content: value.content,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(continuation !== undefined ? { continuation } : {}),
         ...(providerData !== undefined ? { providerData } : {}),
       };
     }
@@ -255,6 +264,7 @@ function parseMessage(value: unknown): Message | null {
             role: "tool",
             toolCallId: value.toolCallId,
             content: value.content,
+            ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
           }
         : null;
 
@@ -626,16 +636,20 @@ export class SessionWriter {
                 role: "assistant",
                 content: event.content,
                 toolCalls: event.toolCalls,
-                ...(event.providerData !== undefined
-                  ? { providerData: event.providerData }
-                  : {}),
+                ...(event.continuation !== undefined
+                  ? { continuation: event.continuation }
+                  : event.providerData !== undefined
+                    ? { providerData: event.providerData }
+                    : {}),
               }
             : {
                 role: "assistant",
                 content: event.content,
-                ...(event.providerData !== undefined
-                  ? { providerData: event.providerData }
-                  : {}),
+                ...(event.continuation !== undefined
+                  ? { continuation: event.continuation }
+                  : event.providerData !== undefined
+                    ? { providerData: event.providerData }
+                    : {}),
               };
         return this.appendMessage(message, undefined, now);
       }
@@ -646,6 +660,7 @@ export class SessionWriter {
             role: "tool",
             toolCallId: event.call.id,
             content: event.result.content,
+            ...(event.isError ? { isError: true } : {}),
           },
           {
             toolName: event.call.name,

@@ -146,12 +146,14 @@ type Step =
 const PROTOCOLS: { value: ProtocolKind; label: string }[] = [
   { value: "openai-chat", label: "OpenAI chat completions (OpenAI, DeepSeek, gateways)" },
   { value: "anthropic-messages", label: "Anthropic Messages (Claude native)" },
+  { value: "openai-responses", label: "OpenAI Responses" },
 ];
 
 /** Example only — shown as a placeholder; never auto-written as a default. */
 const MODEL_PLACEHOLDER: Record<ProtocolKind, string> = {
   "openai-chat": "gpt-4o-mini",
   "anthropic-messages": "claude-opus-5-5",
+  "openai-responses": "gpt-4o-mini",
 };
 
 function OnboardingApp({
