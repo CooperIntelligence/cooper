@@ -34,7 +34,7 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 
 - 会话开启时（非 `--no-session`）：`SessionWriter.create` 生成**新** id 与文件，旧会话文件不动，仍可用 `--sessions` / `--resume` 找回；新文件立即写入当前 `policy` 与 mode runtime notice。
 - 内存消息历史重置为 system prompt + 当前模式 notice；模式（plan/ask/auto）不重置。
-- 终端写 ANSI（`ESC[2J ESC[H ESC[3J`）清屏与 scrollback，`<Static>` 换 `key` 重挂载，重绘启动横幅（含新会话 id）。
+- 终端写 ANSI（`ESC[2J ESC[H ESC[3J`）清屏与 scrollback，`<Static>` 换 `key` 重挂载，重绘会话头部。`/status` 显示新会话 ID。
 - 不支持 Claude Code 的 `/clear [name]` 命名参数。
 - `--no-session` 时只重置内存与屏幕，`sessionsEnabled` 在 mount 时固定，clear 不会开始落盘。
 

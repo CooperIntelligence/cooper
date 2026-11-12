@@ -5,6 +5,7 @@ import type { MarkdownLine } from "./markdown.js";
 export type ToolStatus = "running" | "ok" | "error" | "denied";
 
 export type UiItem =
+  | { id: number; kind: "header"; model: string; root: string; autoApprove: boolean; resume?: string }
   | { id: number; kind: "user"; text: string }
   | { id: number; kind: "assistant-line"; line: MarkdownLine; first: boolean }
   | { id: number; kind: "reasoning-line"; text: string }

@@ -116,6 +116,22 @@ function ReplyLine({ line, live }: { line: MarkdownLine; live: boolean }) {
 }
 
 function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
+  if (item.kind === "header") {
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text bold>
+            C<Text color="#56DCC8">OO</Text>PER
+          </Text>
+          <Text dimColor wrap="truncate-end">{`  ${item.model}`}</Text>
+        </Box>
+        <Text dimColor wrap="truncate-middle">{item.root}</Text>
+        {item.autoApprove && <Text color="yellow">Auto mode approves all tool calls.</Text>}
+        {item.resume && <Text dimColor>{item.resume}</Text>}
+      </Box>
+    );
+  }
+
   if (item.kind === "user") {
     return (
       <Box marginTop={1}>
@@ -294,7 +310,7 @@ export function App({
   provider: Provider;
   /** Built-in tools plus any connected MCP tools. */
   tools: Tool[];
-  /** MCP startup status, shown in the banner and as notices. */
+  /** MCP status for /mcp and startup notices. */
   mcp: McpReport;
   /** Restored/refused mode information, when resuming a session. */
   modeNotice?: string;
@@ -351,62 +367,20 @@ export function App({
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(
     null,
   );
-  const describeSessionLine = (writer: SessionWriter | null): string =>
-    writer !== null
-      ? `Session ${writer.id} · resume with: cooper --resume ${writer.id}`
-      : "Session: not saved (--no-session)";
-
-  const sessionLine =
-    resumed !== null
-      ? `Resumed session ${resumed.header.id} · ${resumed.messages.length} message(s)` +
-        (resumed.repaired > 0
-          ? ` · repaired ${resumed.repaired} invalid row(s)`
-          : "")
-      : describeSessionLine(sessionWriter);
-
-  // Server tools are `mcp__<server>__<tool>`; Cooper's shared resource
-  // tools are `mcp_*`, so both belong in the MCP count.
-  const buildBannerText = (sessionText: string): string => {
-    const { config, tools } = active.current;
-    const mcpToolCount = tools.filter((tool) =>
-      tool.name.startsWith("mcp_"),
-    ).length;
-    const toolLine = `Tools: ${tools.length}${mcpToolCount > 0 ? ` (${mcpToolCount} MCP)` : ""}`;
-    const mcpLine =
-      mcp.statuses.length === 0
-        ? mcp.warnings.length > 0
-          ? "MCP: no servers loaded"
-          : "MCP: none"
-        : `MCP: ${mcp.statuses
-            .map((status) =>
-              status.ok
-                ? `${status.name} (${status.toolCount})`
-                : `${status.name} failed`,
-            )
-            .join(", ")}`;
-
-    return (
-      `Cooper ready · ${config.model} · ${root}\n` +
-      `Mode: ${permissions.preset}${permissions.preset === "auto" ? " (auto-approve ALL tools)" : ""} · ${toolLine}. /help lists commands. Esc interrupts.\n` +
-      `Context: ${formatTokens(config.context.window)}${config.contextWindowAssumed ? " (assumed — set context.window in config.json to override)" : ""} · prunes at 65%, summarizes at 80%\n` +
-      `Instructions: ${describeInstructions(instructions.sources, root)}\n` +
-      `${mcpLine}\n` +
-      (config.settingsFile === null
-        ? "No config file yet — /status shows effective settings; setup writes ~/.cooper/config.json.\n"
-        : "") +
-      sessionText
-    );
-  };
+  const buildHeader = (id: number, loaded: LoadedSession | null = null): UiItem => ({
+    id,
+    kind: "header",
+    model: active.current.config.model,
+    root,
+    autoApprove: permissions.preset === "auto",
+    resume: loaded === null ? undefined : `Resumed session ${loaded.header.id}` +
+      (loaded.repaired > 0 ? ` · repaired ${loaded.repaired} invalid row(s)` : ""),
+  });
 
   // Replayed history and the banner are committed once, before the live
   // region exists, so resumed rows scroll into history exactly like live ones.
   const [initial] = useState(() => {
-    const banner: UiItem = {
-      id: 0,
-      kind: "notice",
-      tone: "info",
-      text: buildBannerText(sessionLine),
-    };
+    const header = buildHeader(0, resumed);
 
     let id = 1;
     const startup: UiItem[] = [];
@@ -440,7 +414,7 @@ export function App({
       resumed !== null
         ? buildResumeView(resumed, id)
         : { items: [] as UiItem[], nextId: id };
-    return { items: [banner, ...startup, ...view.items], nextId: view.nextId };
+    return { items: [header, ...startup, ...view.items], nextId: view.nextId };
   });
   const [committed, setCommitted] = useState<UiItem[]>(initial.items);
   const nextId = useRef(initial.nextId);
@@ -617,13 +591,7 @@ export function App({
       process.stdout.write("\u001B[2J\u001B[H\u001B[3J");
     }
     sessionFailureShown.current = false;
-    const banner: UiItem = {
-      id: nextId.current++,
-      kind: "notice",
-      tone: "info",
-      text: buildBannerText(describeSessionLine(writer)),
-    };
-    setCommitted([banner]);
+    setCommitted([buildHeader(nextId.current++)]);
     setLive(null);
     setLiveReasoning(null);
     setReasoningHint(null);
@@ -700,20 +668,9 @@ export function App({
     }
     sessionFailureShown.current = false;
 
-    let resumeId = nextId.current;
-    const banner: UiItem = {
-      id: resumeId++,
-      kind: "notice",
-      tone: "info",
-      text: buildBannerText(
-        `Resumed session ${loaded.header.id} · ${loaded.messages.length} message(s)` +
-          (loaded.repaired > 0
-            ? ` · repaired ${loaded.repaired} invalid row(s)`
-            : ""),
-      ),
-    };
-    const view = buildResumeView(loaded, resumeId);
-    setCommitted([banner, ...view.items]);
+    const header = buildHeader(nextId.current++, loaded);
+    const view = buildResumeView(loaded, nextId.current);
+    setCommitted([header, ...view.items]);
     nextId.current = view.nextId;
     setLive(null);
     setLiveReasoning(null);
@@ -832,14 +789,20 @@ export function App({
         return;
       case "status": {
         const { config, tools } = active.current;
-        notice(
+        const sessionInfo = sessionWriter !== null
+          ? `Session ${sessionWriter.id} · resume with: cooper --resume ${sessionWriter.id}`
+          : "Session: not saved (--no-session)";
+        notice([
+          `Workspace: ${root}`,
+          `Instructions: ${describeInstructions(instructions.sources, root)}`,
+          sessionInfo,
           formatStatus({
             config,
             mode: modeState,
             modeSource: modeSourceState,
             contextTokens: estimateContextTokens(history.current, tools.map(toToolSpec)),
           }),
-        );
+        ].join("\n"));
         return;
       }
       case "reload":

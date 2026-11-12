@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { stripVTControlCharacters } from "node:util";
 import { createBuiltinTools } from "@cooper/core";
 import { render } from "ink";
 import { expect, it, vi } from "vitest";
@@ -81,6 +82,11 @@ it("edits and reloads settings in a running TUI without losing the conversation"
       { stdin, stdout, stderr, debug: true, patchConsole: false },
     );
     await vi.waitFor(() => expect(stdin.setRawMode).toHaveBeenCalledWith(true));
+    const startup = stripVTControlCharacters(output);
+    const [title, workspace] = startup.split(/\r?\n/);
+    expect(title).toBe("COOPER  old-model");
+    expect(workspace).toContain(path.basename(root));
+    expect(startup).not.toMatch(/\/help|Context:|Instructions:|MCP:|Session:/);
     await enter("first prompt", "reply 1");
 
     const original = fs.readFileSync(file, "utf8");
@@ -111,6 +117,9 @@ it("edits and reloads settings in a running TUI without losing the conversation"
     fs.writeFileSync(file, JSON.stringify(newSettings));
     await enter("/reload", "Configuration reloaded");
     await enter("/status", "Settings file:");
+    expect(output).toContain("Workspace:");
+    expect(output).toContain("Instructions: none");
+    expect(output).toContain("Session: not saved (--no-session)");
     expect(output).toMatch(/Mode: ask \(default\)/);
     expect(output).toMatch(/showReasoning\s+on\s+flag/);
     expect(output).toMatch(/Context usage \(estimated\): \d+ \/ 40000 tokens/);
