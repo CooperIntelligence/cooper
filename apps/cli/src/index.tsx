@@ -70,6 +70,8 @@ Configuration:
   Set protocol, model, baseURL, and apiKey in ~/.cooper/config.json.
   The supported protocols are openai-chat and anthropic-messages.
   Run cooper interactively to complete setup.
+  Use /config in the TUI to edit and apply settings.
+  Use /reload to apply edits made to config.json elsewhere.
 
 Sessions are saved by default; use --no-session to keep a run ephemeral.
 `;
@@ -161,7 +163,7 @@ async function main(): Promise<void> {
     // TUI is the one entry point into onboarding; headless and every other
     // config error fail closed as before.
     try {
-      config = loadConfig();
+      config = loadConfig({ showReasoning: args.showReasoning });
     } catch (error) {
       if (!(error instanceof IncompleteConfigError)) throw error;
       if (args.prompt !== null || !process.stdin.isTTY || !process.stdout.isTTY) {
@@ -178,7 +180,7 @@ async function main(): Promise<void> {
         );
       }
       writeOnboardingConfig(undefined, result);
-      config = loadConfig();
+      config = loadConfig({ showReasoning: args.showReasoning });
     }
 
     for (const warning of config.settingsWarnings) {
@@ -216,11 +218,6 @@ async function main(): Promise<void> {
     fail(error);
   }
 
-  // The flag always wins; record it so /status reports the true source.
-  if (args.showReasoning) {
-    config.showReasoning = true;
-    config.sources.showReasoning = "flag";
-  }
   const showReasoning = config.showReasoning;
   const provider = createProvider(config);
 
@@ -280,7 +277,7 @@ async function main(): Promise<void> {
         mode={mode}
         modeSource={modeSource}
         instructions={instructions}
-        showReasoning={showReasoning}
+        showReasoningFlag={args.showReasoning}
         provider={provider}
         tools={tools}
         mcp={mcp}

@@ -13,6 +13,8 @@ export type CommandName =
   | "mcp"
   | "tools"
   | "status"
+  | "config"
+  | "reload"
   | "exit";
 
 export type CommandSpec = {
@@ -94,6 +96,18 @@ export const COMMANDS: readonly CommandSpec[] = [
     aliases: [],
     usage: "/status",
     description: "show effective settings and where each value came from",
+  },
+  {
+    name: "config",
+    aliases: [],
+    usage: "/config [setting]",
+    description: "edit and apply user configuration",
+  },
+  {
+    name: "reload",
+    aliases: [],
+    usage: "/reload",
+    description: "apply edits to ~/.cooper/config.json",
   },
   {
     name: "exit",

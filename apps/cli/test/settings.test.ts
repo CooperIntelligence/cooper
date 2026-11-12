@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSettings, userConfigFile } from "../src/settings.js";
+import { loadSettings, readSettingsDocument, userConfigFile, writeSettingsDocument } from "../src/settings.js";
 
 let dir: string;
 let home: string;
@@ -19,6 +19,16 @@ function load() {
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "cooper-settings-"));
   home = path.join(dir, "home");
+});
+
+it("refuses to overwrite config changed since the editor opened", () => {
+  write('{"model":"original"}');
+  const document = readSettingsDocument(home);
+  write('{"model":"external edit"}');
+
+  expect(() => writeSettingsDocument(document, { model: "stale draft" })).toThrow(/config\.json changed/);
+  expect(load().settings?.model).toBe("external edit");
+  expect(fs.readdirSync(home)).toEqual(["config.json"]);
 });
 
 afterEach(() => {

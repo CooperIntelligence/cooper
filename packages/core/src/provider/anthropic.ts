@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   ContentBlockParam,
@@ -26,6 +27,8 @@ export type AnthropicProviderOptions = {
   baseURL?: string;
   /** Streaming responses let us give the model room without HTTP timeouts. */
   maxTokens?: number;
+  /** Allow replay of older session data whose originating endpoint is unknown. */
+  allowLegacyThinking?: boolean;
   /** Injectable client, used by tests; the constructor builds one otherwise. */
   client?: Anthropic;
 };
@@ -60,17 +63,28 @@ function parseToolInput(raw: string): unknown {
   }
 }
 
+type ThinkingScope = {
+  endpoint: string;
+  model: string;
+  allowLegacy: boolean;
+};
+
 /**
  * Signed thinking blocks are protocol data: Anthropic requires them to be
  * replayed unchanged with tool results. They are stored in `providerData`,
  * never rendered, and never sent to another provider (AGENTS.md rule 15).
  */
-function replayThinking(message: Message): ContentBlockParam[] {
+function replayThinking(message: Message, scope?: ThinkingScope): ContentBlockParam[] {
   if (message.role !== "assistant" || message.providerData === undefined) {
     return [];
   }
   const anthropic = message.providerData["anthropic"];
   if (!isRecord(anthropic)) return [];
+  if (scope !== undefined) {
+    const legacy = anthropic.endpoint === undefined && anthropic.model === undefined;
+    const matches = anthropic.endpoint === scope.endpoint && anthropic.model === scope.model;
+    if (!matches && !(legacy && scope.allowLegacy)) return [];
+  }
   const blocks = anthropic["thinking"];
   if (!Array.isArray(blocks)) return [];
 
@@ -123,7 +137,7 @@ function extractThinking(
  *   - consecutive tool results become ONE user message with multiple
  *     tool_result blocks (splitting parallel results breaks tool use)
  */
-export function toAnthropicMessages(messages: Message[]): {
+export function toAnthropicMessages(messages: Message[], scope?: ThinkingScope): {
   system: string | undefined;
   messages: MessageParam[];
 } {
@@ -159,7 +173,7 @@ export function toAnthropicMessages(messages: Message[]): {
       continue;
     }
 
-    const content: ContentBlockParam[] = replayThinking(message);
+    const content: ContentBlockParam[] = replayThinking(message, scope);
     if (message.content.length > 0) {
       content.push({ type: "text", text: message.content });
     }
@@ -213,6 +227,8 @@ function toUsage(usage: Anthropic.Usage | undefined): TokenUsage | undefined {
 export class AnthropicProvider implements Provider {
   private readonly client: Anthropic;
   private readonly maxTokens: number;
+  private readonly endpoint: string;
+  private readonly allowLegacyThinking: boolean;
 
   constructor(options: AnthropicProviderOptions) {
     this.client =
@@ -222,10 +238,16 @@ export class AnthropicProvider implements Provider {
         baseURL: options.baseURL,
       });
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
+    this.endpoint = createHash("sha256").update(this.client.baseURL).digest("hex");
+    this.allowLegacyThinking = options.allowLegacyThinking ?? true;
   }
 
   async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
-    const { system, messages } = toAnthropicMessages(request.messages);
+    const { system, messages } = toAnthropicMessages(request.messages, {
+      endpoint: this.endpoint,
+      model: request.model,
+      allowLegacy: this.allowLegacyThinking,
+    });
 
     const params: Anthropic.MessageStreamParams = {
       model: request.model,
@@ -282,7 +304,9 @@ export class AnthropicProvider implements Provider {
 
     const thinking = extractThinking(message.content);
     const providerData: ProviderData | undefined =
-      thinking.length > 0 ? { anthropic: { thinking } } : undefined;
+      thinking.length > 0
+        ? { anthropic: { thinking, endpoint: this.endpoint, model: request.model } }
+        : undefined;
 
     yield {
       type: "done",

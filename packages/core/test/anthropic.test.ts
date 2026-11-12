@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -210,7 +211,7 @@ describe("toAnthropicMessages", () => {
 
 describe("AnthropicProvider", () => {
   it("normalizes thinking, text, tool calls, and usage", async () => {
-    const { server, baseURL } = await startServer(
+    const { server, baseURL, requests } = await startServer(
       () =>
         messageStart +
         sse("content_block_start", {
@@ -282,6 +283,8 @@ describe("AnthropicProvider", () => {
       ],
       providerData: {
         anthropic: {
+          endpoint: createHash("sha256").update(baseURL).digest("hex"),
+          model: "claude-opus-5-5",
           thinking: [
             { type: "thinking", thinking: "pondering", signature: "sig-1" },
           ],
@@ -293,6 +296,24 @@ describe("AnthropicProvider", () => {
       outputTokens: 15,
     });
     expect(done?.type === "done" ? done.finishReason : null).toBe("tool_use");
+
+    if (done?.type !== "done") throw new Error("Missing provider completion");
+    const messages: Message[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", ...done.message },
+      { role: "tool", content: "hi", toolCallId: "call_1" },
+    ];
+    await collect(provider.stream({ model: "claude-opus-5-5", messages, tools: [] }));
+    await collect(provider.stream({ model: "claude-sonnet-5-5", messages, tools: [] }));
+    const other = await startServer(() => messageStart + textEvents("ok") + messageEnd("end_turn", 2));
+    servers.push(other.server);
+    const otherProvider = new AnthropicProvider({ apiKey: "test", baseURL: other.baseURL });
+    await collect(otherProvider.stream({ model: "claude-opus-5-5", messages, tools: [] }));
+
+    expect(JSON.stringify(requests[1]?.body.messages)).toContain("sig-1");
+    expect(JSON.stringify(requests[2]?.body.messages)).not.toContain("sig-1");
+    expect(JSON.stringify(other.requests[0]?.body.messages)).not.toContain("sig-1");
+    expect(JSON.stringify(other.requests[0]?.body.messages)).toContain("tool_result");
   });
 
   it("sends system, tools, thinking config, and grouped tool results", async () => {

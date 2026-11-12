@@ -5,7 +5,7 @@ import {
   type ContextSettings,
   type PermissionPreset,
 } from "@cooper/core";
-import { loadSettings, userConfigFile, type Settings } from "./settings.js";
+import { loadSettings, userConfigFile, type LoadedSettings, type Settings } from "./settings.js";
 
 export type ApprovalMode = PermissionPreset;
 export type ProtocolKind = NonNullable<Settings["protocol"]>;
@@ -61,8 +61,14 @@ export class IncompleteConfigError extends Error {
 }
 
 /** Resolve Cooper settings from the user configuration file. */
-export function loadConfig(options: { home?: string } = {}): Config {
-  const { settings, file, warnings } = loadSettings(options);
+export function loadConfig(options: { home?: string; showReasoning?: boolean } = {}): Config {
+  return resolveConfig(loadSettings(options), options);
+}
+
+export function resolveConfig(
+  { settings, file, warnings }: LoadedSettings,
+  options: { home?: string; showReasoning?: boolean } = {},
+): Config {
   const { protocol, model, baseURL, apiKey } = settings ?? {};
   if (protocol === undefined || model === undefined ||
       baseURL === undefined || apiKey === undefined) {
@@ -71,6 +77,9 @@ export function loadConfig(options: { home?: string } = {}): Config {
       file ?? userConfigFile(options.home),
       warnings,
     );
+  }
+  if (!URL.canParse(baseURL) || !["http:", "https:"].includes(new URL(baseURL).protocol)) {
+    throw new Error(`Invalid baseURL in ${file}. Use an absolute HTTP or HTTPS URL.`);
   }
 
   const context = settings?.context;
@@ -94,7 +103,7 @@ export function loadConfig(options: { home?: string } = {}): Config {
       enabled: context?.compact ?? true,
     },
     contextWindowAssumed: assumed,
-    showReasoning: settings?.showReasoning ?? false,
+    showReasoning: options.showReasoning || (settings?.showReasoning ?? false),
     defaultMode: settings?.mode,
     shell: resolveCommandShell(settings?.shell),
     sources: {
@@ -103,7 +112,7 @@ export function loadConfig(options: { home?: string } = {}): Config {
       baseURL: "config",
       apiKey: "config",
       maxOutputTokens: source(settings?.maxOutputTokens),
-      showReasoning: source(settings?.showReasoning),
+      showReasoning: options.showReasoning ? "flag" : source(settings?.showReasoning),
       shell: source(settings?.shell),
       "context.window": source(configuredWindow),
       "context.reserveOutputTokens": source(context?.reserveOutputTokens),
