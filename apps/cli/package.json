@@ -1,6 +1,6 @@
 {
   "name": "@cooper-intelligence/cooper-code",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "type": "module",
   "description": "Cooper Code — an AI coding agent in your terminal.",
   "keywords": [
