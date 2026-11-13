@@ -72,13 +72,15 @@ npm run dev          # 首次运行会进入引导：选协议 → 填 key → �
 | `openai-responses` | `https://api.openai.com/v1`（引导 placeholder） | **必填**（无默认） |
 | `anthropic-messages` | `https://api.anthropic.com`（引导 placeholder） | **必填**（无默认） |
 
-OpenAI 兼容端点通过 `baseURL` 指定，例如：
+按供应商和模型填写 `protocol`、`baseURL` 和 `model`。
 
-| 供应商 | `baseURL` | `model` |
-|---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-6-astra` |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-flash` |
-| Moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
+| 供应商 | `protocol` | `baseURL` | `model` |
+|---|---|---|---|
+| OpenAI | `openai-responses` | `https://api.openai.com/v1` | `gpt-6-astra` |
+| DeepSeek | `openai-chat` | `https://api.deepseek.com` | `deepseek-flash` |
+| Moonshot | `openai-chat` | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` |
+
+GPT-6 Astra 的工具调用需要 Responses API。 [OpenAI 推理指南](https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort)
 
 DeepSeek 的 Chat Completions 在思考模式下要求带 `tools` 的请求回传历史 `reasoning_content`。适配器会把该字段保存在 assistant 消息的 `continuation` 中，并在同一个 endpoint/model 下原样回传；缺少它时端点会返回 HTTP 400。参见 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/#tool-calls)。
 
@@ -100,9 +102,9 @@ TUI 和 headless 都从 **`~/.cooper/config.json`** 读取 provider 配置。旧
 
 ```json
 {
-  "protocol": "openai-chat",
-  "model": "gpt-4o-mini",
-  "baseURL": "https://gateway.example/v1",
+  "protocol": "openai-responses",
+  "model": "gpt-6-astra",
+  "baseURL": "https://api.openai.com/v1",
   "apiKey": "sk-…",
   "maxOutputTokens": 64000,
   "showReasoning": false,

@@ -21,12 +21,12 @@ cooper --help
 
 Run `cooper` once interactively — a guided setup asks for your protocol and
 API key, verifies the key against the endpoint, and writes
-`~/.cooper/config.json`:
+`~/.cooper/config.json`. This example uses OpenAI Responses for GPT-6 Astra.
 
 ```json
 {
-  "protocol": "openai-chat",
-  "model": "gpt-4o-mini",
+  "protocol": "openai-responses",
+  "model": "gpt-6-astra",
   "baseURL": "https://api.openai.com/v1",
   "apiKey": "sk-..."
 }

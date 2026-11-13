@@ -44,6 +44,6 @@ Status: implemented
 
 ## Verification
 
-Windows ConPTY 和 Linux PTY 的 `80×24` 会话均验证了文件 diff 与长命令可以翻到末尾，批准后写入，拒绝后跳过执行，以及已完成回复只进入滚动历史一次。Linux PTY 另验证了缩放后继续翻页。Windows Terminal 图形前端仍待人工复核。
+Windows ConPTY 和 Linux PTY 的 `80×24` 会话均验证了文件 diff 与长命令可以翻到末尾，批准后写入，拒绝后跳过执行，以及已完成回复只进入滚动历史一次。Linux PTY 另验证了缩放后继续翻页。Windows Terminal 图形前端已通过人工复核。
 
 自动化回归覆盖了文件预览失效、目录链接改指向后的重新确认，以及预览复核后目录再次改变时拒绝启动命令。
