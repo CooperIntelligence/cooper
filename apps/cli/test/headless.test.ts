@@ -1,11 +1,13 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   SessionWriter,
   createSession,
+  discoverSkills,
   isRuntimeNotice,
+  latestRuntimeNotice,
   loadSession,
   resolveCommandShell,
   type AssistantMessage,
@@ -34,6 +36,80 @@ const config: Config = {
 };
 
 const noInstructions: LoadedInstructions = { text: "", sources: [] };
+
+it("activates an explicit skill before the first request and keeps its content out of stdout", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "cooper-skill-headless-"));
+  try {
+    const directory = path.join(root, ".agents", "skills", "review");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "SKILL.md"),
+      "---\nname: review\ndescription: Review code\n---\nInspect branch conditions.");
+    const skills = await discoverSkills(root, root);
+    const provider = new CapturingProvider();
+    const out = collector();
+    const err = collector();
+    const session = SessionWriter.create({ cwd: root, home: root, model: config.model });
+    const code = await runHeadless({
+      config, root, mode: "plan", prompt: "/skill review Inspect this change",
+      provider, skills, instructions: noInstructions, showReasoning: false, out, err, session,
+    });
+    expect(code).toBe(0);
+    expect(out.text).toBe("ok\n");
+    const request = provider.requests[0]!;
+    expect(request.messages[0]?.content).toContain("Review code");
+    expect(request.messages[0]?.content).not.toContain("Inspect branch conditions.");
+    expect(request.messages).toContainEqual(expect.objectContaining({
+      role: "user", runtime: "skill", content: expect.stringContaining("Inspect branch conditions."),
+    }));
+    expect(request.messages.at(-1)).toEqual({ role: "user", content: "/skill review Inspect this change" });
+    expect(latestRuntimeNotice(request.messages)).toMatchObject({ runtime: "permission-mode" });
+    const saved = loadSession(session.file);
+    expect(saved.messages.some((message) => message.role === "user" && message.runtime === "skill")).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("loads a skill on demand without granting the tools declared in its metadata", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "cooper-skill-permission-"));
+  try {
+    const directory = path.join(root, ".cooper", "skills", "review");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "SKILL.md"),
+      "---\nname: review\ndescription: Review code\nallowed-tools: write_file\n---\nCreate a marker.");
+    const skills = await discoverSkills(root, root);
+    const requests: ChatRequest[] = [];
+    const provider: Provider = {
+      async *stream(request) {
+        requests.push({ ...request, messages: [...request.messages] });
+        const calls = [
+          { id: "skill", name: "load_skill", arguments: '{"name":"review"}' },
+          { id: "write", name: "write_file", arguments: '{"path":"marker","content":"created"}' },
+        ];
+        const call = calls[requests.length - 1];
+        yield {
+          type: "done", finishReason: call ? "tool_calls" : "stop",
+          message: { content: call ? "" : "reviewed", toolCalls: call ? [call] : [] },
+        };
+      },
+    };
+    const out = collector();
+    const err = collector();
+    const code = await runHeadless({
+      config, root, mode: "ask", prompt: "Review this code", provider, skills,
+      instructions: noInstructions, showReasoning: false, out, err,
+    });
+    expect(code).toBe(0);
+    expect(out.text).toBe("reviewed\n");
+    expect(requests[0]?.tools?.some((tool) => tool.name === "load_skill")).toBe(true);
+    expect(requests[0]?.messages[0]?.content).not.toContain("Create a marker.");
+    expect(requests[1]?.messages.at(-1)).toMatchObject({ role: "tool", content: expect.stringContaining("Create a marker.") });
+    expect(requests[2]?.messages.at(-1)).toMatchObject({ role: "tool", isError: true });
+    await expect(readFile(path.join(root, "marker"))).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 class ScriptedProvider implements Provider {
   private index = 0;
@@ -86,7 +162,7 @@ class CapturingProvider implements Provider {
   readonly requests: ChatRequest[] = [];
 
   async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
-    this.requests.push(request);
+    this.requests.push({ ...request, messages: [...request.messages] });
     yield {
       type: "done",
       message: { content: "ok", toolCalls: [] },

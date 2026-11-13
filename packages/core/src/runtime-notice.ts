@@ -40,7 +40,7 @@ export function isRuntimeNotice(message: Message): boolean {
 }
 
 /**
- * The newest runtime notice in a transcript. Compaction uses this to keep the
+ * The newest permission notice in a transcript. Compaction uses this to keep the
  * current permission mode visible even when it summarizes or drops the prefix
  * that originally contained the notice.
  */
@@ -49,7 +49,7 @@ export function latestRuntimeNotice(
 ): Message | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message !== undefined && isRuntimeNotice(message)) return message;
+    if (message?.role === "user" && message.runtime === PERMISSION_MODE_RUNTIME) return message;
   }
   return undefined;
 }

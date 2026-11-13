@@ -69,7 +69,7 @@ describe("parseCommand", () => {
   });
 
   it("parses the first batch of operational commands", () => {
-    for (const name of ["clear", "compact", "sessions", "resume", "mcp", "tools", "config", "reload", "exit"] as const) {
+    for (const name of ["clear", "compact", "sessions", "resume", "mcp", "tools", "skills", "skill", "config", "reload", "exit"] as const) {
       expect(parseCommand(`/${name}`)).toEqual({
         kind: "command",
         name,
@@ -163,6 +163,8 @@ describe("filterCommands", () => {
     ]);
     expect(filterCommands("/s").map((spec) => spec.name)).toEqual([
       "sessions",
+      "skill",
+      "skills",
       "status",
     ]);
   });

@@ -230,6 +230,8 @@ TUI 空闲时可以直接切换：
 | `/sessions` | — | 列出本工作区已保存的会话 |
 | `/resume <id>` | — | 切换到已保存会话（支持唯一 id 前缀）；保持当前权限模式 |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
+| `/skills` | — | 列出已发现的 Skills |
+| `/skill <name> [请求]` | — | 为本轮加载指定 Skill |
 | `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
 | `/status` | — | 显示工作区、指令文件、会话、上下文占用率和生效配置 |
 | `/config [setting]` | — | 在 TUI 内编辑、保存并应用用户配置 |
@@ -331,6 +333,16 @@ Cooper 在 Windows 默认使用系统自带的 Windows PowerShell 5.1，在 Linu
 可选值为 `powershell`、`pwsh`、`cmd`、`sh`、`bash`、`zsh` 和 `git-bash`。`powershell`、`cmd` 和 `git-bash` 用于 Windows。`git-bash` 会查找 Git for Windows 的标准安装目录。也可以设置 `shell.executable` 为绝对路径，Windows 上选择 `bash` 时必须提供该路径。显式配置的 shell 不可用时，Cooper 会在启动时指出问题。没有安装 Bash 的精简 Linux 环境可配置 `"shell": { "kind": "sh" }`。审批界面会显示 shell 和工作目录，`/status` 会显示可执行文件路径。
 
 内置文件工具和 `run_command` 的启动目录会校验真实路径，拒绝指向工作区外的符号链接和 Windows junction。获准启动的命令以当前操作系统用户的权限运行。
+
+## Skills
+
+Cooper 在启动时发现 [Agent Skills](https://agentskills.io/specification)。每项技能放在单独的目录中，包含带 YAML frontmatter 的 `SKILL.md`。其中 `name` 与目录同名，`description` 描述技能适用的任务。
+
+Cooper 在工作区和用户主目录下查找 `.cooper/skills/` 与 `.agents/skills/`。同名技能优先使用项目版本，同一范围内优先使用 `.cooper/skills/`。新增技能或修改元数据后，重启 Cooper 刷新目录。
+
+在 TUI 输入 `/skills` 查看技能和发现告警，输入 `/skill code-review 检查当前改动` 显式调用。无头模式可运行 `cooper -p "/skill code-review 检查当前改动"`。普通请求也会让模型看到技能名称和描述，由模型按需加载正文和引用文本。
+
+技能正文和引用文件各有 64 KiB 的读取上限。引用文件按技能目录解析。项目技能和项目指令一样受现有权限约束，技能的 `allowed-tools` 字段不会授予权限。运行脚本走常规命令工具和审批。
 
 ## MCP 工具
 

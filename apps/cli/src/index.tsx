@@ -5,6 +5,7 @@ import React from "react";
 import { render } from "ink";
 import {
   SessionWriter,
+  discoverSkills,
   listSessions,
   loadProjectInstructions,
   resumeSession,
@@ -74,6 +75,8 @@ Configuration:
   Use /reload to apply edits made to config.json elsewhere.
 
 Sessions are saved by default; use --no-session to keep a run ephemeral.
+Use /skills to list skills in the TUI, or /skill <name> [request] to use one.
+In headless mode, pass '/skill <name> [request]' as the prompt.
 `;
 
 function fail(error: unknown): never {
@@ -221,6 +224,7 @@ async function main(): Promise<void> {
   const showReasoning = config.showReasoning;
   const provider = createProvider(config);
 
+  const skills = await discoverSkills(root);
   let prepared: PreparedTools;
   try {
     prepared = await prepareTools({
@@ -252,6 +256,7 @@ async function main(): Promise<void> {
         prompt,
         provider,
         instructions,
+        skills,
         showReasoning,
         tools,
         mcp,
@@ -277,6 +282,7 @@ async function main(): Promise<void> {
         mode={mode}
         modeSource={modeSource}
         instructions={instructions}
+        skills={skills}
         showReasoningFlag={args.showReasoning}
         provider={provider}
         tools={tools}

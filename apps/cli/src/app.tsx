@@ -22,6 +22,7 @@ import {
   type LoadedSession,
   type Message,
   type Provider,
+  type SkillCatalog,
   type Tool,
 } from "@cooper/core";
 import {
@@ -46,6 +47,7 @@ import { ConfigEditor, configFieldIndex } from "./config-editor.js";
 import type { McpReport } from "./mcp.js";
 import { createProvider } from "./provider.js";
 import { buildResumeView } from "./session-view.js";
+import { formatSkills, resolveSkillPrompt, skillTools } from "./skills.js";
 import { parseSettings, readSettingsDocument, writeSettingsDocument, type SettingsDocument } from "./settings.js";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
@@ -237,6 +239,7 @@ export function App({
   mode,
   modeSource,
   instructions,
+  skills,
   showReasoningFlag,
   provider: initialProvider,
   tools: initialTools,
@@ -251,6 +254,7 @@ export function App({
   /** Where the startup mode came from (flag/env/session/config/default). */
   modeSource: ModeResolution["source"];
   instructions: LoadedInstructions;
+  skills?: SkillCatalog;
   showReasoningFlag: boolean;
   /** Provider created by the entry point from the initial configuration. */
   provider: Provider;
@@ -269,7 +273,7 @@ export function App({
   const active = useRef({
     config: initialConfig,
     provider: initialProvider,
-    tools: initialTools,
+    tools: [...initialTools, ...skillTools(skills)],
   });
   const [configEdit, setConfigEdit] = useState<{ document: SettingsDocument; field: number } | null>(null);
   // The TUI is interactive by definition; the policy is the single source of
@@ -295,6 +299,7 @@ export function App({
         root,
         permissions,
         instructions: instructions.text,
+        skills,
       }),
     },
     ...(resumed?.messages ?? []),
@@ -539,6 +544,7 @@ export function App({
           root,
           permissions,
           instructions: instructions.text,
+          skills,
         }),
       },
       permissionModeNotice(modeState),
@@ -616,6 +622,7 @@ export function App({
           root,
           permissions,
           instructions: instructions.text,
+          skills,
         }),
       },
       ...loaded.messages,
@@ -746,6 +753,9 @@ export function App({
       case "tools":
         notice(formatTools(active.current.tools));
         return;
+      case "skills":
+        notice(formatSkills(skills));
+        return;
       case "status": {
         const { config, tools } = active.current;
         const sessionInfo = sessionWriter !== null
@@ -841,7 +851,7 @@ export function App({
   const submit = async (value: string) => {
     if (configEdit !== null) return;
     const parsed = parseCommand(value);
-    if (parsed.kind !== "prompt") {
+    if (parsed.kind !== "prompt" && !(parsed.kind === "command" && parsed.name === "skill")) {
       setInput("");
       if (busyRef.current) {
         pushCommitted({
@@ -856,7 +866,7 @@ export function App({
       return;
     }
 
-    const text = parsed.text.trim();
+    const text = value.trim();
     if (!text || busyRef.current) return;
     const { config, provider, tools } = active.current;
     const { showReasoning } = config;
@@ -864,16 +874,27 @@ export function App({
     // Guards against a second submit landing before React re-renders and
     // unmounts the input (e.g. Enter key repeat).
     busyRef.current = true;
+    setInput("");
+
+    let prompt: Awaited<ReturnType<typeof resolveSkillPrompt>>;
+    try {
+      prompt = await resolveSkillPrompt(text, skills);
+    } catch (error) {
+      notice(visiblePreviewText(error instanceof Error ? error.message : String(error)), "error");
+      busyRef.current = false;
+      return;
+    }
 
     const push = pushCommitted;
 
-    setInput("");
     setBusy(true);
     push({ id: nextId.current++, kind: "user", text });
-    history.current.push({ role: "user", content: text });
-    warnSession(
-      sessionWriter?.appendMessage({ role: "user", content: text }) ?? null,
-    );
+    if (prompt.activation) {
+      history.current.push(prompt.activation);
+      warnSession(sessionWriter?.appendMessage(prompt.activation) ?? null);
+    }
+    history.current.push(prompt.user);
+    warnSession(sessionWriter?.appendMessage(prompt.user) ?? null);
 
     const controller = new AbortController();
     abortRef.current = controller;

@@ -51,6 +51,15 @@ describe("groupMessages", () => {
     expect(groups).toHaveLength(2);
     expect(groups[0]?.messages).toHaveLength(1);
   });
+
+  it("keeps an explicit skill selection with its request during compaction", () => {
+    const messages: Message[] = [
+      { role: "user", content: "previous request" },
+      { role: "user", runtime: "skill", content: "selected skill instructions" },
+      { role: "user", content: "/skill review Check this change" },
+    ];
+    expect(findCompactionCut(messages, 0, estimateMessageTokens)).toBe(1);
+  });
 });
 
 describe("toolCallIndex", () => {

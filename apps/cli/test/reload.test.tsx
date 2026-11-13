@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
-import { createBuiltinTools } from "@cooper/core";
+import { createBuiltinTools, discoverSkills } from "@cooper/core";
 import { render } from "ink";
 import { expect, it, vi } from "vitest";
 import { App } from "../src/app.js";
@@ -64,6 +64,10 @@ it("edits and reloads settings in a running TUI without losing the conversation"
   try {
     fs.mkdirSync(home);
     fs.writeFileSync(file, JSON.stringify(oldSettings));
+    const skillDir = path.join(root, ".agents", "skills", "review");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"),
+      "---\nname: review\ndescription: Inspect changes\n---\nCheck branch conditions.");
     const config = loadConfig({ showReasoning: true });
     app = render(
       <App
@@ -72,6 +76,7 @@ it("edits and reloads settings in a running TUI without losing the conversation"
         mode="ask"
         modeSource="default"
         instructions={{ text: "", sources: [] }}
+        skills={await discoverSkills(root, path.join(root, "user-home"))}
         showReasoningFlag={true}
         provider={createProvider(config)}
         tools={createBuiltinTools(config.shell)}
@@ -87,7 +92,12 @@ it("edits and reloads settings in a running TUI without losing the conversation"
     expect(title).toBe("COOPER  old-model");
     expect(workspace).toContain(path.basename(root));
     expect(startup).not.toMatch(/\/help|Context:|Instructions:|MCP:|Session:/);
-    await enter("first prompt", "reply 1");
+    await enter("/skills", "review (project) · Inspect changes");
+    expect(fetch).not.toHaveBeenCalled();
+    await enter("/skill review first prompt", "reply 1");
+    const firstRequest = JSON.parse(String(fetch.mock.calls[0]?.[1].body));
+    expect(firstRequest.messages.at(-2).content).toContain("Check branch conditions.");
+    expect(firstRequest.messages.at(-1).content).toBe("/skill review first prompt");
 
     const original = fs.readFileSync(file, "utf8");
     await enter("/config baseURL", "Config · baseURL");
@@ -145,7 +155,7 @@ it("edits and reloads settings in a running TUI without losing the conversation"
     expect(JSON.parse(String(request?.body))).toMatchObject({
       model: "new-model",
       messages: expect.arrayContaining([
-        { role: "user", content: "first prompt" },
+        { role: "user", content: "/skill review first prompt" },
         { role: "assistant", content: "reply 1" },
         { role: "user", content: "fourth prompt" },
       ]),

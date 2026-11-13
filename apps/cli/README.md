@@ -53,6 +53,14 @@ resuming, then the `config.json` default, then `ask`. Use `--mode auto` to
 enable automatic approvals for a new process. In an idle TUI, `/plan`,
 `/ask`, and `/auto` switch the mode for the current process.
 
+## Skills
+
+Place each skill in its own folder with a `SKILL.md` file. Cooper discovers
+skills in `.cooper/skills/` and `.agents/skills/` under the workspace and
+your home directory. Run `/skills` to list them or `/skill <name> [request]`
+to select one. In headless mode, pass the same invocation as the prompt.
+Skill instructions and scripts follow Cooper's normal permission rules.
+
 ## Documentation
 
 Full documentation lives in the

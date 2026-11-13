@@ -8,10 +8,13 @@ import {
   type Message,
   type Provider,
   type SessionWriter,
+  type SkillCatalog,
   type Tool,
 } from "@cooper/core";
 import type { ApprovalMode, Config } from "./config.js";
 import type { McpReport } from "./mcp.js";
+import { resolveSkillPrompt, skillTools } from "./skills.js";
+import { visiblePreviewText } from "./preview.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 
 /** Minimal sink so tests can capture output without real streams. */
@@ -24,6 +27,7 @@ export type HeadlessOptions = {
   prompt: string;
   provider: Provider;
   instructions: LoadedInstructions;
+  skills?: SkillCatalog;
   /** Write the reasoning summary to stderr (stdout stays answer-only). */
   showReasoning: boolean;
   /** Assistant text. Kept clean so it can be piped or redirected. */
@@ -68,6 +72,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     prompt,
     provider,
     instructions,
+    skills,
     showReasoning,
     out,
     err,
@@ -77,7 +82,17 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     mcp,
     modeNotice,
   } = options;
-  const tools = options.tools ?? createBuiltinTools(config.shell);
+  const tools = [...(options.tools ?? createBuiltinTools(config.shell)), ...skillTools(skills)];
+  let resolved: Awaited<ReturnType<typeof resolveSkillPrompt>>;
+  try {
+    resolved = await resolveSkillPrompt(prompt, skills);
+  } catch (error) {
+    err.write("skill: " + visiblePreviewText(error instanceof Error ? error.message : String(error)) + "\n");
+    return 1;
+  }
+  for (const warning of skills?.warnings ?? []) {
+    err.write("skill: " + visiblePreviewText(warning) + "\n");
+  }
 
   if (modeNotice !== undefined) {
     err.write(`mode: ${modeNotice}\n`);
@@ -146,12 +161,12 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
   // instructions may have changed since the session was saved. The mode is
   // carried by a runtime notice appended after the resumed history so the
   // provider's cached prefix stays intact.
-  const userMessage: Message = { role: "user", content: prompt };
+  const userMessages = resolved.activation ? [resolved.activation, resolved.user] : [resolved.user];
   const modeMessage = permissionModeNotice(mode);
   if (session) {
     warnSession(session.appendPolicy(mode));
     warnSession(session.appendMessage(modeMessage));
-    warnSession(session.appendMessage(userMessage));
+    for (const message of userMessages) warnSession(session.appendMessage(message));
   }
 
   const messages: Message[] = [
@@ -161,11 +176,12 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
         root,
         permissions,
         instructions: instructions.text,
+        skills,
       }),
     },
     ...(resumed?.messages ?? []),
     modeMessage,
-    userMessage,
+    ...userMessages,
   ];
 
   let atLineStart = true;

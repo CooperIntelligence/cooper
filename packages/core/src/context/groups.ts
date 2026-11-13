@@ -2,8 +2,8 @@ import type { Message, ToolCall } from "../types.js";
 
 /**
  * An atomic slice of the transcript. The chat protocol requires every tool
- * result to follow the assistant message that requested it, so an assistant
- * message and its results must be moved, kept, or dropped together.
+ * result to follow the assistant message that requested it. An explicit
+ * skill selection also travels with the user request that uses it.
  */
 export type MessageGroup = {
   /** Index of the first message in the full array (inclusive). */
@@ -43,8 +43,12 @@ export function groupMessages(messages: Message[]): MessageGroup[] {
       groups.push({ start: index, end, messages: messages.slice(index, end) });
       index = end;
     } else {
-      groups.push({ start: index, end: index + 1, messages: [message] });
-      index += 1;
+      const next = messages[index + 1];
+      const attachedRequest = message.role === "user" && message.runtime === "skill" &&
+        next?.role === "user" && next.runtime === undefined;
+      const end = index + (attachedRequest ? 2 : 1);
+      groups.push({ start: index, end, messages: messages.slice(index, end) });
+      index = end;
     }
   }
 

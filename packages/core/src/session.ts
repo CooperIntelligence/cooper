@@ -212,7 +212,7 @@ function isPermissionPreset(value: unknown): value is PermissionPreset {
 }
 
 function isRuntimeNoticeKind(value: unknown): value is RuntimeNoticeKind {
-  return value === "permission-mode";
+  return value === "permission-mode" || value === "skill";
 }
 
 function parseMessage(value: unknown): Message | null {

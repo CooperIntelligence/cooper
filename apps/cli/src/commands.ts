@@ -12,6 +12,8 @@ export type CommandName =
   | "resume"
   | "mcp"
   | "tools"
+  | "skills"
+  | "skill"
   | "status"
   | "config"
   | "reload"
@@ -90,6 +92,18 @@ export const COMMANDS: readonly CommandSpec[] = [
     aliases: [],
     usage: "/tools",
     description: "list tools and their capabilities",
+  },
+  {
+    name: "skill",
+    aliases: [],
+    usage: "/skill <name> [request]",
+    description: "use a skill for this request",
+  },
+  {
+    name: "skills",
+    aliases: [],
+    usage: "/skills",
+    description: "list discovered skills",
   },
   {
     name: "status",
