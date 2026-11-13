@@ -86,6 +86,10 @@ export class PermissionPolicy {
     this.sessionAllowed.add(toolName);
   }
 
+  revokeSession(toolName: string): void {
+    this.sessionAllowed.delete(toolName);
+  }
+
   isSessionAllowed(toolName: string): boolean {
     return this.sessionAllowed.has(toolName);
   }

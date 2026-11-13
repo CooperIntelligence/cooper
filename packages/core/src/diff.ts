@@ -27,7 +27,8 @@ export type DiffResult = {
 const LCS_LINE_LIMIT = 1500;
 const DEFAULT_CONTEXT = 3;
 
-function splitLines(text: string): string[] {
+function splitLines(text: string, preserveLineEndings: boolean): string[] {
+  if (preserveLineEndings) return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   if (text.length === 0) return [];
   const lines = text.split(/\r?\n/);
   // A trailing newline is not an extra empty line.
@@ -154,11 +155,11 @@ function buildHunks(lines: RawLine[], context: number): DiffHunk[] {
 export function diffText(
   before: string,
   after: string,
-  options: { context?: number } = {},
+  options: { context?: number; preserveLineEndings?: boolean } = {},
 ): DiffResult {
   const context = Math.max(0, options.context ?? DEFAULT_CONTEXT);
-  const a = splitLines(before);
-  const b = splitLines(after);
+  const a = splitLines(before, options.preserveLineEndings === true);
+  const b = splitLines(after, options.preserveLineEndings === true);
 
   let prefix = 0;
   while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) {

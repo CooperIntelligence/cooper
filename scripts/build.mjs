@@ -21,7 +21,7 @@ const result = await build({
   entryPoints: ["apps/cli/src/index.tsx"],
   bundle: true,
   platform: "node",
-  target: "node20",
+  target: "node22.12",
   format: "esm",
   jsx: "automatic",
   outfile,

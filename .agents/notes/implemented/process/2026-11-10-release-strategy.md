@@ -36,7 +36,7 @@ Claude Code 的实际做法（拆包核对过 0.2.x、1.0.x、2.1.322 三个阶�
   `dist/cooper.mjs`）、`files` 白名单（只含 bundle，npm 自动附带
   `package.json` / `README` / `LICENSE`；顺带排除 `.env`、源码、
   `cooper.blob`、`cooper.exe`）、`publishConfig.access: "public"`
-  （scoped 包默认按私有处理）、`license: "MIT"`、`engines.node >= 20`、
+  （scoped 包默认按私有处理）、`license: "MIT"`、`engines.node >= 22.12.0`、
   `repository`、`description`、`keywords`；无 `private`。
 - **发布包的 `dependencies` 为空**：bundle 已内联全部运行时依赖，
   workspace 的运行时依赖（`@cooper/core`、ink、react 等）一律在

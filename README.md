@@ -35,7 +35,8 @@ apps/cli/
   src/index.tsx                      入口：解析参数、切换 TUI / 无头
   src/args.ts                        命令行参数解析（纯函数，可单测）
   src/commands.ts                    TUI slash 命令解析（纯函数，可单测）
-  src/app.tsx                        Ink + React TUI + 审批面板
+  src/app.tsx                        Ink + React TUI
+  src/approval.tsx                   工具审批面板和键盘交互
   src/headless.ts                    无头单次运行（stdout=回复，stderr=工具活动）
   src/preview.ts                     审批面板的 diff 行构造
   src/session-view.ts                恢复会话时重建滚动区
@@ -50,7 +51,7 @@ apps/cli/
 
 ## 快速开始
 
-要求 Node.js 20+（当前在 Node 26 上验证）。
+要求 Node.js 22.12.0 或更高版本。
 
 ```bash
 npm install
@@ -256,13 +257,14 @@ TUI 空闲时可以直接切换：
 - 核心层 **fail-closed**：策略要求询问但没有 `approve` 回调时，工具不会执行。plan 模式根本不调用审批回调，宿主无法把它降级成 `ask`。
 - 系统提示描述权限机制，但不写死当前模式；模式由 runtime notice 提供，策略实例仍是唯一执行边界。
 
-`write_file` / `edit_file` 的审批面板会显示**真实 diff**：带 3 行上下文，`+` 绿色、`-` 红色，最多 18 行，超出部分折叠成计数。工具通过可选的 `preview()` 提供 `before` / `after`，diff 在宿主侧计算，所以未来的 desktop / server 界面可以换一种渲染方式。
+审批面板按终端高度分页显示文件 diff 和长命令。文件在等待审批时发生变化，Cooper 会重新预览并询问。命令预览包含完整命令、shell 和工作目录。缺少效果预览时，面板会说明原因或标明预览不可用，并显示操作摘要。
 
 审批面板按键：
 
-- `y` 本次允许
-- `a` 本次会话内始终允许该工具
-- `n` / `Esc` 拒绝（模型会收到拒绝结果并继续解释）
+- `←` / `→` 翻页，`y` 允许本次调用，`n` / `Esc` 拒绝。
+- `a` 查看授权范围，再按 `y` 执行当前调用并授权该工具到进程退出。确认页按 `Esc` 返回预览，按 `n` 拒绝。`Enter` 不会批准。
+
+进程内授权随对话切换保留。应用配置时实际 shell 发生变化，Cooper 会撤销 `run_command` 的授权。终端历史分开显示用户的批准决定和工具执行结果，沿用进程授权的结果会标明来源。
 
 ## 推理内容
 

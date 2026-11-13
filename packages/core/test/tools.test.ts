@@ -38,12 +38,17 @@ describe("tool previews", () => {
       { path: "new.txt", content: "hello\n" },
       { root },
     );
-    expect(preview).toEqual({
+    expect(preview).toMatchObject({
       kind: "diff",
       path: "new.txt",
       before: "",
       after: "hello\n",
+      createsFile: true,
     });
+    if (preview?.kind !== "diff" || !preview.revalidate) throw new Error("Missing file validation");
+    await expect(preview.revalidate()).resolves.toBe(true);
+    await fs.writeFile(path.join(root, "new.txt"), "");
+    await expect(preview.revalidate()).resolves.toBe(false);
   });
 
   it("write_file previews the existing content as the baseline", async () => {
@@ -80,13 +85,16 @@ describe("tool previews", () => {
     expect(preview?.kind === "diff" ? preview.after : "").toBe("$& and $1\n");
   });
 
-  it("skips the preview when the edit itself would fail", async () => {
+  it("explains why an edit is invalid and why an oversized write cannot be previewed", async () => {
     await fs.writeFile(path.join(root, "a.txt"), "x\n", "utf8");
     const missing = await editFileTool.preview?.(
       { path: "a.txt", old_string: "nope", new_string: "y" },
       { root },
     );
-    expect(missing).toBeUndefined();
+    expect(missing).toMatchObject({ kind: "invalid", reason: expect.stringContaining("old_string was not found") });
+    await expect(writeFileTool.preview?.({ path: "large.txt", content: "a".repeat(400_001) }, { root }))
+      .resolves.toMatchObject({ kind: "unavailable", reason: expect.stringContaining("preview size limit") });
+    await expect(fs.readdir(root)).resolves.toEqual(["a.txt"]);
   });
 });
 
@@ -240,6 +248,27 @@ describe("run_command", () => {
 describe("workspace path containment", () => {
   const linkType = process.platform === "win32" ? "junction" : "dir";
 
+  it("refuses to launch a command if its directory changed after preview validation", async () => {
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    const linked = path.join(root, "linked");
+    await fs.mkdir(first);
+    await fs.mkdir(second);
+    await fs.symlink(first, linked, linkType);
+
+    const input = { command: "echo approved > marker.txt", cwd: "linked" };
+    const ctx = { root };
+    const preview = await runCommandTool.preview?.(input, ctx);
+    if (preview?.kind !== "command" || !preview.revalidate) throw new Error("Missing command validation");
+    await expect(preview.revalidate()).resolves.toBe(true);
+
+    await fs.unlink(linked);
+    await fs.symlink(second, linked, linkType);
+    await expect(runCommandTool.execute(input, ctx, preview)).rejects.toThrow(/working directory changed/);
+    await expect(fs.readdir(first)).resolves.toEqual([]);
+    await expect(fs.readdir(second)).resolves.toEqual([]);
+  });
+
   it("blocks outside links for reads, previews, writes, and command cwd", async () => {
     const workspace = path.join(root, "workspace");
     const outside = path.join(root, "outside");
@@ -258,8 +287,12 @@ describe("workspace path containment", () => {
     await expect(grepTool.execute({ pattern: "outside fixture" }, ctx)).resolves.toMatchObject({
       content: expect.stringMatching(/^No matches/),
     });
-    await expect(writeFileTool.preview?.(write, ctx)).resolves.toBeUndefined();
-    await expect(editFileTool.preview?.(edit, ctx)).resolves.toBeUndefined();
+    await expect(writeFileTool.preview?.(write, ctx)).resolves.toMatchObject({
+      kind: "invalid", reason: expect.stringContaining("outside the workspace"),
+    });
+    await expect(editFileTool.preview?.(edit, ctx)).resolves.toMatchObject({
+      kind: "invalid", reason: expect.stringContaining("outside the workspace"),
+    });
     await expect(writeFileTool.execute(write, ctx)).rejects.toThrow(/outside the workspace/);
     await expect(editFileTool.execute(edit, ctx)).rejects.toThrow(/outside the workspace/);
     await expect(writeFileTool.execute({ path: "escape/new/file.txt", content: "new" }, ctx))

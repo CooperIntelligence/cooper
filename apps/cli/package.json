@@ -28,7 +28,7 @@
     "dist/cooper.mjs"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "publishConfig": {
     "access": "public"
@@ -49,6 +49,7 @@
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "react": "^19.3.1",
+    "string-width": "^8.3.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",

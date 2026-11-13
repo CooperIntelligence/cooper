@@ -21,10 +21,11 @@ import {
   type ToolPreview,
   type ToolResult,
 } from "./tools/tool.js";
-import type {
-  ApprovalOutcome,
-  PermissionPolicy,
-  ToolCapability,
+import {
+  needsApproval,
+  type ApprovalOutcome,
+  type PermissionPolicy,
+  type ToolCapability,
 } from "./permissions.js";
 
 export type ApprovalRequest = {
@@ -37,10 +38,12 @@ export type ApprovalRequest = {
   /** What the tool is allowed to do (read / write / execute). */
   capabilities: readonly ToolCapability[];
   /**
-   * Side-effect-free preview of the effect (a file diff for edits). Undefined
-   * for tools without a preview or when one cannot be produced.
+   * Side-effect-free preview of the effect, or a reason it is unavailable.
+   * Undefined when the tool did not supply a preview.
    */
   preview?: ToolPreview;
+  /** A new request for the same call after its file preview changed. */
+  previewChanged?: boolean;
 };
 
 export type AgentEvent =
@@ -59,6 +62,7 @@ export type AgentEvent =
       providerData?: ProviderData;
     }
   | { type: "tool-start"; call: ToolCall; summary: string }
+  | { type: "tool-approval"; call: ToolCall; summary: string; outcome: ApprovalOutcome }
   | {
       type: "tool-end";
       call: ToolCall;
@@ -67,6 +71,7 @@ export type AgentEvent =
       isError: boolean;
       denied: boolean;
       durationMs: number;
+      approval?: "user-denied" | "process-grant";
     }
   | {
       type: "context-compacted";
@@ -147,14 +152,52 @@ async function executeTool(
   tool: Tool,
   input: unknown,
   context: ToolContext,
+  approvedPreview?: ToolPreview,
 ): Promise<ToolResult> {
   try {
-    return await tool.execute(input, context);
+    return await tool.execute(input, context, approvedPreview);
   } catch (error) {
     return {
       content: `Error: ${error instanceof Error ? error.message : String(error)}`,
       isError: true,
     };
+  }
+}
+
+async function requestToolApproval(
+  approve: NonNullable<RunAgentOptions["approve"]>,
+  tool: Tool,
+  request: ApprovalRequest,
+  context: ToolContext,
+): Promise<{ outcome: ApprovalOutcome; preview?: ToolPreview } | { error: string; denied?: boolean }> {
+  let previewChanged = false;
+  for (;;) {
+    let preview: ToolPreview | undefined;
+    try {
+      preview = await tool.preview?.(request.input, context);
+    } catch {
+      // The surface can still show the action summary if no preview is available.
+    }
+    context.signal?.throwIfAborted();
+    if (preview?.kind === "invalid") return { error: preview.reason };
+
+    let outcome: ApprovalOutcome;
+    try {
+      outcome = await approve({ ...request, preview, previewChanged });
+    } catch {
+      return { error: "The approval request could not be completed.", denied: true };
+    }
+    if (outcome !== "allow" && outcome !== "allow-session") return { outcome: "deny" };
+    context.signal?.throwIfAborted();
+    if (
+      (preview?.kind !== "diff" && preview?.kind !== "command") ||
+      !preview.revalidate || await preview.revalidate()
+    ) {
+      context.signal?.throwIfAborted();
+      return { outcome, ...(preview === undefined ? {} : { preview }) };
+    }
+    context.signal?.throwIfAborted();
+    previewChanged = true;
   }
 }
 
@@ -201,6 +244,7 @@ export async function* runAgent(
     });
 
   for (let turn = 1; turn <= maxTurns; turn += 1) {
+    options.signal?.throwIfAborted();
     yield { type: "turn-start", turn };
 
     if (contextConfig) {
@@ -320,6 +364,7 @@ export async function* runAgent(
     if (toolCalls.length === 0) return;
 
     for (const call of toolCalls) {
+      toolContext.signal?.throwIfAborted();
       const tool = toolsByName.get(call.name);
 
       let input: unknown;
@@ -340,11 +385,11 @@ export async function* runAgent(
 
       const summary =
         tool && !invalid ? summarize(tool, input, call) : call.arguments;
-      yield { type: "tool-start", call, summary };
-      const startedAt = Date.now();
-
-      let result: ToolResult;
+      let startedAt = Date.now();
+      let result: ToolResult | undefined;
       let denied = false;
+      let approval: "user-denied" | "process-grant" | undefined;
+      let approvedPreview: ToolPreview | undefined;
 
       if (!tool || invalid) {
         result = {
@@ -360,47 +405,40 @@ export async function* runAgent(
             content: policyDeniedMessage(options.permissions),
             isError: true,
           };
-        } else if (decision === "allow") {
-          result = await executeTool(tool, input, toolContext);
-        } else {
-          let preview: ToolPreview | undefined;
-          if (tool.preview) {
-            try {
-              preview = await tool.preview(input, toolContext);
-            } catch {
-              // A preview must never block the call; approval still happens.
-              preview = undefined;
-            }
-          }
-
-          let outcome: ApprovalOutcome | null = null;
-          if (options.approve) {
-            try {
-              outcome = await options.approve({
-                call,
-                toolName: tool.name,
-                summary,
-                input,
-                capabilities: tool.capabilities,
-                preview,
-              });
-            } catch {
-              outcome = "deny";
-            }
-          }
-
-          if (outcome === null) {
-            denied = true;
-            result = { content: NO_APPROVER_MESSAGE, isError: true };
-          } else if (outcome === "allow" || outcome === "allow-session") {
-            if (outcome === "allow-session") {
+        } else if (decision === "prompt" && options.approve) {
+          const response = await requestToolApproval(options.approve, tool, {
+            call, toolName: tool.name, summary, input, capabilities: tool.capabilities,
+          }, toolContext);
+          if ("error" in response) {
+            denied = response.denied === true;
+            result = { content: `Error: ${response.error}`, isError: true };
+          } else {
+            const { outcome } = response;
+            approvedPreview = response.preview;
+            if (outcome === "deny") {
+              denied = true;
+              approval = "user-denied";
+              result = { content: USER_DENIED_MESSAGE, isError: true };
+            } else if (outcome === "allow-session") {
               options.permissions.grantSession(tool.name);
             }
-            result = await executeTool(tool, input, toolContext);
-          } else {
-            denied = true;
-            result = { content: USER_DENIED_MESSAGE, isError: true };
+            yield { type: "tool-approval", call, summary, outcome };
           }
+        } else if (decision === "prompt") {
+          denied = true;
+          result = { content: NO_APPROVER_MESSAGE, isError: true };
+        } else if (
+          options.permissions.preset === "ask" && needsApproval(tool.capabilities) &&
+          options.permissions.isSessionAllowed(tool.name)
+        ) {
+          approval = "process-grant";
+        }
+
+        if (result === undefined) {
+          yield { type: "tool-start", call, summary };
+          toolContext.signal?.throwIfAborted();
+          startedAt = Date.now();
+          result = await executeTool(tool, input, toolContext, approvedPreview);
         }
       }
 
@@ -419,6 +457,7 @@ export async function* runAgent(
         isError: result.isError === true,
         denied,
         durationMs,
+        ...(approval === undefined ? {} : { approval }),
       };
     }
   }

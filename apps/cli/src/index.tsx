@@ -12,7 +12,7 @@ import {
   type LoadedInstructions,
   type LoadedSession,
 } from "@cooper/core";
-import { App } from "./app.js";
+import { App, tuiRenderOptions } from "./app.js";
 import {
   parseArgs,
   resolveModeForSession,
@@ -285,7 +285,7 @@ async function main(): Promise<void> {
         session={session}
         resumed={resumed}
       />,
-      { exitOnCtrlC: false },
+      tuiRenderOptions,
     );
     await waitUntilExit();
   } finally {

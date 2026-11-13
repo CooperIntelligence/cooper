@@ -9,7 +9,7 @@ drive whole workflows — with approval-gated permissions (ask / auto / plan).
 npm install -g @cooper-intelligence/cooper-code
 ```
 
-Requires Node.js 20+.
+Requires Node.js 22.12.0 or later.
 
 ## Usage
 

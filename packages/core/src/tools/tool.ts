@@ -20,8 +20,27 @@ export type ToolResult = {
  * pre-rendered diff) keeps the rendering decision in the host.
  */
 export type ToolPreview =
-  | { kind: "diff"; path: string; before: string; after: string }
-  | { kind: "text"; title: string; text: string };
+  | {
+      kind: "diff";
+      path: string;
+      before: string;
+      after: string;
+      createsFile?: boolean;
+      /** Checks that the effect shown is still current before execution. */
+      revalidate?: () => Promise<boolean>;
+    }
+  | {
+      kind: "command";
+      shell: string;
+      executable: string;
+      cwd: string;
+      command: string;
+      /** Checks that the working directory still resolves to the previewed path. */
+      revalidate?: () => Promise<boolean>;
+    }
+  | { kind: "text"; title: string; text: string }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "invalid"; reason: string };
 
 export type Tool<S extends z.ZodType = z.ZodType> = {
   name: string;
@@ -50,7 +69,8 @@ export type Tool<S extends z.ZodType = z.ZodType> = {
     input: z.infer<S>,
     ctx: ToolContext,
   ): Promise<ToolPreview | undefined> | ToolPreview | undefined;
-  execute(input: z.infer<S>, ctx: ToolContext): Promise<ToolResult>;
+  /** The approved preview, when present, belongs to this invocation only. */
+  execute(input: z.infer<S>, ctx: ToolContext, approvedPreview?: ToolPreview): Promise<ToolResult>;
 };
 
 export function toToolSpec<S extends z.ZodType>(tool: Tool<S>): ToolSpec {

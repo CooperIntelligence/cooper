@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import { createBuiltinTools, type Provider } from "@cooper/core";
 import { render } from "ink";
@@ -28,10 +29,11 @@ it("keeps both approvals visible for two writes in one model response", async ()
     async *stream({ messages }) {
       const results = messages.flatMap((message) => message.role === "tool" ? [message.toolCallId] : []);
       requestResults.push(results);
+      if (results.length === 0) yield { type: "text", delta: "Before the approvals.\n" };
       yield {
         type: "done",
         message: results.length === 0
-          ? { content: "", toolCalls: calls }
+          ? { content: "Before the approvals.\n", toolCalls: calls }
           : { content: "Batch complete.", toolCalls: [] },
         finishReason: results.length === 0 ? "tool_calls" : "stop",
       };
@@ -53,7 +55,7 @@ it("keeps both approvals visible for two writes in one model response", async ()
 
   const waitForText = (value: string) => vi.waitFor(() => expect(frames.join("")).toContain(value));
   const approvalFor = (file: string) => vi.waitFor(() => {
-    const frame = frames.find((output) => output.includes("Approve write_file?") && output.includes(`${file} · +40`));
+    const frame = frames.find((output) => output.includes("Waiting for approval · Create file") && output.includes(`${file} · +40`));
     expect(frame).toBeDefined();
     return frame!;
   });
@@ -63,6 +65,25 @@ it("keeps both approvals visible for two writes in one model response", async ()
     await waitForText("Write two files");
     stdin.write("\r");
     const first = await approvalFor("first.txt");
+    const press = async (key: string, expected: string) => {
+      const start = frames.length;
+      stdin.write(key);
+      await vi.waitFor(() => expect(frames.slice(start).join("")).toContain(expected));
+    };
+    expect(first).toContain("Page 1/3");
+    await press("\x1b[C", "Page 2/3");
+    await press("\x1b[C", "first.txt line 39");
+    stdout.rows = 20;
+    const resizedAt = frames.length;
+    stdout.emit("resize");
+    await vi.waitFor(() => expect(frames.slice(resizedAt).join("")).toContain("Page 3/4"));
+    await press("\x1b[C", "first.txt line 39");
+    stdin.write("\r");
+    await setImmediate();
+    expect(fs.existsSync(path.join(root, "first.txt"))).toBe(false);
+    await press("a", "Confirm tool permission");
+    expect(fs.existsSync(path.join(root, "first.txt"))).toBe(false);
+    await press("\x1b", "Page 4/4");
     stdin.write("y");
     const second = await approvalFor("second.txt");
     stdin.write("n");
@@ -70,12 +91,21 @@ it("keeps both approvals visible for two writes in one model response", async ()
     expect(fs.existsSync(path.join(root, "first.txt"))).toBe(true);
     expect(fs.existsSync(path.join(root, "second.txt"))).toBe(false);
     expect(requestResults).toEqual([[], ["call_0", "call_1"]]);
+    const history = stripVTControlCharacters(frames.join(""));
+    expect(history.match(/Before the approvals\./g)).toHaveLength(1);
+    expect(history.match(/Allowed once · Write first\.txt/g)).toHaveLength(1);
+    expect(history.match(/Denied · Write second\.txt/g)).toHaveLength(1);
+    expect(history).not.toContain("⊘ write_file");
 
-    for (const frame of [first, second]) {
+    for (const [frame, rows] of [[first, 24], [second, 20]] as const) {
       const lines = stripVTControlCharacters(frame).split("\n");
-      const panel = lines.slice(lines.findIndex((line) => line.includes("Approve write_file?")) - 1);
-      expect(panel.length).toBeLessThan(stdout.rows);
-      expect(panel.join("\n")).toContain("n / esc deny");
+      const start = lines.findIndex((line) => line.includes("╭"));
+      const end = lines.findIndex((line, index) => index > start && line.includes("╰"));
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      const panel = lines.slice(start, end + 1);
+      expect(panel.length).toBeLessThan(rows);
+      expect(panel.join("\n")).toContain("n/Esc Deny");
     }
   } finally {
     app.unmount();

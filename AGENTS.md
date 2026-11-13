@@ -2,7 +2,7 @@
 
 ## Stack
 
-- TypeScript, Node.js 20+, npm workspaces
+- TypeScript, Node.js 22.12.0+, npm workspaces
 - `apps/cli`: Ink 8 + React 19 TUI
 - `packages/core`: provider abstraction, agent loop, tools
 

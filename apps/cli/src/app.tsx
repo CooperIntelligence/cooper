@@ -1,5 +1,6 @@
+import path from "node:path";
 import React, { useEffect, useRef, useState } from "react";
-import { Box, Static, Text, useApp, useInput, useWindowSize } from "ink";
+import { Box, Static, Text, useApp, useInput, type RenderOptions } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import {
@@ -36,7 +37,8 @@ import {
   parseCommand,
   type ParsedCommand,
 } from "./commands.js";
-import { buildPreviewRows, MAX_PREVIEW_ROWS } from "./preview.js";
+import { ApprovalPanel } from "./approval.js";
+import { visiblePreviewText } from "./preview.js";
 import { createMarkdownFormatter, type MarkdownLine } from "./markdown.js";
 import type { ModeResolution } from "./args.js";
 import { loadConfig, resolveConfig, type ApprovalMode, type Config } from "./config.js";
@@ -48,6 +50,12 @@ import { parseSettings, readSettingsDocument, writeSettingsDocument, type Settin
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 import type { UiItem } from "./ui-types.js";
+
+export const tuiRenderOptions = {
+  exitOnCtrlC: false,
+  // Leave unchanged prompt cells in place instead of erasing the input frame.
+  incrementalRendering: process.platform === "win32",
+} satisfies RenderOptions;
 
 function truncate(text: string, max: number): string {
   const singleLine = text.replace(/\s+/g, " ").trim();
@@ -201,6 +209,7 @@ function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
             {item.durationMs}ms
           </Text>
         ) : null}
+        {item.processGrant ? <Text dimColor> · process grant</Text> : null}
       </Box>
       {item.output ? (
         <Box marginLeft={2} flexDirection="column">
@@ -211,69 +220,6 @@ function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
           ))}
         </Box>
       ) : null}
-    </Box>
-  );
-}
-
-export function ApprovalPanel({ request }: { request: ApprovalRequest }) {
-  const { rows } = useWindowSize();
-  const preview = request.preview;
-  // Reserve the panel's borders, header, summary, path, overflow count,
-  // approval keys, and the cursor row before allocating rows to the diff.
-  const maxDiffRows = Math.max(0, Math.min(MAX_PREVIEW_ROWS, rows - 11));
-  const diff = preview?.kind === "diff" ? buildPreviewRows(preview, maxDiffRows) : null;
-  const summary = diff === null ? request.summary : request.summary.split(/\r?\n/, 1)[0];
-
-  return (
-    <Box
-      marginTop={1}
-      flexDirection="column"
-      borderStyle="round"
-      borderColor="yellow"
-      paddingX={1}
-    >
-      <Text bold color="yellow" wrap="truncate-end">
-        Approve {request.toolName}?
-      </Text>
-      <Text wrap={diff === null ? "wrap" : "truncate-end"}>{summary}</Text>
-
-      {preview?.kind === "diff" && diff !== null ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text dimColor wrap="truncate-end">
-            {preview.path} · +{diff.added} −{diff.removed}
-          </Text>
-          {diff.rows.length > 0 ? (
-            diff.rows.map((row, index) => (
-              <Text
-                key={index}
-                color={
-                  row.tone === "add"
-                    ? "green"
-                    : row.tone === "remove"
-                      ? "red"
-                      : row.tone === "hunk"
-                        ? "cyan"
-                        : "gray"
-                }
-                wrap="truncate-end"
-              >
-                {row.text}
-              </Text>
-            ))
-          ) : diff.hidden === 0 ? (
-            <Text dimColor>No changes.</Text>
-          ) : null}
-          {diff.hidden > 0 ? (
-            <Text dimColor>… {diff.hidden} more line(s)</Text>
-          ) : null}
-        </Box>
-      ) : null}
-
-      <Box marginTop={1}>
-        <Text dimColor wrap="truncate-end">
-          y allow once · a always allow this tool · n / esc deny
-        </Text>
-      </Box>
     </Box>
   );
 }
@@ -364,7 +310,7 @@ export function App({
     null,
   );
 
-  const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(
+  const [pendingApproval, setPendingApproval] = useState<{ id: number; request: ApprovalRequest } | null>(
     null,
   );
   const buildHeader = (id: number, loaded: LoadedSession | null = null): UiItem => ({
@@ -509,10 +455,23 @@ export function App({
     for (const warning of config.settingsWarnings) notice(`Warning: ${warning}`);
   };
 
+  const activateConfig = (next: ReturnType<typeof prepareConfig>) => {
+    const previous = active.current.config.shell;
+    const shell = next.config.shell;
+    const executableKey = (file: string) => {
+      const normalized = path.normalize(file);
+      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    };
+    if (previous.kind !== shell.kind || executableKey(previous.executable) !== executableKey(shell.executable)) {
+      permissions.revokeSession("run_command");
+    }
+    active.current = next;
+  };
+
   const reloadConfig = () => {
     try {
       const config = loadConfig({ showReasoning: showReasoningFlag });
-      active.current = prepareConfig(config);
+      activateConfig(prepareConfig(config));
       reportConfig(config, "reloaded");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -542,7 +501,7 @@ export function App({
       const config = resolveConfig(settings, { showReasoning: showReasoningFlag });
       const next = prepareConfig(config);
       writeSettingsDocument(document, values);
-      active.current = next;
+      activateConfig(next);
       setConfigEdit(null);
       reportConfig(config, "saved and applied");
     } catch (error) {
@@ -839,27 +798,7 @@ export function App({
   };
 
   useInput((inputChar, key) => {
-    if (configEdit !== null) return;
-    if (approvalResolver.current) {
-      if (key.ctrl && inputChar === "c") {
-        abortRef.current?.abort();
-        resolveApproval("deny");
-        return;
-      }
-      if (key.escape) {
-        resolveApproval("deny");
-        return;
-      }
-      const choice = inputChar.toLowerCase();
-      if (choice === "y") {
-        resolveApproval("allow");
-      } else if (choice === "n") {
-        resolveApproval("deny");
-      } else if (choice === "a") {
-        resolveApproval("allow-session");
-      }
-      return;
-    }
+    if (configEdit !== null || pendingApproval !== null || approvalResolver.current !== null) return;
 
     // Slash-command popup: ink-text-input ignores up/down/tab, so these
     // never fight the text cursor. Escape dismisses the popup first and
@@ -1070,7 +1009,7 @@ export function App({
         approve: (request) =>
           new Promise<ApprovalOutcome>((resolve) => {
             approvalResolver.current = resolve;
-            setPendingApproval(request);
+            setPendingApproval({ id: nextId.current++, request });
           }),
       })) {
         switch (event.type) {
@@ -1108,6 +1047,15 @@ export function App({
             break;
           }
 
+          case "tool-approval": {
+            const label = event.outcome === "deny" ? "Denied"
+              : event.outcome === "allow-session" ? "Allowed until exit" : "Allowed once";
+            const lines = event.summary.split(/\r?\n/);
+            const action = event.call.name === "run_command" ? lines[1] ?? lines[0] : lines[0];
+            notice(`${label} · ${truncate(visiblePreviewText(action ?? event.call.name), 120)}`);
+            break;
+          }
+
           case "tool-start": {
             const toolItemId = nextId.current++;
             setLive({
@@ -1122,6 +1070,7 @@ export function App({
 
           case "tool-end": {
             setLive(null);
+            if (event.approval === "user-denied") break;
             push({
               id: nextId.current++,
               kind: "tool",
@@ -1134,6 +1083,7 @@ export function App({
                   : "ok",
               output: event.result.content,
               durationMs: event.durationMs,
+              processGrant: event.approval === "process-grant",
             });
             break;
           }
@@ -1221,7 +1171,15 @@ export function App({
       {live && !pendingApproval ? <ItemRow item={live} live /> : null}
       <Box marginTop={pendingApproval ? 0 : 1}>
         {pendingApproval ? (
-          <ApprovalPanel request={pendingApproval} />
+          <ApprovalPanel
+            key={pendingApproval.id}
+            request={pendingApproval.request}
+            onDecision={resolveApproval}
+            onInterrupt={() => {
+              abortRef.current?.abort();
+              resolveApproval("deny");
+            }}
+          />
         ) : configEdit !== null ? (
           <ConfigEditor
             initial={configEdit.document.raw}

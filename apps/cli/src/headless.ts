@@ -220,6 +220,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     }
   };
 
+  let sawToolStart = false;
   try {
     for await (const event of runAgent({
       provider,
@@ -260,11 +261,14 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
         case "tool-start": {
           endTextLine();
           err.write(`→ ${event.call.name} ${oneLine(event.summary)}\n`);
+          sawToolStart = true;
           break;
         }
 
         case "tool-end": {
           endTextLine();
+          if (!sawToolStart) err.write(`→ ${event.call.name} ${oneLine(event.summary)}\n`);
+          sawToolStart = false;
           const icon = event.denied
             ? ICONS.denied
             : event.isError

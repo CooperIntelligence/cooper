@@ -3,7 +3,7 @@ import path from "node:path";
 import { minimatch } from "minimatch";
 import { z } from "zod";
 import { resolveInRoot } from "./paths.js";
-import type { Tool } from "./tool.js";
+import type { Tool, ToolContext, ToolPreview } from "./tool.js";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -340,6 +340,69 @@ export const grepTool: Tool<typeof grepSchema> = {
   },
 };
 
+type FilePreviewSnapshot = {
+  kind: "file";
+  absolute: string;
+  bytes: Buffer | null;
+  text: string;
+};
+
+async function readPreviewFile(relative: string, root: string): Promise<
+  FilePreviewSnapshot | Extract<ToolPreview, { kind: "invalid" | "unavailable" }>
+> {
+  let absolute: string;
+  try {
+    absolute = await resolveInRoot(root, relative);
+  } catch (error) {
+    return { kind: "invalid", reason: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    const stat = await fs.stat(absolute).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (stat === null) return { kind: "file", absolute, bytes: null, text: "" };
+    if (!stat.isFile()) return { kind: "invalid", reason: `Not a file: ${relative}` };
+    if (stat.size <= MAX_PREVIEW_CHARS) {
+      const bytes = await fs.readFile(absolute);
+      if (bytes.length <= MAX_PREVIEW_CHARS) {
+        const text = bytes.toString("utf8");
+        if (Buffer.from(text, "utf8").equals(bytes)) {
+          return { kind: "file", absolute, bytes, text };
+        }
+        return { kind: "unavailable", reason: "The existing file is not valid UTF-8." };
+      }
+    }
+    return { kind: "unavailable", reason: "The existing file exceeds the preview size limit." };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function previewFileChange(
+  relative: string,
+  context: ToolContext,
+  snapshot: FilePreviewSnapshot,
+  after: string,
+): ToolPreview {
+  return {
+    kind: "diff",
+    path: relative,
+    before: snapshot.text,
+    after,
+    createsFile: snapshot.bytes === null,
+    async revalidate() {
+      const current = await readPreviewFile(relative, context.root);
+      if (current.kind !== "file" || current.absolute !== snapshot.absolute) return false;
+      if (snapshot.bytes === null || current.bytes === null) return current.bytes === snapshot.bytes;
+      return snapshot.bytes.equals(current.bytes);
+    },
+  };
+}
+
 const writeFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
   content: z
@@ -360,22 +423,11 @@ export const writeFileTool: Tool<typeof writeFileSchema> = {
     return `Write ${input.path} (${input.content.length} chars)\n${preview}${suffix}`;
   },
   async preview(input, ctx) {
-    if (input.content.length > MAX_PREVIEW_CHARS) return undefined;
-
-    try {
-      const absolute = await resolveInRoot(ctx.root, input.path);
-      const stat = await fs.stat(absolute).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (stat !== null && (!stat.isFile() || stat.size > MAX_PREVIEW_CHARS)) {
-        return undefined;
-      }
-      const before = stat === null ? "" : await fs.readFile(absolute, "utf8");
-      return { kind: "diff", path: input.path, before, after: input.content };
-    } catch {
-      return undefined;
+    if (Buffer.byteLength(input.content, "utf8") > MAX_PREVIEW_CHARS) {
+      return { kind: "unavailable", reason: "The new content exceeds the preview size limit." };
     }
+    const snapshot = await readPreviewFile(input.path, ctx.root);
+    return snapshot.kind === "file" ? previewFileChange(input.path, ctx, snapshot, input.content) : snapshot;
   },
   async execute(input, ctx) {
     const absolute = await resolveInRoot(ctx.root, input.path);
@@ -437,6 +489,15 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
+function editMatchError(file: string, count: number, replaceAll: boolean): string | undefined {
+  if (count === 0) {
+    return `old_string was not found in ${file}. Read the file and provide the exact text, including whitespace.`;
+  }
+  if (count > 1 && !replaceAll) {
+    return `old_string appears ${count} times in ${file}. Add more surrounding context to make it unique, or set replace_all to true.`;
+  }
+}
+
 export const editFileTool: Tool<typeof editFileSchema> = {
   name: "edit_file",
   description:
@@ -452,31 +513,22 @@ export const editFileTool: Tool<typeof editFileSchema> = {
     ].join("\n");
   },
   async preview(input, ctx) {
-    if (input.old_string.length === 0) return undefined;
-
-    try {
-      const absolute = await resolveInRoot(ctx.root, input.path);
-      const stat = await fs.stat(absolute);
-      if (!stat.isFile() || stat.size > MAX_PREVIEW_CHARS) return undefined;
-
-      const original = await fs.readFile(absolute, "utf8");
-      const count = countOccurrences(original, input.old_string);
-      // No match, or an ambiguous match: execute() will explain the error.
-      if (count === 0 || (count > 1 && input.replace_all !== true)) return undefined;
-      return {
-        kind: "diff",
-        path: input.path,
-        before: original,
-        after: applyEdit(
-          original,
-          input.old_string,
-          input.new_string,
-          input.replace_all === true,
-        ),
-      };
-    } catch {
-      return undefined;
+    if (!input.old_string) return { kind: "invalid", reason: "old_string must not be empty" };
+    const snapshot = await readPreviewFile(input.path, ctx.root);
+    if (snapshot.kind !== "file") return snapshot;
+    if (snapshot.bytes === null) return { kind: "invalid", reason: `File not found: ${input.path}` };
+    const replaceAll = input.replace_all === true;
+    const count = countOccurrences(snapshot.text, input.old_string);
+    const reason = editMatchError(input.path, count, replaceAll);
+    if (reason) return { kind: "invalid", reason };
+    if (snapshot.text.length + count * (input.new_string.length - input.old_string.length) > MAX_PREVIEW_CHARS) {
+      return { kind: "unavailable", reason: "The new content exceeds the preview size limit." };
     }
+    const after = applyEdit(snapshot.text, input.old_string, input.new_string, replaceAll);
+    if (Buffer.byteLength(after, "utf8") > MAX_PREVIEW_CHARS) {
+      return { kind: "unavailable", reason: "The new content exceeds the preview size limit." };
+    }
+    return previewFileChange(input.path, ctx, snapshot, after);
   },
   async execute(input, ctx) {
     if (input.old_string.length === 0) {
@@ -495,16 +547,8 @@ export const editFileTool: Tool<typeof editFileSchema> = {
     const original = await fs.readFile(absolute, "utf8");
     const count = countOccurrences(original, input.old_string);
 
-    if (count === 0) {
-      throw new Error(
-        `old_string was not found in ${input.path}. Read the file and provide the exact text, including whitespace.`,
-      );
-    }
-    if (count > 1 && input.replace_all !== true) {
-      throw new Error(
-        `old_string appears ${count} times in ${input.path}. Add more surrounding context to make it unique, or set replace_all to true.`,
-      );
-    }
+    const reason = editMatchError(input.path, count, input.replace_all === true);
+    if (reason) throw new Error(reason);
 
     const updated = applyEdit(
       original,

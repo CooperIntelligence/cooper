@@ -17,5 +17,6 @@ export type UiItem =
       status: ToolStatus;
       output?: string;
       durationMs?: number;
+      processGrant?: boolean;
     }
   | { id: number; kind: "notice"; text: string; tone: "info" | "error" };

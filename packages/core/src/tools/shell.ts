@@ -255,6 +255,12 @@ const runCommandSchema = z.object({
 export function createRunCommandTool(shell: CommandShell): Tool<typeof runCommandSchema> {
   const shellName = shell.kind === "powershell" ? "Windows PowerShell 5.1"
     : shell.kind === "pwsh" ? "PowerShell (pwsh)" : shell.kind;
+  async function resolveCwd(root: string, relative: string): Promise<string> {
+    const cwd = await resolveInRoot(root, relative);
+    const stat = await fs.stat(cwd).catch(() => null);
+    if (!stat?.isDirectory()) throw new Error(`Not a directory: ${relative}`);
+    return cwd;
+  }
   return {
     name: "run_command",
     description:
@@ -265,11 +271,26 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
     summarize(input) {
       return `[${shellName} · cwd: ${input.cwd ?? "."}]\n$ ${input.command}`;
     },
-    async execute(input, ctx) {
-      const cwd = await resolveInRoot(ctx.root, input.cwd ?? ".");
-      const stat = await fs.stat(cwd).catch(() => null);
-      if (!stat || !stat.isDirectory()) {
-        throw new Error(`Not a directory: ${input.cwd ?? "."}`);
+    async preview(input, ctx) {
+      try {
+        const relativeCwd = input.cwd ?? ".";
+        const cwd = await resolveCwd(ctx.root, relativeCwd);
+        return {
+          kind: "command", shell: shellName, executable: shell.executable,
+          cwd, command: input.command,
+          async revalidate() {
+            const current = await resolveCwd(ctx.root, relativeCwd).catch(() => null);
+            return current === cwd;
+          },
+        };
+      } catch (error) {
+        return { kind: "invalid", reason: error instanceof Error ? error.message : String(error) };
+      }
+    },
+    async execute(input, ctx, approvedPreview) {
+      const cwd = await resolveCwd(ctx.root, input.cwd ?? ".");
+      if (approvedPreview?.kind === "command" && cwd !== approvedPreview.cwd) {
+        throw new Error("Command working directory changed after approval.");
       }
       return runProcess(shell, input.command, cwd, input.timeout_ms ?? 120_000);
     },
