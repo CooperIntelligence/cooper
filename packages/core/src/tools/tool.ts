@@ -54,8 +54,8 @@ export type Tool<S extends z.ZodType = z.ZodType> = {
    */
   jsonSchema?: Record<string, unknown>;
   /**
-   * What the tool is allowed to do. Tools that include "write" or "execute"
-   * are approval-gated; read-only tools run without asking. The permission
+   * What the tool is allowed to do. Tools that include "write", "execute", or
+   * "network" are approval-gated; read-only tools run without asking. The permission
    * policy treats missing capabilities as dangerous (fail closed).
    */
   capabilities: readonly ToolCapability[];

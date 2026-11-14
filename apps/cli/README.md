@@ -53,6 +53,17 @@ resuming, then the `config.json` default, then `ask`. Use `--mode auto` to
 enable automatic approvals for a new process. In an idle TUI, `/plan`,
 `/ask`, and `/auto` switch the mode for the current process.
 
+## Web tools
+
+`web_fetch` reads text from public HTTP(S) URLs. Enable `web_search` by
+adding `"webSearch": { "provider": "tavily" }` to your user configuration and
+setting `TAVILY_API_KEY` in the environment before launch. Use `/reload` to
+apply edits to the configuration file in an idle TUI.
+
+Interactive `ask` reviews each URL or search query before sending it.
+`plan` and headless `ask` deny web tool calls. Explicit `auto` approves
+them subject to the tools' network limits.
+
 ## Skills
 
 Place each skill in its own folder with a `SKILL.md` file. Cooper discovers

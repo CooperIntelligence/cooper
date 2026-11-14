@@ -3,6 +3,7 @@ import {
   connectMcpServers,
   createBuiltinTools,
   createMcpResourceTools,
+  createWebSearchTool,
   loadMcpConfig,
   type CommandShell,
   type McpServerStatus,
@@ -32,11 +33,13 @@ export async function prepareTools(options: {
   explicit: string[];
   loadProject: boolean;
   shell?: CommandShell;
+  webSearchApiKey?: string;
   /** Overrides the `cooperHome()` anchor; tests only. */
   home?: string;
 }): Promise<PreparedTools> {
   const config = loadMcpConfig(options);
-  const builtins = options.shell ? createBuiltinTools(options.shell) : allTools;
+  const builtins = [...(options.shell ? createBuiltinTools(options.shell) : allTools)];
+  if (options.webSearchApiKey) builtins.push(createWebSearchTool(options.webSearchApiKey));
   const base: McpReport = {
     sources: config.sources,
     statuses: [],

@@ -23,6 +23,7 @@ import {
 } from "./tools/tool.js";
 import {
   needsApproval,
+  supportsProcessGrant,
   type ApprovalOutcome,
   type PermissionPolicy,
   type ToolCapability,
@@ -35,7 +36,7 @@ export type ApprovalRequest = {
   summary: string;
   /** Parsed and schema-validated tool input. */
   input: unknown;
-  /** What the tool is allowed to do (read / write / execute). */
+  /** What the tool is allowed to do (read / write / execute / network). */
   capabilities: readonly ToolCapability[];
   /**
    * Side-effect-free preview of the effect, or a reason it is unavailable.
@@ -126,7 +127,7 @@ function policyDeniedMessage(policy: PermissionPolicy): string {
   if (policy.preset === "plan") {
     return (
       "Permission denied: plan mode is read-only, so tools that change the " +
-      `workspace or execute commands are not allowed. ${NO_RETRY}`
+      `workspace, execute commands, or make web requests are not allowed. ${NO_RETRY}`
     );
   }
   return NO_APPROVER_MESSAGE;
@@ -188,6 +189,9 @@ async function requestToolApproval(
       return { error: "The approval request could not be completed.", denied: true };
     }
     if (outcome !== "allow" && outcome !== "allow-session") return { outcome: "deny" };
+    if (outcome === "allow-session" && !supportsProcessGrant(tool.capabilities)) {
+      return { outcome: "deny" };
+    }
     context.signal?.throwIfAborted();
     if (
       (preview?.kind !== "diff" && preview?.kind !== "command") ||

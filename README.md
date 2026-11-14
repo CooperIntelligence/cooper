@@ -151,7 +151,7 @@ npm run --silent dev -- -p "..." > answer.md
 
 | 模式 | 无头行为 |
 |---|---|
-| `ask`（默认） | 读写类工具直接拒绝，模型预先被告知不要重试 |
+| `ask`（默认） | 拒绝写文件、执行命令和网页请求 |
 | `auto` | 自动放行 |
 | `plan` | 拒绝所有修改 |
 
@@ -204,9 +204,9 @@ npm run dev -- --no-session         # 本次不落盘
 
 | 模式 | 行为 |
 |---|---|
-| `ask`（默认） | 读操作直接执行；写文件、改文件、执行命令前弹窗确认 |
-| `auto` | 所有工具自动放行（谨慎使用） |
-| `plan` | 只读：允许读取，拒绝一切写入和命令执行 |
+| `ask`（默认） | 读操作直接执行，写文件、命令和网页请求需确认 |
+| `auto` | 自动批准工具调用，由每个工具继续执行自身的校验 |
+| `plan` | 允许只读工具，拒绝写入、命令和网页请求 |
 
 ```bash
 npm run dev                  # ask
@@ -234,7 +234,7 @@ TUI 空闲时可以直接切换：
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |
 | `/skills` | — | 列出已发现的 Skills |
 | `/skill <name> [请求]` | — | 为本轮加载指定 Skill |
-| `/tools` | — | 列出工具及其 `read`/`write`/`execute` 能力 |
+| `/tools` | — | 列出工具及其 `read`/`write`/`execute`/`network` 能力 |
 | `/status` | — | 显示工作区、指令文件、会话、上下文占用率和生效配置 |
 | `/config [setting]` | — | 在 TUI 内编辑、保存并应用用户配置 |
 | `/reload` | — | 重新读取用户配置，应用于后续对话 |
@@ -255,7 +255,7 @@ TUI 空闲时可以直接切换：
 
 权限决策由 `packages/core/src/permissions.ts` 统一执行，宿主只负责界面：
 
-- 每个工具声明 `capabilities`：`read` / `write` / `execute`。含写或执行能力的工具进入审批流程；缺少声明按最高风险处理。
+- 工具声明 `read`、`write`、`execute` 或 `network` 能力。写文件、执行命令和网页请求由 `PermissionPolicy` 审批。缺少声明时按受管控工具处理。
 - 预设决定默认决策：`plan` 直接拒绝；`ask` 在交互界面询问、在无头模式拒绝；`auto` 放行。
 - 审批结果有三种：`allow`（本次）、`allow-session`（本进程内该工具不再询问，不落盘）、`deny`。
 - 核心层 **fail-closed**：策略要求询问但没有 `approve` 回调时，工具不会执行。plan 模式根本不调用审批回调，宿主无法把它降级成 `ask`。
@@ -267,6 +267,7 @@ TUI 空闲时可以直接切换：
 
 - `←` / `→` 翻页，`y` 允许本次调用，`n` / `Esc` 拒绝。
 - `a` 查看授权范围，再按 `y` 执行当前调用并授权该工具到进程退出。确认页按 `Esc` 返回预览，按 `n` 拒绝。`Enter` 不会批准。
+- 网页请求显示完整 URL 或后端和查询词，只能用 `y` 批准当前调用。
 
 进程内授权随对话切换保留。应用配置时实际 shell 发生变化，Cooper 会撤销 `run_command` 的授权。终端历史分开显示用户的批准决定和工具执行结果，沿用进程授权的结果会标明来源。
 
@@ -323,6 +324,8 @@ TUI 空闲时可以直接切换：
 - `write_file` — 创建或覆盖文件，自动创建父目录
 - `edit_file` — 精确字符串替换；默认要求唯一匹配，可设 `replace_all`
 - `run_command` — 在工作区内执行 shell 命令，默认超时 120s，输出上限 30k 字符
+- `web_fetch` — 读取已知公开 URL 的 HTML、Markdown 或纯文本
+- `web_search` — 配置 Tavily 后可用，返回相关页面的标题、URL 和摘要
 
 Cooper 在 Windows 默认使用系统自带的 Windows PowerShell 5.1，在 Linux 默认使用 Bash（`/bin/bash`），在 macOS 默认使用 zsh（`/bin/zsh`）。在 `~/.cooper/config.json` 中可以为 TUI 和 headless 选择其他 shell，例如：
 
@@ -335,6 +338,22 @@ Cooper 在 Windows 默认使用系统自带的 Windows PowerShell 5.1，在 Linu
 可选值为 `powershell`、`pwsh`、`cmd`、`sh`、`bash`、`zsh` 和 `git-bash`。`powershell`、`cmd` 和 `git-bash` 用于 Windows。`git-bash` 会查找 Git for Windows 的标准安装目录。也可以设置 `shell.executable` 为绝对路径，Windows 上选择 `bash` 时必须提供该路径。显式配置的 shell 不可用时，Cooper 会在启动时指出问题。没有安装 Bash 的精简 Linux 环境可配置 `"shell": { "kind": "sh" }`。审批界面会显示 shell 和工作目录，`/status` 会显示可执行文件路径。
 
 内置文件工具和 `run_command` 的启动目录会校验真实路径，拒绝指向工作区外的符号链接和 Windows junction。获准启动的命令以当前操作系统用户的权限运行。
+
+### 网页工具
+
+`web_fetch` 随 Cooper 提供。它直连公网 HTTP(S)，会校验目标地址，最多跟随三次同源重定向。跨源跳转作为新链接返回。请求时限为 15 秒，响应和解压后的正文各限 2 MiB，工具文本最多返回 16,000 字符。它适用于公开静态文档，登录网站、PDF 和依赖浏览器渲染的网页超出当前范围。
+
+抓取结果区分已提取正文、HTML 无静态正文、空响应体、纯空白文本、待跟进的跨源跳转和错误。收到 HTTP 响应后会报告状态码、最终 URL 和服务端声明的内容类型。HTML 无静态正文时仍返回可提取的标题。
+
+在 `~/.cooper/config.json` 中添加以下字段，并在启动 Cooper 的环境里设置 `TAVILY_API_KEY`，即可启用 `web_search`。可通过 `webSearch.apiKeyEnv` 改用另一个环境变量名。修改配置文件后，空闲 TUI 可以用 `/reload` 应用。
+
+```json
+{
+  "webSearch": { "provider": "tavily" }
+}
+```
+
+两种工具都遵循联网权限。TUI 的 `ask` 每次询问，`plan` 和 headless 的 `ask` 拒绝，显式 `auto` 自动批准。搜索词会发给 Tavily。网页正文和搜索摘要会作为工具结果进入模型上下文并写入本地会话。 [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search)
 
 ## Skills
 
@@ -421,7 +440,7 @@ npm test                                   # core + cli 单元测试
 1. `packages/core` 不依赖 Ink/React，也不直接写 stdout。它只产出 `AgentEvent`。
 2. 每种界面（TUI / 未来的 desktop、server）都是事件的消费者。
 3. 工具统一实现 `Tool` 接口，输入用 zod 定义，自动转成 JSON Schema 交给模型；MCP 工具直接透传服务器的 JSON Schema。
-4. 每个工具声明 `capabilities`；写/执行能力由 `PermissionPolicy` 审批，缺失声明按危险处理，核心层 fail-closed。MCP 服务器暴露的 tools 一律声明 `execute`，不信任服务器标注；Cooper 自己的 MCP resources 适配器是 `read`。
+4. 每个工具声明 `capabilities`。写入、执行和网页请求由 `PermissionPolicy` 审批，缺失声明按受管控工具处理。MCP 服务器暴露的工具一律声明 `execute`，Cooper 自己的 MCP resources 适配器是 `read`。
 5. 流式输出按完整行提交给 `<Static>`，live 区只保留未完成的一行。
 6. Provider 统一实现 `Provider` 接口。协议续传数据存放在 `Message.continuation` 中，并按协议、endpoint、model 和历史 anchor 校验；不匹配的 payload 不会被重放。
 7. 系统提示由 `apps/cli/src/system-prompt.ts` 统一生成，描述权限机制但不写死当前模式，TUI 与无头模式共用。当前模式作为追加的 `<cooper-runtime>` 通知进入对话，避免切换模式时让 provider 的 prompt cache 整体失效。项目指令由 `packages/core/src/instructions.ts` 读取，只追加在权限段之后。

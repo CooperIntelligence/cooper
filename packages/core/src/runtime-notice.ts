@@ -7,11 +7,11 @@ export const PERMISSION_MODE_RUNTIME: RuntimeNoticeKind = "permission-mode";
 const MODE_TEXT: Record<PermissionPreset, string> = {
   plan:
     "Permission mode is now plan (read-only). This supersedes earlier runtime notices.\n" +
-    "Inspect files and gather context only. Do not modify files or run state-changing commands. " +
+    "Inspect files and gather context only. Do not modify files, execute commands, or use web tools. " +
     "Present a plan and wait for the user to switch modes.",
   ask:
     "Permission mode is now ask. This supersedes earlier runtime notices.\n" +
-    "File edits and commands require user approval. Do not retry a denied call.",
+    "File edits, commands, and web requests require user approval. Do not retry a denied call.",
   auto:
     "Permission mode is now auto. This supersedes earlier runtime notices.\n" +
     "All tools are auto-approved; choose actions carefully.",

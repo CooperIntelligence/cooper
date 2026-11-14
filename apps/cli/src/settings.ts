@@ -13,6 +13,11 @@ const contextSchema = z.object({
   summaryModel: z.string().min(1).optional(),
 });
 
+const webSearchSchema = z.object({
+  provider: z.literal("tavily"),
+  apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).default("TAVILY_API_KEY"),
+});
+
 const settingsSchema = z.object({
   protocol: z.enum(["openai-chat", "anthropic-messages", "openai-responses"]).optional(),
   model: z.string().trim().min(1).optional(),
@@ -26,6 +31,7 @@ const settingsSchema = z.object({
     executable: z.string().trim().min(1).optional(),
   }).optional(),
   context: contextSchema.optional(),
+  webSearch: webSearchSchema.optional(),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
@@ -41,6 +47,7 @@ const KNOWN_SHAPE: Record<string, string[] | true> = {
   mode: true,
   shell: ["kind", "executable"],
   context: ["window", "reserveOutputTokens", "compact", "summaryModel"],
+  webSearch: ["provider", "apiKeyEnv"],
 };
 
 // Whole-key matches only: substrings would eat legitimate names like
@@ -162,6 +169,11 @@ export function parseSettings(values: Record<string, unknown>, file: string): Lo
   // keys) on parse, so a typo never changes behaviour but is still visible.
   for (const key of collectUnknownKeys(raw, KNOWN_SHAPE)) {
     warnings.push(`${file}: unknown setting "${key}" (ignored).`);
+  }
+
+  if (raw.webSearch !== undefined && !webSearchSchema.safeParse(raw.webSearch).success) {
+    warnings.push(`${file}: invalid webSearch configuration (ignored). Expected provider "tavily" and an optional apiKeyEnv variable name.`);
+    delete raw.webSearch;
   }
 
   const parsed = settingsSchema.safeParse(raw);

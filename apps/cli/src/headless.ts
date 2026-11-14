@@ -15,6 +15,7 @@ import type { ApprovalMode, Config } from "./config.js";
 import type { McpReport } from "./mcp.js";
 import { resolveSkillPrompt, skillTools } from "./skills.js";
 import { visiblePreviewText } from "./preview.js";
+import { webFetchOutput } from "./web-fetch-view.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 
 /** Minimal sink so tests can capture output without real streams. */
@@ -50,7 +51,7 @@ export type HeadlessOptions = {
 const ICONS = { ok: "✓", error: "✗", denied: "⊘" } as const;
 
 function oneLine(text: string, max = 140): string {
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = visiblePreviewText(text.replace(/\s+/g, " ").trim());
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
@@ -123,11 +124,11 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
 
   if (mode === "ask") {
     err.write(
-      "ask mode has no interactive approver in --print: writes and commands will be denied.\n" +
+      "ask mode has no interactive approver in --print: writes, commands, and web requests will be denied.\n" +
         "Pass --mode auto to let Cooper change files and run commands.\n",
     );
   } else if (mode === "plan") {
-    err.write("plan mode: writes and commands will be denied.\n");
+    err.write("plan mode: writes, commands, and web requests will be denied.\n");
   }
 
   // Nobody can answer an approval prompt here. The non-interactive policy
@@ -290,7 +291,9 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
             : event.isError
               ? ICONS.error
               : ICONS.ok;
-          err.write(`  ${icon} ${event.durationMs}ms\n`);
+          const detail = event.call.name === "web_fetch" && !event.denied
+            ? webFetchOutput(event.call.name, event.result.content).split("\n", 1)[0] : undefined;
+          err.write(`  ${icon} ${event.durationMs}ms${detail ? ` · ${oneLine(detail, 200)}` : ""}\n`);
           break;
         }
 

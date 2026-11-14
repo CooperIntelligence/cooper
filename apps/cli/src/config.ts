@@ -37,6 +37,7 @@ export type Config = Required<ConnectionSettings> & {
   showReasoning: boolean;
   defaultMode: Settings["mode"];
   shell: CommandShell;
+  webSearchApiKey?: string;
   sources: Partial<Record<ConfigKey, ConfigSource>>;
   settingsWarnings: string[];
   settingsFile: string | null;
@@ -89,6 +90,12 @@ export function resolveConfig(
     : { window: configuredWindow, assumed: false };
   const source = (value: unknown): ConfigSource =>
     value === undefined ? "default" : "config";
+  const webSearch = settings?.webSearch;
+  const key = webSearch ? process.env[webSearch.apiKeyEnv]?.trim() : undefined;
+  const webSearchApiKey = key && /^[\x21-\x7e]+$/.test(key) ? key : undefined;
+  const settingsWarnings = webSearch && !webSearchApiKey
+    ? [...warnings, `Web search is disabled. Set a valid Tavily API key in ${webSearch.apiKeyEnv}.`]
+    : warnings;
 
   return {
     protocol,
@@ -106,6 +113,7 @@ export function resolveConfig(
     showReasoning: options.showReasoning || (settings?.showReasoning ?? false),
     defaultMode: settings?.mode,
     shell: resolveCommandShell(settings?.shell),
+    webSearchApiKey,
     sources: {
       protocol: "config",
       model: "config",
@@ -119,7 +127,7 @@ export function resolveConfig(
       "context.compact": source(context?.compact),
       "context.summaryModel": source(context?.summaryModel),
     },
-    settingsWarnings: warnings,
+    settingsWarnings,
     settingsFile: file,
   };
 }

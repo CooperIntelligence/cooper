@@ -49,7 +49,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     name: "ask",
     aliases: [],
     usage: "/ask",
-    description: "approve writes and commands",
+    description: "approve writes, commands, and web requests",
   },
   {
     name: "auto",
@@ -197,7 +197,7 @@ export function isModeCommand(name: CommandName): name is ApprovalMode {
 export function modeDescription(mode: ApprovalMode): string {
   if (mode === "plan") return "plan (read-only)";
   if (mode === "auto") return "auto (auto-approve ALL tools)";
-  return "ask (approve writes and commands)";
+  return "ask (approve writes, commands, and web requests)";
 }
 
 export function commandHelp(mode: ApprovalMode): string {
