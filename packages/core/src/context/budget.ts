@@ -22,6 +22,8 @@ export type ContextSettings = {
   window: number;
   /** Tokens kept free for the model's reply. */
   reserveOutputTokens?: number;
+  /** A request-specific generation cap takes precedence over the heuristic. */
+  maxOutputTokens?: number;
   /** Fraction of the usable budget that triggers tool-output pruning. */
   pruneAt?: number;
   /** Fraction that triggers summarization. */
@@ -39,6 +41,7 @@ export type ContextSettings = {
 export type ContextConfig = {
   window: number;
   reserveOutputTokens: number;
+  maxOutputTokens?: number;
   pruneAt: number;
   summarizeAt: number;
   targetAfterSummary: number;
@@ -53,6 +56,7 @@ export function resolveContextConfig(settings: ContextSettings): ContextConfig {
     window: settings.window,
     // Leave room for a reply that includes a whole file write, not just chat.
     reserveOutputTokens: settings.reserveOutputTokens ?? 16_384,
+    ...(settings.maxOutputTokens === undefined ? {} : { maxOutputTokens: settings.maxOutputTokens }),
     pruneAt: settings.pruneAt ?? 0.65,
     summarizeAt: settings.summarizeAt ?? 0.8,
     targetAfterSummary: settings.targetAfterSummary ?? 0.45,
@@ -66,6 +70,15 @@ export function resolveContextConfig(settings: ContextSettings): ContextConfig {
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = resolveContextConfig({
   window: DEFAULT_CONTEXT_WINDOW,
 });
+
+export function contextInputBudget(config: ContextConfig): number {
+  const heuristic = Math.min(config.reserveOutputTokens, Math.floor(config.window * 0.25));
+  return Math.max(1, config.window - Math.max(heuristic, config.maxOutputTokens ?? 0));
+}
+
+export function contextInputLimit(config: ContextConfig): number {
+  return Math.floor(contextInputBudget(config) * config.hardLimit);
+}
 
 export type ContextAction = {
   action: "prune" | "summarize" | "truncate";
@@ -90,6 +103,12 @@ export type PrepareContextOptions = {
    * to a fraction of what we just tried.
    */
   budgetOverride?: number;
+  /** Model transitions budget the target provider's wire representation. */
+  useProviderEstimate?: boolean;
+  /** A trailing host notice must not displace the last visible group during a switch. */
+  preserveLatestVisible?: boolean;
+  /** Allow an already checked model transition to send history that still fits. */
+  onlyIfOverLimit?: boolean;
 };
 
 export function estimateContextTokens(
@@ -119,31 +138,39 @@ export async function prepareContext(
   options: PrepareContextOptions,
 ): Promise<ContextAction[]> {
   const { tools, provider, model, config, force = false } = options;
-  if (!config.enabled) return [];
+  if (!config.enabled && !options.useProviderEstimate) return [];
   const messages = options.messages.slice();
   const protectedLength = provider.protectedToolHistoryLength?.({ model, messages, tools }) ?? 0;
   const canEditPrefix = protectedLength === 0;
+  const lastVisible = options.preserveLatestVisible
+    ? messages.findLast((message) => message.role !== "user" || message.runtime === undefined)
+    : undefined;
 
   // The latest mode notice must survive compaction: the model needs to know
   // whether it is in plan/ask/auto even after its original turn is summarized.
   const retainedRuntimeNotice = latestRuntimeNotice(messages);
   const calibration = options.calibration ?? INITIAL_CALIBRATION;
-  // Never reserve more than a quarter of the window: with a small local model
-  // the 16k default would otherwise eat half the usable budget.
-  const reserve = Math.min(
-    config.reserveOutputTokens,
-    Math.floor(config.window * 0.25),
-  );
   const usable = Math.max(
     1,
-    options.budgetOverride ?? config.window - reserve,
+    options.budgetOverride ?? contextInputBudget(config),
   );
-  const estimate = () => estimateContextTokens(messages, tools, calibration);
+  const estimate = () => {
+    const input = options.useProviderEstimate
+      ? provider.estimateInputTokens?.({ model, messages, tools }) : undefined;
+    return input === undefined ? estimateContextTokens(messages, tools, calibration) : applyCalibration(input, calibration);
+  };
 
   let current = estimate();
+  const hardLimit = usable * config.hardLimit;
+  if (options.onlyIfOverLimit && current <= hardLimit) return [];
+  if (!config.enabled) {
+    if (current > hardLimit) {
+      throw new Error(`Context exceeds the configured limit (${current} estimated tokens, limit ${Math.floor(hardLimit)}). Context compaction is disabled.`);
+    }
+    return [];
+  }
   const pruneLimit = usable * config.pruneAt;
   const summarizeLimit = usable * config.summarizeAt;
-  const hardLimit = usable * config.hardLimit;
   const target = usable * config.targetAfterSummary;
 
   const actions: ContextAction[] = [];
@@ -170,11 +197,14 @@ export async function prepareContext(
       1024,
       Math.floor(target) - SUMMARY_BUDGET_TOKENS,
     );
-    const cut = findCompactionCut(
+    const proposedCut = findCompactionCut(
       messages,
       keepTokens,
       (message) => Math.ceil(estimateMessageTokens(message) * calibration.ratio),
     );
+    const protectedGroup = lastVisible === undefined ? undefined :
+      groupMessages(messages).find((group) => group.messages.includes(lastVisible));
+    const cut = Math.min(proposedCut, protectedGroup?.start ?? proposedCut);
 
     const prefix = cut > systemEnd ? messages.slice(systemEnd, cut) : [];
     const prefixTokens = Math.ceil(
@@ -189,6 +219,7 @@ export async function prepareContext(
         const summary = await summarizeMessages({
           provider: options.provider,
           model: config.summaryModel ?? options.model,
+          useBaseModelOptions: config.summaryModel !== undefined,
           messages: prefix,
           budgetTokens: SUMMARY_BUDGET_TOKENS,
           chunkTokens: Math.min(
@@ -246,7 +277,7 @@ export async function prepareContext(
       const groups = groupMessages(messages.slice(systemEnd));
       if (groups.length <= 1) break;
       const first = groups[0];
-      if (first === undefined) break;
+      if (first === undefined || (lastVisible !== undefined && first.messages.includes(lastVisible))) break;
       const length = first.end - first.start;
       messages.splice(systemEnd, length);
       dropped += length;

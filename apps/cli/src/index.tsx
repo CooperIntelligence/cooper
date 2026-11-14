@@ -23,6 +23,7 @@ import {
 import {
   IncompleteConfigError,
   loadConfig,
+  selectModelTier,
   type ApprovalMode,
   type Config,
 } from "./config.js";
@@ -47,6 +48,7 @@ Options:
   -C, --cwd <dir>     workspace directory (default: current directory)
   -p, --print [text]  non-interactive; omit text or use "-" for stdin
   -r, --resume <id>   continue a saved session
+      --tier <tier>   select sera | cher | thr (overrides a saved tier)
       --sessions      list saved sessions for this workspace and exit
       --no-session    do not save this run's conversation
       --mcp-config <file>
@@ -194,6 +196,7 @@ async function main(): Promise<void> {
     if (args.resume !== null) {
       resumed = resumeSession({ cwd: root, id: args.resume });
     }
+    config = selectModelTier(config, args.tier ?? (resumed?.modelSelection ? resumed.modelSelection.tier : undefined));
 
     const resolution = resolveModeForSession(
       args.mode,

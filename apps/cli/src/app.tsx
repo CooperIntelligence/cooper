@@ -8,6 +8,7 @@ import {
   SessionWriter,
   createRunCommandTool,
   createWebSearchTool,
+  contextInputBudget,
   estimateContextTokens,
   listSessions,
   permissionModeNotice,
@@ -22,6 +23,7 @@ import {
   type LoadedInstructions,
   type LoadedSession,
   type Message,
+  type ModelTier,
   type Provider,
   type SkillCatalog,
   type Tool,
@@ -43,7 +45,8 @@ import { ApprovalPanel } from "./approval.js";
 import { visiblePreviewText } from "./preview.js";
 import { createMarkdownFormatter, type MarkdownLine } from "./markdown.js";
 import type { ModeResolution } from "./args.js";
-import { loadConfig, resolveConfig, type ApprovalMode, type Config } from "./config.js";
+import { describeModel, loadConfig, modelRequestError, modelSelectionChanged, resolveConfig, selectModelTier, type ApprovalMode, type Config } from "./config.js";
+import { compactForModel, modelBudget, needsResumeBudgetCheck, transitionMessage } from "./model-transition.js";
 import { ConfigEditor, configFieldIndex } from "./config-editor.js";
 import type { McpReport } from "./mcp.js";
 import { createProvider } from "./provider.js";
@@ -60,6 +63,22 @@ export const tuiRenderOptions = {
   // Leave unchanged prompt cells in place instead of erasing the input frame.
   incrementalRendering: process.platform === "win32",
 } satisfies RenderOptions;
+
+type ModelConfirmation = { text: string; resolve: (confirmed: boolean) => void };
+
+function ModelConfirmationPanel({ confirmation }: { confirmation: ModelConfirmation }) {
+  useInput((input, key) => {
+    if (key.escape || input === "n" || (key.ctrl && input === "c")) confirmation.resolve(false);
+    else if (input === "y" && !key.ctrl && !key.meta) confirmation.resolve(true);
+  });
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
+      <Text>{visiblePreviewText(confirmation.text)}</Text>
+      <Text>Earlier context may be summarized or dropped.</Text>
+      <Text dimColor>y Compact and switch · n/Esc Keep current session</Text>
+    </Box>
+  );
+}
 
 function truncate(text: string, max: number): string {
   const singleLine = text.replace(/\s+/g, " ").trim();
@@ -331,6 +350,9 @@ export function App({
   ]);
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  const preserveFittingHistory = useRef(false);
+  const modelConfirmationRef = useRef<ModelConfirmation | null>(null);
+  const [modelConfirmation, setModelConfirmation] = useState<ModelConfirmation | null>(null);
   const sessionFailureShown = useRef(false);
   // Bumped by /clear to remount <Static> after an ANSI screen wipe.
   const [staticKey, setStaticKey] = useState(0);
@@ -345,12 +367,27 @@ export function App({
   const buildHeader = (id: number, loaded: LoadedSession | null = null): UiItem => ({
     id,
     kind: "header",
-    model: active.current.config.model,
+    model: visiblePreviewText(describeModel(active.current.config)),
     root,
     autoApprove: permissions.preset === "auto",
     resume: loaded === null ? undefined : `Resumed session ${loaded.header.id}` +
       (loaded.repaired > 0 ? ` · repaired ${loaded.repaired} invalid row(s)` : ""),
   });
+
+  const restoredView = (loaded: LoadedSession, effective: Message[]) => {
+    const uiByCall = new Map([...loaded.toolUi].flatMap(([index, ui]) => {
+      const message = loaded.messages[index];
+      return message?.role === "tool" ? [[message.toolCallId, ui] as const] : [];
+    }));
+    const messages = effective.filter((message) => message.role !== "system");
+    const toolUi: LoadedSession["toolUi"] = new Map();
+    for (const [index, message] of messages.entries()) {
+      if (message.role !== "tool") continue;
+      const ui = uiByCall.get(message.toolCallId);
+      if (ui) toolUi.set(index, ui);
+    }
+    return { ...loaded, messages, toolUi };
+  };
 
   // Replayed history and the banner are committed once, before the live
   // region exists, so resumed rows scroll into history exactly like live ones.
@@ -467,6 +504,10 @@ export function App({
       config.apiKey === current.config.apiKey &&
       config.model === current.config.model &&
       config.maxOutputTokens === current.config.maxOutputTokens &&
+      config.modelSelection?.reasoningEffort === current.config.modelSelection?.reasoningEffort &&
+      config.context.maxOutputTokens === current.config.context.maxOutputTokens &&
+      config.tierFallback === current.config.tierFallback &&
+      config.modelTiers?.fallback.maxOutputTokens === current.config.modelTiers?.fallback.maxOutputTokens &&
       (config.protocol !== "openai-responses" ||
         (config.showReasoning === current.config.showReasoning &&
           config.sources.maxOutputTokens === current.config.sources.maxOutputTokens))
@@ -486,7 +527,7 @@ export function App({
   };
 
   const reportConfig = (config: Config, action: string) => {
-    notice(`Configuration ${action} · ${config.model} (${config.protocol})`);
+    notice(`Configuration ${action} · ${visiblePreviewText(describeModel(config))} (${config.protocol})`);
     for (const warning of config.settingsWarnings) notice(`Warning: ${warning}`);
   };
 
@@ -503,11 +544,100 @@ export function App({
     active.current = next;
   };
 
-  const reloadConfig = () => {
+  const prepareModelHistory = async (
+    next: ReturnType<typeof prepareConfig>,
+    messages: Message[],
+    check: boolean,
+  ): Promise<Message[] | null> => {
+    if (!check) return messages;
+    const budget = modelBudget(next.config, messages, next.tools, next.provider);
+    if (budget.estimated <= budget.limit) return messages;
+    const text = transitionMessage(next.config, budget);
+    if (!budget.context.enabled) throw new Error(`${text} Context compaction is disabled.`);
+    busyRef.current = true;
+    setBusy(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const config = loadConfig({ showReasoning: showReasoningFlag });
-      activateConfig(prepareConfig(config));
-      reportConfig(config, "reloaded");
+      const confirmed = await new Promise<boolean>((resolve) => {
+        const confirmation = {
+          text,
+          resolve: (value: boolean) => {
+            modelConfirmationRef.current = null;
+            setModelConfirmation(null);
+            resolve(value);
+          },
+        };
+        modelConfirmationRef.current = confirmation;
+        setModelConfirmation(confirmation);
+      });
+      if (!confirmed) return null;
+      return await compactForModel(next.config, next.provider, messages, budget, controller.signal);
+    } finally {
+      abortRef.current = null;
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const saveModelSelection = (
+    writer: SessionWriter | null,
+    config: Config,
+    original: Message[],
+    effective: Message[],
+  ) => {
+    const selection = config.modelSelection;
+    if (!writer || !selection) return;
+    const error = original === effective
+      ? writer.appendModelSelection(selection)
+      : writer.appendCheckpoint("model-switch", effective, undefined, selection);
+    if (error) throw new Error(`Could not save model selection: ${error.message}`);
+  };
+
+  const applyModelConfig = async (
+    next: ReturnType<typeof prepareConfig>,
+    beforeApply?: () => void,
+  ) => {
+    const current = active.current.config;
+    const original = history.current;
+    const changed = modelSelectionChanged(current.modelSelection, next.config);
+    const check = Boolean(current.modelSelection?.tier || next.config.modelSelection?.tier) &&
+      (changed || current.modelSelection?.tier !== next.config.modelSelection?.tier ||
+        current.protocol !== next.config.protocol || current.baseURL !== next.config.baseURL);
+    const effective = await prepareModelHistory(next, original, check);
+    if (effective === null) return false;
+    beforeApply?.();
+    if (changed || current.modelSelection?.tier !== next.config.modelSelection?.tier || effective !== original) {
+      try {
+        saveModelSelection(sessionWriter, next.config, original, effective);
+      } catch (error) {
+        if (!beforeApply) throw error;
+        setConfigEdit(null);
+        notice(`Configuration saved. The running session kept its previous model. ${error instanceof Error ? error.message : String(error)}`, "error");
+        return false;
+      }
+    }
+    history.current = effective;
+    activateConfig(next);
+    if (check) preserveFittingHistory.current = true;
+    if (effective !== original) notice("Context compacted for the selected model.");
+    return true;
+  };
+
+  const switchTier = async (tier: ModelTier) => {
+    try {
+      const next = prepareConfig(selectModelTier(active.current.config, tier));
+      if (await applyModelConfig(next)) notice(`Model · ${visiblePreviewText(describeModel(next.config))}`);
+    } catch (error) {
+      notice(`Could not switch model. ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  };
+
+  const reloadConfig = async () => {
+    try {
+      const config = selectModelTier(loadConfig({ showReasoning: showReasoningFlag }),
+        active.current.config.modelSelection?.tier);
+      if (await applyModelConfig(prepareConfig(config))) reportConfig(config, "reloaded");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       notice(`Could not reload configuration. Still using the previous settings. ${detail}`, "error");
@@ -528,17 +658,19 @@ export function App({
     }
   };
 
-  const saveConfig = (values: Record<string, unknown>) => {
+  const saveConfig = async (values: Record<string, unknown>) => {
     if (configEdit === null) return;
+    if (busyRef.current) return;
     const { document } = configEdit;
     try {
       const settings = parseSettings(values, document.file);
-      const config = resolveConfig(settings, { showReasoning: showReasoningFlag });
+      const config = selectModelTier(resolveConfig(settings, { showReasoning: showReasoningFlag }),
+        active.current.config.modelSelection?.tier);
       const next = prepareConfig(config);
-      writeSettingsDocument(document, values);
-      activateConfig(next);
-      setConfigEdit(null);
-      reportConfig(config, "saved and applied");
+      if (await applyModelConfig(next, () => writeSettingsDocument(document, values))) {
+        setConfigEdit(null);
+        reportConfig(config, "saved and applied");
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       notice(`Could not save configuration. ${detail}`, "error");
@@ -551,10 +683,12 @@ export function App({
    * in-memory transcript and the terminal scrollback start over.
    */
   const clearConversation = () => {
+    const next = prepareConfig(selectModelTier(active.current.config));
     let writer: SessionWriter | null = null;
     if (sessionsEnabled) {
       try {
-        writer = SessionWriter.create({ cwd: root, model: active.current.config.model });
+        writer = SessionWriter.create({ cwd: root, model: next.config.model });
+        saveModelSelection(writer, next.config, [], []);
       } catch (error) {
         notice(
           `Could not start a new session: ${error instanceof Error ? error.message : String(error)}`,
@@ -565,6 +699,9 @@ export function App({
       warnSession(writer.appendPolicy(modeState));
       warnSession(writer.appendMessage(permissionModeNotice(modeState)));
     }
+    // A fresh chat has its own startup model choice.
+    activateConfig(next);
+    preserveFittingHistory.current = false;
     setSessionWriter(writer);
 
     history.current = [
@@ -599,7 +736,7 @@ export function App({
    * transcript; the old file stays as-is, and the process mode is kept
    * (option A) - only the write target changes.
    */
-  const resumeConversation = (idArg: string) => {
+  const resumeConversation = async (idArg: string) => {
     if (!sessionsEnabled) {
       notice(
         "Session resume requires sessions (not compatible with --no-session).",
@@ -630,8 +767,22 @@ export function App({
     }
 
     let writer: SessionWriter;
+    let effective: Message[];
+    let next: ReturnType<typeof prepareConfig>;
+    let changed: boolean;
+    let compacted: boolean;
+    const modeMessage = permissionModeNotice(modeState);
     try {
+      next = prepareConfig(selectModelTier(active.current.config,
+        loaded.modelSelection ? loaded.modelSelection.tier : undefined));
+      changed = modelSelectionChanged(loaded.modelSelection, next.config);
+      const original: Message[] = [history.current[0]!, ...loaded.messages, modeMessage];
+      const result = await prepareModelHistory(next, original, needsResumeBudgetCheck(next.config, loaded.modelSelection));
+      if (result === null) return;
+      effective = result;
+      compacted = effective !== original;
       writer = SessionWriter.from(loaded);
+      saveModelSelection(writer, next.config, original, effective);
     } catch (error) {
       notice(
         `Could not open session: ${error instanceof Error ? error.message : String(error)}`,
@@ -639,25 +790,15 @@ export function App({
       );
       return;
     }
+    activateConfig(next);
+    preserveFittingHistory.current = needsResumeBudgetCheck(next.config, loaded.modelSelection);
     setSessionWriter(writer);
     // Keep the process mode; record it on the target session so a later
     // --resume of this file starts from what the user actually ran here.
     warnSession(writer.appendPolicy(modeState));
-    warnSession(writer.appendMessage(permissionModeNotice(modeState)));
-
-    history.current = [
-      {
-        role: "system",
-        content: buildSystemPrompt({
-          root,
-          permissions,
-          instructions: instructions.text,
-          skills,
-        }),
-      },
-      ...loaded.messages,
-      permissionModeNotice(modeState),
-    ];
+    history.current = effective;
+    // A switch checkpoint already contains the current permission notice.
+    if (!compacted) warnSession(writer.appendMessage(modeMessage));
 
     if (process.stdout.isTTY) {
       process.stdout.write("\u001B[2J\u001B[H\u001B[3J");
@@ -665,13 +806,15 @@ export function App({
     sessionFailureShown.current = false;
 
     const header = buildHeader(nextId.current++, loaded);
-    const view = buildResumeView(loaded, nextId.current);
+    const view = buildResumeView(compacted ? restoredView(loaded, effective) : loaded, nextId.current);
     setCommitted([header, ...view.items]);
     nextId.current = view.nextId;
     setLive(null);
     setLiveReasoning(null);
     setReasoningHint(null);
     setStaticKey((key) => key + 1);
+    if (changed) notice(`Saved model settings changed. Using ${visiblePreviewText(describeModel(next.config))}.`);
+    if (compacted) notice("Context compacted for the selected model.");
   };
 
   const compactNow = async () => {
@@ -683,12 +826,10 @@ export function App({
     }
 
     const specs = tools.map(toToolSpec);
-    const estimate = estimateContextTokens(history.current, specs);
-    const reserve = Math.min(
-      contextConfig.reserveOutputTokens,
-      Math.floor(contextConfig.window * 0.25),
-    );
-    const usable = Math.max(1, contextConfig.window - reserve);
+    const estimate = config.modelSelection?.tier
+      ? modelBudget(config, history.current, tools, provider).estimated
+      : estimateContextTokens(history.current, specs);
+    const usable = contextInputBudget(contextConfig);
     const summarizeLimit = usable * contextConfig.summarizeAt;
     if (estimate <= summarizeLimit) {
       notice(
@@ -710,6 +851,7 @@ export function App({
         config: contextConfig,
         signal: controller.signal,
         force: true,
+        useProviderEstimate: Boolean(config.modelSelection?.tier),
       });
       if (actions.length === 0) {
         notice("Compaction made no changes.");
@@ -764,7 +906,13 @@ export function App({
         await compactNow();
         return;
       case "resume":
-        resumeConversation(command.args);
+        await resumeConversation(command.args);
+        return;
+      case "sera":
+      case "cher":
+      case "thr":
+        if (command.args.trim()) notice(`Usage: /${command.name}`, "error");
+        else await switchTier(command.name);
         return;
       case "sessions": {
         try {
@@ -787,7 +935,7 @@ export function App({
         notice(formatSkills(skills));
         return;
       case "status": {
-        const { config, tools } = active.current;
+        const { config, tools, provider } = active.current;
         const sessionInfo = sessionWriter !== null
           ? `Session ${sessionWriter.id} · resume with: cooper --resume ${sessionWriter.id}`
           : "Session: not saved (--no-session)";
@@ -799,13 +947,15 @@ export function App({
             config,
             mode: modeState,
             modeSource: modeSourceState,
-            contextTokens: estimateContextTokens(history.current, tools.map(toToolSpec)),
+            contextTokens: config.modelSelection?.tier
+              ? modelBudget(config, history.current, tools, provider).estimated
+              : estimateContextTokens(history.current, tools.map(toToolSpec)),
           }),
         ].join("\n"));
         return;
       }
       case "reload":
-        reloadConfig();
+        await reloadConfig();
         return;
       case "config":
         openConfig(command.args);
@@ -823,9 +973,41 @@ export function App({
   // Record the mode that this process actually starts with. The notice is
   // appended after any resumed history; it never rewrites the system prompt.
   useEffect(() => {
-    if (sessionWriter === null) return;
-    warnSession(sessionWriter.appendPolicy(mode));
-    warnSession(sessionWriter.appendMessage(permissionModeNotice(mode)));
+    const start = async () => {
+      const { config } = active.current;
+      const original = history.current;
+      try {
+        const effective = resumed
+          ? await prepareModelHistory(active.current, original, needsResumeBudgetCheck(config, resumed.modelSelection))
+          : original;
+        if (effective === null) {
+          exit();
+          return;
+        }
+        saveModelSelection(sessionWriter, config, original, effective);
+        history.current = effective;
+        if (resumed) preserveFittingHistory.current = needsResumeBudgetCheck(config, resumed.modelSelection);
+        if (sessionWriter) {
+          warnSession(sessionWriter.appendPolicy(mode));
+          if (effective === original) warnSession(sessionWriter.appendMessage(permissionModeNotice(mode)));
+        }
+        if (resumed && effective !== original) {
+          if (process.stdout.isTTY) process.stdout.write("\u001B[2J\u001B[H\u001B[3J");
+          const header = buildHeader(nextId.current++, resumed);
+          const view = buildResumeView(restoredView(resumed, effective), nextId.current);
+          setCommitted([header, ...view.items]);
+          nextId.current = view.nextId;
+          setStaticKey((key) => key + 1);
+        }
+        if (modelSelectionChanged(resumed?.modelSelection, config)) {
+          notice(`Saved model settings changed. Using ${visiblePreviewText(describeModel(config))}.`);
+        }
+        if (effective !== original) notice("Context compacted for the selected model.");
+      } catch (error) {
+        exit(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+    void start();
     // `mode` is the startup mode; runtime changes are recorded by switchMode.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -838,7 +1020,8 @@ export function App({
   };
 
   useInput((inputChar, key) => {
-    if (configEdit !== null || pendingApproval !== null || approvalResolver.current !== null) return;
+    if (modelConfirmationRef.current || (configEdit !== null && !busyRef.current) ||
+        pendingApproval !== null || approvalResolver.current !== null) return;
 
     // Slash-command popup: ink-text-input ignores up/down/tab, so these
     // never fight the text cursor. Escape dismisses the popup first and
@@ -1048,6 +1231,8 @@ export function App({
     };
 
     try {
+      const preserve = preserveFittingHistory.current;
+      preserveFittingHistory.current = false;
       for await (const event of runAgent({
         provider,
         model: config.model,
@@ -1056,6 +1241,8 @@ export function App({
         context: { root },
         permissions,
         contextBudget: config.context,
+        useProviderEstimate: Boolean(config.modelSelection?.tier),
+        preserveFittingInitialHistory: preserve,
         signal: controller.signal,
         approve: (request) =>
           new Promise<ApprovalOutcome>((resolve) => {
@@ -1188,7 +1375,7 @@ export function App({
           id: nextId.current++,
           kind: "notice",
           tone: "error",
-          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          text: `Error: ${visiblePreviewText(modelRequestError(config, error))}`,
         });
       }
     } finally {
@@ -1231,7 +1418,9 @@ export function App({
               resolveApproval("deny");
             }}
           />
-        ) : configEdit !== null ? (
+        ) : modelConfirmation ? (
+          <ModelConfirmationPanel confirmation={modelConfirmation} />
+        ) : configEdit !== null && !busy ? (
           <ConfigEditor
             initial={configEdit.document.raw}
             initialIndex={configEdit.field}

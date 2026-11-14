@@ -8,8 +8,11 @@ import type {
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages";
 import type { Message, ToolCall, ToolSpec } from "../types.js";
+import { estimateTextTokens } from "../context/estimator.js";
+import { modelOptionsForRequest } from "./types.js";
 import type {
   ChatRequest,
+  ModelRequestOptions,
   Provider,
   ProviderEvent,
   TokenUsage,
@@ -29,6 +32,7 @@ export type AnthropicProviderOptions = {
   baseURL?: string;
   /** Streaming responses let us give the model room without HTTP timeouts. */
   maxTokens?: number;
+  modelOptions?: ModelRequestOptions;
   /** Allow replay of older session data whose originating endpoint is unknown. */
   allowLegacyThinking?: boolean;
   /** Injectable client, used by tests; the constructor builds one otherwise. */
@@ -324,7 +328,7 @@ export class AnthropicProvider implements Provider {
   private readonly endpoint: string;
   private readonly allowLegacyThinking: boolean;
 
-  constructor(options: AnthropicProviderOptions) {
+  constructor(private readonly options: AnthropicProviderOptions) {
     this.client =
       options.client ??
       new Anthropic({
@@ -364,8 +368,8 @@ export class AnthropicProvider implements Provider {
     return 0;
   }
 
-  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
-    const { system, messages, historyHash } = toAnthropicMessages(
+  private wireInput(request: ChatRequest) {
+    return toAnthropicMessages(
       request.messages,
       {
         endpoint: this.endpoint,
@@ -374,10 +378,20 @@ export class AnthropicProvider implements Provider {
       },
       request.tools,
     );
+  }
 
+  estimateInputTokens(request: ChatRequest): number {
+    const { system, messages } = this.wireInput(request);
+    return estimateTextTokens(JSON.stringify({ system, messages, tools: toAnthropicTools(request.tools) }));
+  }
+
+  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
+    const { system, messages, historyHash } = this.wireInput(request);
+    const model = modelOptionsForRequest(request, this.options.modelOptions);
+    const effort = model?.reasoningEffort;
     const params: Anthropic.MessageStreamParams = {
       model: request.model,
-      max_tokens: this.maxTokens,
+      max_tokens: model?.maxOutputTokens ?? this.maxTokens,
       messages,
       ...(system !== undefined ? { system } : {}),
       ...(request.tools.length > 0
@@ -388,6 +402,8 @@ export class AnthropicProvider implements Provider {
       ...(supportsAdaptiveThinking(request.model)
         ? { thinking: { type: "adaptive" as const, display: "summarized" as const } }
         : {}),
+      ...(effort === undefined || effort === "none" || effort === "minimal"
+        ? {} : { output_config: { effort } }),
     };
 
     const stream = this.client.messages.stream(params, {

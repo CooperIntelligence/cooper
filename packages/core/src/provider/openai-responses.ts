@@ -8,6 +8,8 @@ import type {
 } from "openai/resources/responses/responses";
 import { z } from "zod";
 import type { Message, ToolCall } from "../types.js";
+import { estimateTextTokens } from "../context/estimator.js";
+import { modelOptionsForRequest } from "./types.js";
 import {
   extendHistoryHash,
   hashAssistantFields,
@@ -17,7 +19,7 @@ import {
   type Continuation,
   type ContinuationOwner,
 } from "./continuation.js";
-import type { ChatRequest, Provider, ProviderEvent } from "./types.js";
+import type { ChatRequest, ModelRequestOptions, Provider, ProviderEvent } from "./types.js";
 
 export type OpenAIResponsesOptions = {
   apiKey: string;
@@ -26,6 +28,7 @@ export type OpenAIResponsesOptions = {
   headers?: Record<string, string>;
   maxOutputTokens?: number;
   requestReasoningSummary?: boolean;
+  modelOptions?: ModelRequestOptions;
 };
 
 type ReplayItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseReasoningItem;
@@ -136,7 +139,7 @@ export class OpenAIResponsesProvider implements Provider {
     this.endpoint = hashString(this.client.baseURL.replace(/\/+$/, ""));
   }
 
-  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
+  private wireInput(request: ChatRequest) {
     const owner: ContinuationOwner = {
       protocol: "openai-responses", endpoint: this.endpoint, model: request.model,
     };
@@ -156,16 +159,27 @@ export class OpenAIResponsesProvider implements Provider {
         prefix = extendHistoryHash(prefix, item);
       }
     }
+    return { owner, tools, input, prefix };
+  }
 
+  estimateInputTokens(request: ChatRequest): number {
+    const { input, tools } = this.wireInput(request);
+    return estimateTextTokens(JSON.stringify({ input, tools }));
+  }
+
+  async *stream(request: ChatRequest): AsyncIterable<ProviderEvent> {
+    const { owner, tools, input, prefix } = this.wireInput(request);
+    const model = modelOptionsForRequest(request, this.options.modelOptions);
+    const effort = model?.reasoningEffort;
     const create = (summary: boolean) => this.client.responses.create({
       model: request.model,
       input,
       tools: tools.length > 0 ? tools : undefined,
-      max_output_tokens: this.options.maxOutputTokens,
+      max_output_tokens: model?.maxOutputTokens ?? this.options.maxOutputTokens,
       stream: true,
       store: false,
       include: ["reasoning.encrypted_content"],
-      reasoning: summary ? { summary: "auto" } : undefined,
+      reasoning: summary || effort !== undefined ? { ...(summary ? { summary: "auto" } : {}), effort } : undefined,
     }, { signal: request.signal });
 
     let stream;

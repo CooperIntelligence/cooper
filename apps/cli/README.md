@@ -64,6 +64,20 @@ Interactive `ask` reviews each URL or search query before sending it.
 `plan` and headless `ask` deny web tool calls. Explicit `auto` approves
 them subject to the tools' network limits.
 
+## Experimental model tiers
+
+Use `modelTiers.sera`, `modelTiers.cher`, and `modelTiers.thr` in
+`~/.cooper/config.json` to select different models on one provider connection.
+Each entry accepts `model`, `displayName`, `reasoningEffort`, `contextWindow`,
+and `maxOutputTokens`. The top-level `model` is required as a fallback.
+All effective windows, including the fallback, must be at least 256,000 tokens
+when tiers are enabled.
+
+Use `/sera`, `/cher`, or `/thr` in the idle TUI, or pass `--tier sera`
+at launch. A resumed session restores its saved tier unless a flag overrides it.
+When the target input budget is too small, the TUI asks before compacting.
+Headless exits with the budget information on stderr.
+
 ## Skills
 
 Place each skill in its own folder with a `SKILL.md` file. Cooper discovers

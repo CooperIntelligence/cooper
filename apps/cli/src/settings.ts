@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { commandShellKinds, cooperHome } from "@cooper/core";
+import { commandShellKinds, cooperHome, modelTierSchema, reasoningEffortSchema } from "@cooper/core";
 import { z } from "zod";
 
 /** The user configuration file is the source of provider settings. */
@@ -18,6 +18,14 @@ const webSearchSchema = z.object({
   apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).default("TAVILY_API_KEY"),
 });
 
+const modelTier = z.strictObject({
+  model: z.string().trim().min(1),
+  displayName: z.string().trim().min(1).max(120).optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
+  contextWindow: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
+});
+
 const settingsSchema = z.object({
   protocol: z.enum(["openai-chat", "anthropic-messages", "openai-responses"]).optional(),
   model: z.string().trim().min(1).optional(),
@@ -32,6 +40,12 @@ const settingsSchema = z.object({
   }).optional(),
   context: contextSchema.optional(),
   webSearch: webSearchSchema.optional(),
+  defaultTier: modelTierSchema.optional(),
+  modelTiers: z.strictObject({
+    sera: modelTier.optional(),
+    cher: modelTier.optional(),
+    thr: modelTier.optional(),
+  }).optional(),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
@@ -48,6 +62,8 @@ const KNOWN_SHAPE: Record<string, string[] | true> = {
   shell: ["kind", "executable"],
   context: ["window", "reserveOutputTokens", "compact", "summaryModel"],
   webSearch: ["provider", "apiKeyEnv"],
+  defaultTier: true,
+  modelTiers: true,
 };
 
 // Whole-key matches only: substrings would eat legitimate names like

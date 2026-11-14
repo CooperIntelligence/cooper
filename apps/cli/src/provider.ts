@@ -20,11 +20,15 @@ export function createProvider(
   );
   try {
     for (const [name] of sdkEnvironment) delete process.env[name];
+    const modelOptions = config.modelSelection?.tier && !config.tierFallback
+      ? config.modelSelection : undefined;
+    const fallback = config.modelTiers?.fallback;
     if (config.protocol === "anthropic-messages") {
       return new AnthropicProvider({
         apiKey: config.apiKey,
         baseURL: config.baseURL,
-        maxTokens: config.maxOutputTokens,
+        maxTokens: fallback?.maxOutputTokens ?? config.maxOutputTokens,
+        modelOptions,
         allowLegacyThinking: options.allowLegacyThinking,
       });
     }
@@ -32,13 +36,16 @@ export function createProvider(
       return new OpenAIResponsesProvider({
         apiKey: config.apiKey,
         baseURL: config.baseURL,
-        maxOutputTokens: config.sources.maxOutputTokens === "config" ? config.maxOutputTokens : undefined,
+        maxOutputTokens: fallback ? fallback.maxOutputTokens
+          : config.sources.maxOutputTokens === "config" ? config.maxOutputTokens : undefined,
+        modelOptions,
         requestReasoningSummary: config.showReasoning,
       });
     }
     return new OpenAICompatibleProvider({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
+      modelOptions: modelOptions ?? (config.context.maxOutputTokens ? config.modelSelection : undefined),
     });
   } finally {
     for (const [name, value] of sdkEnvironment) {
