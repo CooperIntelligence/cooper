@@ -79,7 +79,7 @@ describe("buildSystemPrompt", () => {
     });
 
     expect(interactive).toContain("may require user approval");
-    expect(headless).toContain("gated tools are denied");
+    expect(headless).toContain("denies gated tools unless the current mode is auto");
   });
 });
 

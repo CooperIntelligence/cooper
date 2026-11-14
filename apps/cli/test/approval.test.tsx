@@ -40,6 +40,18 @@ it("renders the approval panel with the repository-root dev JSX transform", () =
   expect(output).toContain("sample.txt · +1");
 }, 20_000);
 
+it("shows the full web request and offers single approval only", async () => {
+  const app = fixture(() => [call("fetch", "web_fetch", { url: "https://example.com/docs?version=22" })]);
+  try {
+    await app.submit("Read the docs", "GET https://example.com/docs?version=22");
+    expect(app.history()).toContain("y Allow once");
+    expect(app.history()).not.toContain("Allow this tool until exit");
+    await app.press("n", "Denied");
+  } finally {
+    await app.close();
+  }
+});
+
 function fixture(callsFor: (prompt: string) => ToolCall[], renderOptions: RenderOptions = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cooper-approval-"));
   const home = vi.spyOn(os, "homedir").mockReturnValue(root);

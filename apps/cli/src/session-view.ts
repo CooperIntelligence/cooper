@@ -6,6 +6,7 @@ import {
 import { createMarkdownFormatter } from "./markdown.js";
 import { splitContent } from "./stream-lines.js";
 import type { ToolStatus, UiItem } from "./ui-types.js";
+import { webFetchOutput } from "./web-fetch-view.js";
 
 /** Context-compaction replacements are context, not something the user typed. */
 const SUMMARY_STUB = /^\[Earlier conversation summary/;
@@ -87,7 +88,7 @@ export function buildResumeView(
         : name);
     const status: ToolStatus = ui?.denied
       ? "denied"
-      : ui?.isError
+      : (ui?.isError ?? message.isError)
         ? "error"
         : "ok";
 
@@ -97,7 +98,7 @@ export function buildResumeView(
       name,
       summary,
       status,
-      output: message.content,
+      output: webFetchOutput(name, message.content),
       durationMs: ui?.durationMs,
     });
   }

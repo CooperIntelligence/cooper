@@ -42,14 +42,16 @@
    scrolled into scrollback, so rendering the whole growing message live
    duplicates content in terminal history (especially on Windows). The live
    region must never hold more than a line or two.
-8. Every tool must declare `capabilities` (`read` / `write` / `execute`).
-   Writes and commands are approval-gated by `PermissionPolicy`; the agent
-   loop must never execute a gated tool without an explicit allow outcome.
+8. Every tool must declare `capabilities` (`read` / `write` / `execute` /
+   `network`). Writes, commands, and web requests are approval-gated by
+   `PermissionPolicy`. Network tools support single-call approval in `ask`.
+   The agent loop must never execute a gated tool without an explicit allow
+   outcome.
    Missing capabilities are treated as dangerous.
 9. Implement `summarize()` on every tool — it is what the user sees in the
    approval panel instead of raw JSON arguments.
 10. `plan` mode is enforced by `PermissionPolicy`: it denies every
-    write/execute tool without consulting the approver, and never silently
+    write/execute/network tool without consulting the approver, and never silently
     downgrades to `ask`. The TUI may switch the preset at runtime only while
     idle; the policy instance the loop holds is the source of truth.
 11. Headless (`-p`) runs have no approver and must fail closed: build a

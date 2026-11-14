@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Box, Text, useInput, useWindowSize } from "ink";
-import type { ApprovalOutcome, ApprovalRequest } from "@cooper/core";
+import { supportsProcessGrant, type ApprovalOutcome, type ApprovalRequest } from "@cooper/core";
 import { buildPreviewRows, visiblePreviewText, wrapPreviewText, type PreviewRow } from "./preview.js";
 
 const colors = { add: "green", remove: "red", hunk: "cyan", context: "gray" } as const;
@@ -53,6 +53,7 @@ export function ApprovalPanel({ request, onDecision, onInterrupt }: {
   const [page, setPage] = useState(0);
   const [confirming, setConfirming] = useState(false);
   const [confirmPage, setConfirmPage] = useState(0);
+  const canGrantProcess = supportsProcessGrant(request.capabilities);
   const preview = useMemo(() => describePreview(request), [request]);
   const fullTarget = useMemo(() => wrapPreviewText(preview.target, width), [preview.target, width]);
 
@@ -67,9 +68,10 @@ export function ApprovalPanel({ request, onDecision, onInterrupt }: {
       ? [...fullTarget.map((text) => ({ text, tone: "context" as const })), ...body]
       : body;
   }, [confirming, fullTarget, preview.rows, request.toolName, width]);
+  const grantControl = canGrantProcess ? " · a Allow this tool until exit…" : "";
   const controls = wrapPreviewText(confirming
     ? "y Confirm · Esc Back · n Deny"
-    : "y Allow once · a Allow this tool until exit… · n/Esc Deny", width);
+    : `y Allow once${grantControl} · n/Esc Deny`, width);
   const changed = request.previewChanged && !confirming;
   const changedTarget = request.preview?.kind === "command" ? "Working directory" : "File";
   // Borders, heading, target, page label and keys stay visible. Keep a spare
@@ -94,7 +96,7 @@ export function ApprovalPanel({ request, onDecision, onInterrupt }: {
       onDecision("deny");
     } else if (choice === "y") {
       onDecision(confirming ? "allow-session" : "allow");
-    } else if (choice === "a" && !confirming) {
+    } else if (choice === "a" && canGrantProcess && !confirming) {
       setConfirmPage(0);
       setConfirming(true);
     }

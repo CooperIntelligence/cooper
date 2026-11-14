@@ -57,12 +57,12 @@ Options:
   -h, --help          show this help
 
 Modes:
-  ask    ask before file writes and command execution
+  ask    ask before file writes, commands, and web requests
   auto   approve every tool call without asking (use with care)
-  plan   read-only: inspect files, deny writes and commands
+  plan   read-only: inspect files, deny writes, commands, and web requests
 
-  With -p nobody can answer an approval prompt, so ask denies writes and
-  commands; pass --mode auto for unattended edits.
+  With -p nobody can answer an approval prompt, so ask denies writes,
+  commands, and web requests. Pass --mode auto to allow them.
   Startup precedence: --mode > saved plan/ask > config.json mode > ask.
   Config defaults accept plan and ask. In the TUI, /plan, /ask and /auto
   switch the mode while idle.
@@ -232,6 +232,7 @@ async function main(): Promise<void> {
       explicit: args.mcpConfig,
       loadProject: args.mcpProject,
       shell: config.shell,
+      webSearchApiKey: config.webSearchApiKey,
     });
   } catch (error) {
     fail(error);

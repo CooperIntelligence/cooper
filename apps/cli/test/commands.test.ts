@@ -111,7 +111,7 @@ describe("command registry", () => {
   it("describes modes and renders help for every registered command", () => {
     expect(modeDescription("plan")).toBe("plan (read-only)");
     expect(modeDescription("auto")).toBe("auto (auto-approve ALL tools)");
-    expect(modeDescription("ask")).toBe("ask (approve writes and commands)");
+    expect(modeDescription("ask")).toBe("ask (approve writes, commands, and web requests)");
 
     const help = commandHelp("plan");
     expect(help).toContain("current mode: plan (read-only)");

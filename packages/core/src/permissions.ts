@@ -11,7 +11,7 @@
  * to "ask" (AGENTS.md rules 8 and 10).
  */
 
-export type ToolCapability = "read" | "write" | "execute";
+export type ToolCapability = "read" | "write" | "execute" | "network";
 
 export type PermissionPreset = "plan" | "ask" | "auto";
 
@@ -35,6 +35,11 @@ export function needsApproval(
 ): boolean {
   if (capabilities === undefined || capabilities.length === 0) return true;
   return capabilities.some((capability) => capability !== "read");
+}
+
+/** Outbound parameters need individual review in Ask mode. */
+export function supportsProcessGrant(capabilities: readonly ToolCapability[] | undefined): boolean {
+  return !capabilities?.includes("network");
 }
 
 export class PermissionPolicy {
@@ -75,10 +80,10 @@ export class PermissionPolicy {
     // can never turn a previous "always allow" into a mutation.
     if (this.preset === "plan") return "deny";
 
-    if (this.sessionAllowed.has(tool.name)) return "allow";
+    if (!this.interactive) return "deny";
+    if (supportsProcessGrant(tool.capabilities) && this.sessionAllowed.has(tool.name)) return "allow";
 
-    // ask with nobody to ask is indistinguishable from a denial.
-    return this.interactive ? "prompt" : "deny";
+    return "prompt";
   }
 
   /** Remember an "always allow this tool" decision for this process only. */

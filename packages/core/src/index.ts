@@ -1,6 +1,7 @@
 import type { Tool } from "./tools/tool.js";
 import { fileTools } from "./tools/fs.js";
 import { createRunCommandTool, runCommandTool, type CommandShell } from "./tools/shell.js";
+import { webFetchTool } from "./tools/web-fetch.js";
 
 export * from "./types.js";
 export * from "./agent.js";
@@ -15,6 +16,8 @@ export * from "./tools/paths.js";
 export * from "./tools/fs.js";
 export * from "./tools/shell.js";
 export * from "./tools/skill.js";
+export * from "./tools/web-fetch.js";
+export * from "./tools/web-search.js";
 export * from "./context/estimator.js";
 export * from "./context/groups.js";
 export * from "./context/prune.js";
@@ -31,9 +34,9 @@ export * from "./mcp/tool.js";
 export * from "./mcp/client.js";
 export * from "./diff.js";
 
-/** Every built-in tool: file inspection/editing plus shell execution. */
-export const allTools: Tool[] = [...fileTools, runCommandTool];
+/** Tools available without optional service credentials. */
+export const allTools: Tool[] = [...fileTools, runCommandTool, webFetchTool];
 
 export function createBuiltinTools(shell: CommandShell): Tool[] {
-  return [...fileTools, createRunCommandTool(shell)];
+  return [...fileTools, createRunCommandTool(shell), webFetchTool];
 }

@@ -138,6 +138,27 @@ describe("buildResumeView", () => {
     });
   });
 
+  it("shows an HTML response without static text distinctly from a failed fetch", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant", content: "",
+        toolCalls: [{ id: "fetch", name: "web_fetch", arguments: "{}" }],
+      },
+      {
+        role: "tool", toolCallId: "fetch",
+        content: JSON.stringify({
+          status: "no_static_text", httpStatus: 200, contentType: "text/html",
+          url: "https://example.com/demo", title: "API 使用 demo",
+          message: "HTML retrieved. No readable text was found in the initial HTML.",
+        }),
+      },
+    ];
+    expect(buildResumeView(session(messages), 1).items[0]).toMatchObject({
+      status: "ok",
+      output: "HTTP 200 · HTML retrieved. No readable text was found in the initial HTML.\nAPI 使用 demo\ntext/html · https://example.com/demo",
+    });
+  });
+
   it("renders compaction stubs as notices, not user input", () => {
     const view = buildResumeView(
       session([

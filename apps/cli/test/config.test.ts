@@ -7,6 +7,7 @@ import {
   IncompleteConfigError,
   loadConfig,
 } from "../src/config.js";
+import { prepareTools } from "../src/mcp.js";
 
 describe("loadConfig", () => {
   let home: string;
@@ -20,6 +21,29 @@ describe("loadConfig", () => {
   function writeConfig(value: unknown): void {
     fs.writeFileSync(path.join(home, "config.json"), JSON.stringify(value), "utf8");
   }
+
+  it("registers web search only when user settings and a valid credential enable it", async () => {
+    const toolsForConfig = async () => {
+      const config = loadConfig({ home });
+      const prepared = await prepareTools({
+        root: home, home, explicit: [], loadProject: false,
+        webSearchApiKey: config.webSearchApiKey,
+      });
+      await prepared.close();
+      return prepared.tools.map((tool) => tool.name);
+    };
+    vi.stubEnv("TAVILY_API_KEY", "tvly-test");
+    writeConfig(connection);
+    expect(await toolsForConfig()).toContain("web_fetch");
+    expect(await toolsForConfig()).not.toContain("web_search");
+    writeConfig({ ...connection, webSearch: { provider: "tavily" } });
+    expect(await toolsForConfig()).toContain("web_search");
+    vi.stubEnv("TAVILY_API_KEY", undefined);
+    expect(await toolsForConfig()).not.toContain("web_search");
+    expect(loadConfig({ home }).settingsWarnings).toEqual([expect.stringContaining("TAVILY_API_KEY")]);
+    writeConfig({ ...connection, webSearch: { provider: "invalid" } });
+    expect(loadConfig({ home }).settingsWarnings).toEqual([expect.stringContaining("invalid webSearch")]);
+  });
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "cooper-config-"));

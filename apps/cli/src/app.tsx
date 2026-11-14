@@ -7,6 +7,7 @@ import {
   PermissionPolicy,
   SessionWriter,
   createRunCommandTool,
+  createWebSearchTool,
   estimateContextTokens,
   listSessions,
   permissionModeNotice,
@@ -52,6 +53,7 @@ import { parseSettings, readSettingsDocument, writeSettingsDocument, type Settin
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
 import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
 import type { UiItem } from "./ui-types.js";
+import { webFetchOutput } from "./web-fetch-view.js";
 
 export const tuiRenderOptions = {
   exitOnCtrlC: false,
@@ -449,9 +451,15 @@ export function App({
       ? current.provider
       : createProvider(config, { allowLegacyThinking: false });
     const commandTool = createRunCommandTool(config.shell);
-    const tools = current.tools.map((tool) =>
+    let tools = current.tools.map((tool) =>
       tool.name === commandTool.name ? commandTool : tool,
     );
+    if (current.config.webSearchApiKey !== config.webSearchApiKey) {
+      const searchTool = config.webSearchApiKey ? createWebSearchTool(config.webSearchApiKey) : undefined;
+      const hasSearch = tools.some((tool) => tool.name === "web_search");
+      tools = tools.flatMap((tool) => tool.name === "web_search" ? (searchTool ? [searchTool] : []) : [tool]);
+      if (searchTool && !hasSearch) tools.push(searchTool);
+    }
     return { config, provider, tools };
   };
 
@@ -1102,7 +1110,7 @@ export function App({
                 : event.isError
                   ? "error"
                   : "ok",
-              output: event.result.content,
+              output: webFetchOutput(event.call.name, event.result.content),
               durationMs: event.durationMs,
               processGrant: event.approval === "process-grant",
             });
