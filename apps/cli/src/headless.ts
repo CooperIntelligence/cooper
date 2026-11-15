@@ -11,7 +11,8 @@ import {
   type SkillCatalog,
   type Tool,
 } from "@cooper/core";
-import type { ApprovalMode, Config } from "./config.js";
+import { describeModel, modelRequestError, modelSelectionChanged, type ApprovalMode, type Config } from "./config.js";
+import { modelBudget, needsResumeBudgetCheck, transitionMessage } from "./model-transition.js";
 import type { McpReport } from "./mcp.js";
 import { resolveSkillPrompt, skillTools } from "./skills.js";
 import { visiblePreviewText } from "./preview.js";
@@ -164,11 +165,6 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
   // provider's cached prefix stays intact.
   const userMessages = resolved.activation ? [resolved.activation, resolved.user] : [resolved.user];
   const modeMessage = permissionModeNotice(mode);
-  if (session) {
-    warnSession(session.appendPolicy(mode));
-    warnSession(session.appendMessage(modeMessage));
-    for (const message of userMessages) warnSession(session.appendMessage(message));
-  }
 
   const messages: Message[] = [
     {
@@ -184,6 +180,24 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
     modeMessage,
     ...userMessages,
   ];
+  const changed = modelSelectionChanged(resumed?.modelSelection, config);
+  if (config.modelSelection?.tier || resumed?.modelSelection?.tier || changed) {
+    err.write(`model: ${visiblePreviewText(describeModel(config))}\n`);
+    if (changed) err.write("Saved model settings differ from the effective settings.\n");
+  }
+  if (needsResumeBudgetCheck(config, resumed?.modelSelection)) {
+    const budget = modelBudget(config, messages, tools, provider);
+    if (budget.estimated > budget.limit) {
+      err.write(`${visiblePreviewText(transitionMessage(config, budget))} Choose a larger tier or resume in the TUI to approve compaction.\n`);
+      return 1;
+    }
+  }
+  if (session) {
+    if (config.modelSelection) warnSession(session.appendModelSelection(config.modelSelection));
+    warnSession(session.appendPolicy(mode));
+    warnSession(session.appendMessage(modeMessage));
+    for (const message of userMessages) warnSession(session.appendMessage(message));
+  }
 
   let atLineStart = true;
   let wroteText = false;
@@ -247,6 +261,8 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       context: { root },
       permissions,
       contextBudget: config.context,
+      useProviderEstimate: Boolean(config.modelSelection?.tier),
+      preserveFittingInitialHistory: resumed !== null && resumed !== undefined && needsResumeBudgetCheck(config, resumed.modelSelection),
       signal,
     })) {
       switch (event.type) {
@@ -330,7 +346,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       return 130;
     }
     err.write(
-      `Error: ${error instanceof Error ? error.message : String(error)}\n`,
+      `Error: ${visiblePreviewText(modelRequestError(config, error))}\n`,
     );
     return 1;
   }

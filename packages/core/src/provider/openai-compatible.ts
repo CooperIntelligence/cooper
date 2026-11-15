@@ -5,8 +5,11 @@ import type {
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
 import type { Message, ToolCall } from "../types.js";
+import { estimateTextTokens, estimateToolSpecTokens } from "../context/estimator.js";
+import { modelOptionsForRequest } from "./types.js";
 import type {
   ChatRequest,
+  ModelRequestOptions,
   Provider,
   ProviderEvent,
   TokenUsage,
@@ -22,6 +25,7 @@ export type OpenAICompatibleOptions = {
   /** Base URL without the /chat/completions suffix. */
   baseURL?: string;
   headers?: Record<string, string>;
+  modelOptions?: ModelRequestOptions;
 };
 
 type OpenAIReasoningPayload = {
@@ -142,7 +146,7 @@ export class OpenAICompatibleProvider implements Provider {
   private readonly endpoint: string;
   private usageSupported = true;
 
-  constructor(options: OpenAICompatibleOptions) {
+  constructor(private readonly options: OpenAICompatibleOptions) {
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
@@ -154,15 +158,25 @@ export class OpenAICompatibleProvider implements Provider {
       .digest("hex");
   }
 
+  private wireMessages(request: ChatRequest) {
+    return toOpenAIMessages(request.messages, {
+      protocol: "openai-chat",
+      endpoint: this.endpoint,
+      model: request.model,
+    });
+  }
+
+  estimateInputTokens(request: ChatRequest): number {
+    return estimateTextTokens(JSON.stringify(this.wireMessages(request))) + estimateToolSpecTokens(request.tools);
+  }
+
   private create(request: ChatRequest, includeUsage: boolean) {
+    const model = modelOptionsForRequest(request, this.options.modelOptions);
+    const effort = model?.reasoningEffort;
     return this.client.chat.completions.create(
       {
         model: request.model,
-        messages: toOpenAIMessages(request.messages, {
-          protocol: "openai-chat",
-          endpoint: this.endpoint,
-          model: request.model,
-        }),
+        messages: this.wireMessages(request),
         tools:
           request.tools.length > 0
             ? request.tools.map((tool) => ({
@@ -175,6 +189,8 @@ export class OpenAICompatibleProvider implements Provider {
               }))
             : undefined,
         stream: true,
+        ...(model?.maxOutputTokens === undefined ? {} : { max_completion_tokens: model.maxOutputTokens }),
+        ...(effort === undefined ? {} : { reasoning_effort: effort }),
         ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
       },
       { signal: request.signal },

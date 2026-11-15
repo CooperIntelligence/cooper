@@ -14,6 +14,7 @@ export type SummarizeOptions = {
   chunkTokens?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
+  useBaseModelOptions?: boolean;
 };
 
 const SUMMARY_SYSTEM = [
@@ -121,6 +122,7 @@ async function summarizeChunk(
       },
     ],
     tools: [],
+    ...(options.useBaseModelOptions ? { purpose: "summary" as const } : {}),
     signal: withTimeout(options.signal, options.timeoutMs ?? 60_000),
   })) {
     if (event.type === "text") {

@@ -1,10 +1,12 @@
-import type { SessionSummary } from "@cooper/core";
+import { modelTierNames, type ModelTier, type SessionSummary } from "@cooper/core";
 import type { ModeResolution } from "./args.js";
 import type { ApprovalMode, Config, ConfigSource } from "./config.js";
+import { describeModel } from "./config.js";
 import type { McpReport } from "./mcp.js";
 
 export type CommandName =
   | ApprovalMode
+  | ModelTier
   | "help"
   | "clear"
   | "compact"
@@ -129,6 +131,9 @@ export const COMMANDS: readonly CommandSpec[] = [
     usage: "/exit",
     description: "quit the TUI",
   },
+  ...(Object.entries(modelTierNames) as [ModelTier, string][]).map(([name, title]) => ({
+    name, aliases: [], usage: `/${name}`, description: `switch to ${title}`,
+  })),
 ];
 
 const ALIASES: ReadonlyMap<string, CommandName> = new Map(
@@ -283,6 +288,7 @@ export function formatStatus(options: {
     ["apiKey", "set", configSourceLabel(config.sources.apiKey)],
     [
       "maxOutputTokens",
+      config.modelSelection?.tier && config.modelSelection.maxOutputTokens === undefined ||
       config.protocol === "openai-responses" && config.sources.maxOutputTokens !== "config"
         ? "provider default"
         : String(config.maxOutputTokens),
@@ -314,6 +320,12 @@ export function formatStatus(options: {
       configSourceLabel(config.sources["context.summaryModel"]),
     ],
   ];
+  if (config.modelSelection?.tier) {
+    entries.splice(2, 0,
+      ["tier", describeModel(config), "active"],
+      ["reasoningEffort", config.modelSelection.reasoningEffort ?? "provider default", "active"],
+      ["context.inputLimit", String(config.modelSelection.inputLimit), "active"]);
+  }
 
   const nameWidth = Math.max(...entries.map(([name]) => name.length));
   const valueWidth = Math.max(...entries.map(([, value]) => value.length));

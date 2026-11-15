@@ -123,6 +123,29 @@ TUI 和 headless 都从 **`~/.cooper/config.json`** 读取 provider 配置。旧
 - 权限模式优先级为 `--mode` > 会话保存的 `plan` / `ask` > 配置文件的 `mode` > `ask`。`COOPER_MODE` 已移除。配置默认值只支持 `plan` 和 `ask`，旧的 `"mode": "auto"` 会被忽略并提示迁移。
 - **`COOPER_HOME` 已移除**：数据目录固定为 `~/.cooper`。曾设置过该变量的用户会被忽略（pre-1.0 破坏性变更）。
 
+### 实验性模型档位
+
+在同一个供应商连接下，可配置 Seraphina、Cherubina 和 Thronia。以下字段可添加到用户级 `~/.cooper/config.json`。顶层 `model` 继续作为兜底模型，三个档位共用 `protocol`、`baseURL` 和 `apiKey`。
+
+```json
+{
+  "model": "fallback-model-id",
+  "context": { "window": 1000000 },
+  "defaultTier": "cher",
+  "modelTiers": {
+    "sera": { "model": "large-model-id", "reasoningEffort": "high", "maxOutputTokens": 32000 },
+    "cher": { "model": "balanced-model-id", "displayName": "Balanced", "contextWindow": 256000, "reasoningEffort": "medium", "maxOutputTokens": 16000 },
+    "thr": { "model": "fast-model-id", "contextWindow": 256000, "reasoningEffort": "low", "maxOutputTokens": 8000 }
+  }
+}
+```
+
+请按服务支持的模型 ID、窗口和推理强度填写。启用档位时，每档及兜底模型的有效总窗口至少为 256,000 tokens。省略档位窗口时，优先用顶层 `context.window`，其次按该模型 ID 推断。未知模型可显式填写窗口。
+
+在 TUI 空闲时用 `/sera`、`/cher`、`/thr` 切换，或启动时传入 `--tier sera|cher|thr`。启动优先采用显式参数，其次采用会话保存的选择，最后采用 `defaultTier` 或 Cherubina。无档位配置或选中的档位缺失时，使用顶层 `model`。修改 JSON 后可以在空闲 TUI 执行 `/reload`。
+
+超出目标档位输入预算时，TUI 会显示当前估算和目标上限，确认后才压缩并切换。切回大窗口时会继续使用压缩后的有效历史。Headless 遇到超限会报告原因并退出。
+
 ## 运行方式
 
 ### 交互式 TUI
@@ -229,6 +252,7 @@ TUI 空闲时可以直接切换：
 |---|---|---|
 | `/clear` | `/new`、`/reset` | 开启空上下文的新对话；旧会话文件保留，可用 `--sessions` 找回 |
 | `/compact` | — | 上下文超过摘要阈值时手动压缩，否则提示无需压缩 |
+| `/sera`、`/cher`、`/thr` | — | 切换实验性模型档位 |
 | `/sessions` | — | 列出本工作区已保存的会话 |
 | `/resume <id>` | — | 切换到已保存会话（支持唯一 id 前缀）；保持当前权限模式 |
 | `/mcp` | — | 显示 MCP 服务器连接状态与工具数 |

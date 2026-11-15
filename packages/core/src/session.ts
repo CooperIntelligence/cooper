@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentEvent } from "./agent.js";
 import { cooperHome } from "./home.js";
+import { modelSelectionSchema, type ModelSelection } from "./model-selection.js";
 import type { PermissionPreset } from "./permissions.js";
 import { isContinuation } from "./provider/continuation.js";
 import type { Message, RuntimeNoticeKind, ToolCall } from "./types.js";
@@ -35,7 +36,7 @@ const SESSION_VERSION = 1;
 const SESSION_FILE_SUFFIX = ".jsonl";
 const HEADER_PREFIX_BYTES = 64 * 1024;
 
-export type SessionAction = "prune" | "summarize" | "truncate";
+export type SessionAction = "prune" | "summarize" | "truncate" | "model-switch";
 
 export type SessionHeader = {
   type: "session";
@@ -71,6 +72,7 @@ export type SessionCheckpointRecord = {
   messages: Message[];
   /** Parallel to `messages`; null for non-tool messages. */
   ui?: (SessionToolUi | null)[];
+  modelSelection?: ModelSelection;
 };
 
 /**
@@ -88,7 +90,8 @@ export type SessionRecord =
   | SessionHeader
   | SessionMessageRecord
   | SessionCheckpointRecord
-  | SessionPolicyRecord;
+  | SessionPolicyRecord
+  | { type: "model-selection"; at: string; selection: ModelSelection };
 
 export type SessionSummary = {
   id: string;
@@ -109,6 +112,7 @@ export type LoadedSession = {
   toolUi: Map<number, SessionToolUi>;
   /** Last permission mode recorded in the session, if any. */
   preset: PermissionPreset | null;
+  modelSelection?: ModelSelection;
   /** Number of malformed rows and dropped messages repaired during load. */
   repaired: number;
 };
@@ -398,6 +402,7 @@ export function loadSession(file: string): LoadedSession {
   const text = fs.readFileSync(file, "utf8");
   let header: SessionHeader | null = null;
   let preset: PermissionPreset | null = null;
+  let modelSelection: ModelSelection | undefined;
   let skipped = 0;
   let entries: TranscriptEntry[] = [];
 
@@ -439,7 +444,8 @@ export function loadSession(file: string): LoadedSession {
 
       case "checkpoint": {
         const messages = parseMessageArray(value.messages);
-        if (messages === null) {
+        const selection = modelSelectionSchema.optional().safeParse(value.modelSelection);
+        if (messages === null || !selection.success) {
           skipped += 1;
           continue;
         }
@@ -450,6 +456,14 @@ export function loadSession(file: string): LoadedSession {
           message,
           ui: ui[index] ?? undefined,
         }));
+        modelSelection = selection.data ?? modelSelection;
+        break;
+      }
+
+      case "model-selection": {
+        const selection = modelSelectionSchema.safeParse(value.selection);
+        if (selection.success) modelSelection = selection.data;
+        else skipped += 1;
         break;
       }
 
@@ -490,6 +504,7 @@ export function loadSession(file: string): LoadedSession {
     messages,
     toolUi,
     preset,
+    ...(modelSelection === undefined ? {} : { modelSelection }),
     repaired: skipped + repaired.dropped,
   };
 }
@@ -502,6 +517,7 @@ export class SessionWriter {
   readonly header: SessionHeader;
   readonly file: string;
   private readonly toolUiByCall = new Map<string, SessionToolUi>();
+  private separateTrailingRow = false;
 
   private constructor(header: SessionHeader, file: string) {
     this.header = header;
@@ -544,6 +560,14 @@ export class SessionWriter {
   /** Continues an existing session, seeding tool labels for checkpoints. */
   static from(session: LoadedSession): SessionWriter {
     const writer = new SessionWriter(session.header, session.file);
+    const fd = fs.openSync(session.file, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      const last = Buffer.alloc(1);
+      writer.separateTrailingRow = size > 0 && fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 10;
+    } finally {
+      fs.closeSync(fd);
+    }
     for (const [index, ui] of session.toolUi) {
       const message = session.messages[index];
       if (message?.role === "tool") {
@@ -555,7 +579,9 @@ export class SessionWriter {
 
   private append(record: SessionRecord): Error | null {
     try {
-      fs.appendFileSync(this.file, `${JSON.stringify(record)}\n`, "utf8");
+      const prefix = this.separateTrailingRow ? "\n" : "";
+      fs.appendFileSync(this.file, `${prefix}${JSON.stringify(record)}\n`, "utf8");
+      this.separateTrailingRow = false;
       return null;
     } catch (error) {
       return error instanceof Error ? error : new Error(String(error));
@@ -594,6 +620,10 @@ export class SessionWriter {
     return this.append(record);
   }
 
+  appendModelSelection(selection: ModelSelection): Error | null {
+    return this.append({ type: "model-selection", at: new Date().toISOString(), selection });
+  }
+
   /**
    * Snapshots the effective transcript after compaction. Earlier message
    * records stay in the file as an audit trail; loading starts from the last
@@ -603,6 +633,7 @@ export class SessionWriter {
     action: SessionAction,
     messages: Message[],
     now: Date = new Date(),
+    modelSelection?: ModelSelection,
   ): Error | null {
     const body = messages.filter((message) => message.role !== "system");
     const ui = body.map((message) =>
@@ -616,6 +647,7 @@ export class SessionWriter {
       action,
       messages: body,
       ui,
+      ...(modelSelection === undefined ? {} : { modelSelection }),
     });
   }
 

@@ -160,12 +160,14 @@ describe("filterCommands", () => {
       "clear",
       "compact",
       "config",
+      "cher",
     ]);
     expect(filterCommands("/s").map((spec) => spec.name)).toEqual([
       "sessions",
       "skill",
       "skills",
       "status",
+      "sera",
     ]);
   });
 

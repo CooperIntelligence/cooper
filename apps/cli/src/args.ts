@@ -1,7 +1,9 @@
+import { modelTierSchema, type ModelTier } from "@cooper/core";
 import type { ApprovalMode } from "./config.js";
 import type { Settings } from "./settings.js";
 
 export type ParsedArgs = {
+  tier?: ModelTier;
   /** Explicit --mode; otherwise use the saved or configured mode. */
   mode: ApprovalMode | undefined;
   /** Workspace directory. undefined means "the launch directory". */
@@ -98,6 +100,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
           index += 1;
         }
         parsed.mode = parseModeValue(value);
+        break;
+      }
+
+      case "--tier": {
+        const value = inline ?? takeValue(index, name);
+        if (inline === undefined) index += 1;
+        const tier = modelTierSchema.safeParse(value);
+        if (!tier.success) throw new Error(`Invalid --tier "${value}". Use sera, cher, or thr.`);
+        parsed.tier = tier.data;
         break;
       }
 

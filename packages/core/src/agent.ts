@@ -11,6 +11,7 @@ import {
 } from "./context/budget.js";
 import {
   INITIAL_CALIBRATION,
+  applyCalibration,
   updateCalibration,
   type Calibration,
 } from "./context/estimator.js";
@@ -103,6 +104,8 @@ export type RunAgentOptions = {
    * `false` to send history untouched (tests, or a host with its own policy).
    */
   contextBudget?: ContextSettings | false;
+  useProviderEstimate?: boolean;
+  preserveFittingInitialHistory?: boolean;
   /**
    * Called only when the permission policy returns "prompt". Returning
    * "deny" feeds a denial result back to the model instead of running the
@@ -234,7 +237,7 @@ export async function* runAgent(
         );
   let calibration: Calibration = INITIAL_CALIBRATION;
 
-  const compact = (force: boolean, budgetOverride?: number) =>
+  const compact = (force: boolean, budgetOverride?: number, onlyIfOverLimit?: boolean) =>
     prepareContext({
       messages,
       tools: specs,
@@ -245,6 +248,8 @@ export async function* runAgent(
       signal: options.signal,
       force,
       budgetOverride,
+      useProviderEstimate: options.useProviderEstimate,
+      onlyIfOverLimit,
     });
 
   for (let turn = 1; turn <= maxTurns; turn += 1) {
@@ -252,7 +257,7 @@ export async function* runAgent(
     yield { type: "turn-start", turn };
 
     if (contextConfig) {
-      const actions = await compact(false);
+      const actions = await compact(false, undefined, turn === 1 && options.preserveFittingInitialHistory);
       for (const action of actions) {
         yield { type: "context-compacted", ...action };
       }
@@ -274,7 +279,10 @@ export async function* runAgent(
       providerData = undefined;
       emittedText = false;
 
-      const estimated = estimateContextTokens(messages, specs, calibration);
+      const wireEstimate = options.useProviderEstimate
+        ? provider.estimateInputTokens?.({ model, messages, tools: specs }) : undefined;
+      const estimated = wireEstimate === undefined
+        ? estimateContextTokens(messages, specs, calibration) : applyCalibration(wireEstimate, calibration);
 
       try {
         let completed = false;
