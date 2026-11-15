@@ -1,6 +1,6 @@
 import path from "node:path";
 import React, { useEffect, useRef, useState } from "react";
-import { Box, Static, Text, useApp, useInput, type RenderOptions } from "ink";
+import { Box, Static, Text, useApp, useInput, useWindowSize, type RenderOptions } from "ink";
 import TextInput from "ink-text-input";
 import Spinner from "ink-spinner";
 import {
@@ -127,10 +127,26 @@ function ReplyLine({ line, live }: { line: MarkdownLine; live: boolean }) {
   );
 }
 
-function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
-  if (item.kind === "header") {
-    return (
-      <Box flexDirection="column">
+// Half-block rendering of the open hexagon and center diamond in the Cooper logo.
+const COOPER_MARK = [
+  " ▄▄█▀█▄▄ ",
+  "██  ▄  ██",
+  "██  ▀  ██",
+  " ▀▀█▄    ",
+].join("\n");
+
+function StartupHeader({ item }: { item: Extract<UiItem, { kind: "header" }> }) {
+  const { columns, rows } = useWindowSize();
+  const showMark = columns >= 60 && rows >= 16;
+
+  return (
+    <Box>
+      {showMark && (
+        <Box flexShrink={0} marginRight={2}>
+          <Text color="#56DCC8">{COOPER_MARK}</Text>
+        </Box>
+      )}
+      <Box flexDirection="column" flexShrink={1} minWidth={0}>
         <Box>
           <Text bold>
             C<Text color="#56DCC8">OO</Text>PER
@@ -141,7 +157,13 @@ function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
         {item.autoApprove && <Text color="yellow">Auto mode approves all tool calls.</Text>}
         {item.resume && <Text dimColor>{item.resume}</Text>}
       </Box>
-    );
+    </Box>
+  );
+}
+
+function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
+  if (item.kind === "header") {
+    return <StartupHeader item={item} />;
   }
 
   if (item.kind === "user") {
