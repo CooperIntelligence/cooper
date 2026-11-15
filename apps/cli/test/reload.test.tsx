@@ -15,7 +15,7 @@ it("edits and reloads settings in a running TUI without losing the conversation"
   const home = path.join(root, ".cooper");
   const file = path.join(home, "config.json");
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: vi.fn() });
-  const stdout = Object.assign(new PassThrough(), { columns: 120 });
+  const stdout = Object.assign(new PassThrough(), { columns: 120, rows: 24 });
   const stderr = new PassThrough();
   let output = "";
   stdout.on("data", (chunk) => { output += String(chunk); });
@@ -89,7 +89,8 @@ it("edits and reloads settings in a running TUI without losing the conversation"
     await vi.waitFor(() => expect(stdin.setRawMode).toHaveBeenCalledWith(true));
     const startup = stripVTControlCharacters(output);
     const [title, workspace] = startup.split(/\r?\n/);
-    expect(title).toBe("COOPER  old-model");
+    expect(title).toBe(" ▄▄█▀█▄▄   COOPER  old-model");
+    expect(workspace).toContain("██  ▄  ██");
     expect(workspace).toContain(path.basename(root));
     expect(startup).not.toMatch(/\/help|Context:|Instructions:|MCP:|Session:/);
     await enter("/skills", "review (project) · Inspect changes");
@@ -160,6 +161,14 @@ it("edits and reloads settings in a running TUI without losing the conversation"
         { role: "user", content: "fourth prompt" },
       ]),
     });
+
+    stdout.columns = 48;
+    stdout.emit("resize");
+    const beforeClear = output.length;
+    await enter("/clear", "COOPER  new-model");
+    const clearOutput = stripVTControlCharacters(output.slice(beforeClear));
+    expect(clearOutput).toMatch(/COOPER  new-model\r?\n(?!██)[^\r\n]+/);
+    expect(clearOutput).not.toMatch(/▄▄█▀█▄▄ +COOPER  new-model/);
   } finally {
     app?.unmount();
     await app?.waitUntilExit();
