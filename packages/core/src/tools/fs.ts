@@ -177,26 +177,44 @@ const readFileSchema = z.object({
     .max(2000)
     .optional()
     .describe(`Maximum number of lines to return. Defaults to ${DEFAULT_READ_LINES}.`),
+  column_offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("0-based Unicode code point offset within the line. Requires limit: 1."),
+}).refine(({ column_offset, limit }) => column_offset === undefined || limit === 1, {
+  path: ["column_offset"],
+  message: "column_offset requires limit: 1.",
 });
 
 async function* readTextLines(
   absolute: string,
   offset: number,
+  columnOffset: number,
   signal?: AbortSignal,
 ): AsyncGenerator<string> {
   const stream = createReadStream(absolute, { encoding: "utf8", signal });
-  // Leave room for a trailing CR and one character that proves the line is oversized.
-  const prefixLimit = MAX_OUTPUT_CHARS + 2;
+  const prefixLimit = MAX_OUTPUT_CHARS + 1;
   let skipped = 0;
+  let columnsToSkip = columnOffset;
   let line = "";
+  let trailingCR = "";
 
   for await (const chunk of stream) {
-    const text: string = chunk;
+    const text: string = trailingCR + chunk;
+    // Wait for the next chunk to tell whether a trailing CR is part of CRLF.
+    trailingCR = text.endsWith("\r") ? "\r" : "";
+    const chunkEnd = text.length - trailingCR.length;
     let start = 0;
-    while (start < text.length) {
+    while (start < chunkEnd) {
       const newline = text.indexOf("\n", start);
-      const end = newline === -1 ? text.length : newline;
       if (skipped === offset) {
+        const end = newline === -1 ? chunkEnd : newline - Number(text[newline - 1] === "\r");
+        while (columnsToSkip > 0 && start < end) {
+          start += (text.codePointAt(start) ?? 0) > 0xffff ? 2 : 1;
+          columnsToSkip -= 1;
+        }
         line += text.slice(start, Math.min(end, start + prefixLimit - line.length));
         if (line.length === prefixLimit) {
           // The caller can finish the page without scanning the rest of this line.
@@ -209,14 +227,17 @@ async function* readTextLines(
       if (skipped < offset) {
         skipped += 1;
       } else {
-        yield line.endsWith("\r") ? line.slice(0, -1) : line;
+        if (columnsToSkip > 0) return;
+        yield line;
         line = "";
       }
       start = newline + 1;
     }
   }
 
-  if (skipped === offset) yield line;
+  if (skipped === offset && columnsToSkip <= trailingCR.length) {
+    yield line + trailingCR.slice(columnsToSkip);
+  }
 }
 
 export const readFileTool: Tool<typeof readFileSchema> = {
@@ -224,11 +245,14 @@ export const readFileTool: Tool<typeof readFileSchema> = {
   description:
     "Read a text file from the workspace with 1-based output line numbers. " +
     "Set offset and limit for a known range, or use grep to locate a symbol first. " +
-    "Use the offset in the result to continue a partial read.",
+    "Follow the offsets in the result to continue a partial read, including column_offset for a long line.",
   inputSchema: readFileSchema,
   capabilities: ["read"],
   summarize(input) {
     const from = input.offset ? ` from line ${input.offset + 1}` : "";
+    if (input.column_offset !== undefined) {
+      return `Read ${input.path} from line ${(input.offset ?? 0) + 1}, column ${input.column_offset + 1}`;
+    }
     return `Read ${input.path}${from}`;
   },
   async execute(input, ctx) {
@@ -240,11 +264,12 @@ export const readFileTool: Tool<typeof readFileSchema> = {
     }
     const start = input.offset ?? 0;
     const limit = input.limit ?? DEFAULT_READ_LINES;
+    const columnOffset = input.column_offset ?? 0;
     const lines: string[] = [];
     let textChars = 0;
     let stop: "line-limit" | "character-limit" | "long-line" | undefined;
 
-    for await (const line of readTextLines(absolute, start, ctx.signal)) {
+    for await (const line of readTextLines(absolute, start, columnOffset, ctx.signal)) {
       if (lines.length === limit) {
         stop = "line-limit";
         break;
@@ -278,8 +303,11 @@ export const readFileTool: Tool<typeof readFileSchema> = {
 
     if (stop === undefined) return { content: body };
     if (stop === "long-line") {
+      const nextColumn = columnOffset + Array.from(lines[0] ?? "").length;
       return {
-        content: `${body}\n\n[Line ${end} was truncated at the ${MAX_OUTPUT_CHARS}-character output limit. Use offset=${end} to skip the rest of this line.]`,
+        content: `${body}\n\n[Line ${end} was truncated at the ${MAX_OUTPUT_CHARS}-character output limit. ` +
+          `Continue this line with offset=${start}, limit=1, column_offset=${nextColumn}. ` +
+          `To skip to the next line, use offset=${end} and omit column_offset.]`,
       };
     }
 

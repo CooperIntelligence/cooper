@@ -52,19 +52,48 @@ describe("read_file", () => {
     expect(second.content).toBe(`2 | ${secondLine}\n3 | last`);
   });
 
-  it("caps a long line in a file over 2 MiB and can read past that line", async () => {
+  it("resumes a long line in a file over 2 MiB at the reported code point", async () => {
     const pathInRoot = "minified.js";
-    // The output budget lands between the surrogate halves of this character.
-    const longLine = `x${"😀".repeat(1_100_000)}`;
+    const prefix = `x${"😀".repeat(23_997)}`;
+    // The output budget lands between the surrogate halves of the apple.
+    const longLine = `${prefix}🍎${"😀".repeat(1_100_000)}`;
     await fs.writeFile(path.join(root, pathInRoot), `${longLine}\r\nnext`);
 
     const result = await readFileTool.execute({ path: pathInRoot }, { root });
+    const continuation = result.content.match(/offset=0, limit=1, column_offset=(\d+)/);
+    const continued = await readFileTool.execute(readFileTool.inputSchema.parse({
+      path: pathInRoot, offset: 0, limit: 1, column_offset: Number(continuation?.[1]),
+    }), { root });
     const next = await readFileTool.execute({ path: pathInRoot, offset: 1 }, { root });
 
     expect(result.content).toBe(
-      `1 | x${"😀".repeat(23_997)}\n\n[Line 1 was truncated at the 48000-character output limit. Use offset=1 to skip the rest of this line.]`,
+      `1 | ${prefix}\n\n[Line 1 was truncated at the 48000-character output limit. ` +
+        "Continue this line with offset=0, limit=1, column_offset=23998. " +
+        "To skip to the next line, use offset=1 and omit column_offset.]",
     );
+    expect(continued.content).toMatch(/^1 \| 🍎😀/u);
+    expect(continued.content).toContain("column_offset=47996");
     expect(next.content).toBe("2 | next");
+  });
+
+  it.each([undefined, 2])("rejects a column offset when limit is %s", (limit) => {
+    expect(readFileTool.inputSchema.safeParse({
+      path: "lines.txt", limit, column_offset: 0,
+    }).error?.issues).toMatchObject([{ path: ["column_offset"], message: "column_offset requires limit: 1." }]);
+  });
+
+  it("excludes a CRLF split across stream chunks from column offsets", async () => {
+    const pathInRoot = "columns.txt";
+    await fs.writeFile(path.join(root, pathInRoot), `${"x".repeat(65_535)}\r\nnext`);
+    const result = await readFileTool.execute({
+      path: pathInRoot, limit: 1, column_offset: 65_534,
+    }, { root });
+    const pastEnd = await readFileTool.execute({
+      path: pathInRoot, limit: 1, column_offset: 65_536,
+    }, { root });
+
+    expect(result.content).toBe("1 | x\n\n[Showing lines 1-1. Use offset=1 to continue.]");
+    expect(pastEnd.content).toBe("(no content in requested range)");
   });
 
   it("keeps UTF-8, CRLF and a final line without a newline across stream chunks", async () => {
