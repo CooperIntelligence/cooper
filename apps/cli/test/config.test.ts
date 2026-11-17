@@ -6,8 +6,8 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   IncompleteConfigError,
   loadConfig,
-} from "../src/config.js";
-import { prepareTools } from "../src/mcp.js";
+} from "@cooper/host";
+import { prepareTools } from "@cooper/host";
 
 describe("loadConfig", () => {
   let home: string;

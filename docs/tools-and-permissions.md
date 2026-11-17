@@ -11,7 +11,7 @@
 - [`toToolSpec()`](../packages/core/src/tools/tool.ts) 生成给模型的 JSON Schema：内置工具由 zod 推导；MCP 工具带 `jsonSchema` 时原样转发（先克隆再删掉 `$schema`，避免污染共享对象），此时 `inputSchema` 只是宽松解析器，权威校验由外部服务器完成。
 - `capabilities` 取值 `read` / `write` / `execute` / `network`。**缺失或为空视为危险**，走受管控路径——这既覆盖类型系统强制新工具声明能力，也兜住外部来源省略元数据的情况。
 - `summarize()` 是审批面板与状态行展示的内容，代替原始 JSON 参数；`preview()` 必须无副作用、不抛异常，无法给出有意义的预览时可以返回 `undefined`。
-- 新工具经 [`index.ts`](../packages/core/src/index.ts) 导出，由 [CLI 的装配层](../apps/cli/src/mcp.ts) 统一注册；MCP 工具一律声明 `execute`，服务器自报的 `readOnlyHint` 不参与决策。
+- 新工具经 [`index.ts`](../packages/core/src/index.ts) 导出，由 [宿主装配层](../packages/host/src/mcp.ts) 统一注册。MCP 工具一律声明 `execute`，服务器自报的 `readOnlyHint` 不参与决策。
 
 ### 工具命名
 

@@ -11,13 +11,13 @@ import {
   type SkillCatalog,
   type Tool,
 } from "@cooper/core";
-import { describeModel, modelRequestError, modelSelectionChanged, type ApprovalMode, type Config } from "./config.js";
-import { modelBudget, needsResumeBudgetCheck, transitionMessage } from "./model-transition.js";
-import type { McpReport } from "./mcp.js";
+import { describeModel, modelRequestError, modelSelectionChanged, type ApprovalMode, type Config } from "@cooper/host";
+import { modelBudget, needsResumeBudgetCheck, transitionMessage } from "@cooper/host";
+import type { McpReport } from "@cooper/host";
 import { resolveSkillPrompt, skillTools } from "./skills.js";
 import { visiblePreviewText } from "./preview.js";
 import { webFetchOutput } from "./web-fetch-view.js";
-import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
+import { buildSystemPrompt, describeInstructions } from "@cooper/host";
 
 /** Minimal sink so tests can capture output without real streams. */
 export type Writer = { write(chunk: string): unknown };

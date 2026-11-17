@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   allTools,
   connectMcpServers,
@@ -54,9 +55,13 @@ export async function prepareTools(options: {
     };
   }
 
-  const connection = await connectMcpServers({
-    servers: config.servers,
-  });
+  const servers = Object.fromEntries(Object.entries(config.servers).map(([name, server]) => [
+    name,
+    server.type === "stdio"
+      ? { ...server, cwd: path.resolve(options.root, server.cwd ?? ".") }
+      : server,
+  ]));
+  const connection = await connectMcpServers({ servers });
 
   return {
     tools: [

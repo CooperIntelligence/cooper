@@ -1,0 +1,23 @@
+{
+  "name": "@cooper/desktop",
+  "productName": "Cooper Desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cooper/core": "0.1.0",
+    "@cooper/host": "0.1.0"
+  },
+  "devDependencies": {
+    "electron": "^45.3.3",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

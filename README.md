@@ -1,6 +1,6 @@
 # Cooper Code
 
-Cooper Code 是在终端里工作的 AI 编码助手。用自然语言交代任务，它会阅读代码、修改文件、运行测试，再把结果带回同一个对话。
+Cooper Code 是 AI 编码助手，提供终端界面和 Electron 桌面开发预览。用自然语言交代任务，它会阅读代码、修改文件、运行测试，再把结果带回同一个对话。
 
 ## 它能做什么
 
@@ -29,6 +29,12 @@ npm run --silent dev -- -p "解释这个项目的入口"      # 单次请求，�
 npm run dev -- --sessions                           # 列出当前工作区的会话
 npm run dev -- --resume <id>                        # 继续已有会话
 ```
+
+### Desktop 开发预览
+
+完成上述模型配置后，在仓库根目录运行 `npm run dev:desktop`。首次启动会下载 Electron 运行时。在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。桌面端提供 `ask` 和 `plan` 两种权限模式。
+
+输入框默认用 Enter 发送，Shift+Enter 换行。可在 **Send with** 中改为 Ctrl/⌘+Enter 或 Shift+Enter 发送，单按 Enter 即换行。此偏好会在重启后保留。
 
 ## 文档
 

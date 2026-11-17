@@ -1,8 +1,8 @@
 import { modelTierNames, type ModelTier, type SessionSummary } from "@cooper/core";
 import type { ModeResolution } from "./args.js";
-import type { ApprovalMode, Config, ConfigSource } from "./config.js";
-import { describeModel } from "./config.js";
-import type { McpReport } from "./mcp.js";
+import type { ApprovalMode, Config, ConfigSource } from "@cooper/host";
+import { describeModel } from "@cooper/host";
+import type { McpReport } from "@cooper/host";
 
 export type CommandName =
   | ApprovalMode

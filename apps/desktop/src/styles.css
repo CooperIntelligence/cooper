@@ -1,0 +1,64 @@
+:root {
+  color-scheme: light;
+  font-family: "Geist", "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: #222b26;
+  background: #f5f2e9;
+  --border: #dcdad0;
+  --muted: #626b62;
+  --paper: #fffdf8;
+  --accent: #1e5e49;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; display: grid; grid-template-columns: 244px minmax(0, 1fr); height: 100vh; }
+button, textarea, select { font: inherit; color: inherit; }
+button, select { border: 1px solid var(--border); border-radius: 8px; background: var(--paper); }
+button { padding: 8px 12px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled, select:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: 2px solid #397c64; outline-offset: 2px; }
+.primary { background: var(--accent); border-color: var(--accent); color: white; }
+.primary:hover:not(:disabled) { background: #144835; }
+.sidebar { padding: 24px 16px; border-right: 1px solid var(--border); min-width: 0; display: flex; flex-direction: column; }
+.brand { display: flex; gap: 10px; align-items: center; font-size: 20px; font-weight: 650; padding: 0 5px; }
+.mark { display: inline-grid; place-items: center; background: var(--accent); color: white; width: 32px; height: 32px; border-radius: 10px; font-size: 19px; font-weight: 650; }
+.folder { margin-top: 27px; text-align: left; }
+.workspace-path { margin-top: 9px; padding: 0 4px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 30px; padding: 0 4px; }
+.session-heading h2 { font-size: 12px; margin: 0; color: var(--muted); font-weight: 600; }
+.session-heading button { padding: 0; height: 27px; width: 27px; font-size: 19px; }
+#sessions { overflow-y: auto; margin-top: 10px; display: grid; gap: 3px; }
+#sessions button { border-color: transparent; background: transparent; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sessions button[aria-current="true"] { background: #e4ebe1; color: #1a543f; }
+main { background: var(--paper); min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr auto; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px 28px; border-bottom: 1px solid var(--border); }
+.topbar h1 { margin: 0; font-size: 15px; }
+.model { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.conversation { overflow-y: auto; padding: 24px 30px; min-height: 0; display: grid; align-content: start; }
+.empty { justify-self: center; margin-top: clamp(35px, 14vh, 110px); text-align: center; color: var(--muted); }
+.empty .mark { width: 46px; height: 46px; border-radius: 13px; font-size: 26px; }
+.messages { width: min(100%, 760px); margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.message { max-width: 100%; padding: 10px 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message.user { align-self: flex-end; max-width: 86%; padding: 10px 14px; border-radius: 12px; background: #eaf0e8; }
+.tool { color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; }
+.tool summary { cursor: pointer; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool.failure, .error { color: #922f30; }
+.bottom { width: min(100%, 820px); margin: 0 auto; padding: 0 24px 22px; }
+#composer, .approval { border: 1px solid var(--border); background: white; border-radius: 13px; }
+#prompt { display: block; width: 100%; border: 0; border-radius: 13px 13px 0 0; padding: 13px 14px 7px; resize: vertical; max-height: 160px; background: transparent; }
+#prompt:focus-visible { outline-offset: -2px; }
+.composer-actions, .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 10px; }
+.composer-actions { flex-wrap: wrap; justify-content: flex-start; }
+.composer-label { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.composer-label select { padding: 5px 6px; }
+#activity { margin-left: auto; color: var(--muted); font-size: 12px; }
+.error { padding: 10px 12px; margin-bottom: 8px; background: #f9e9e6; border-radius: 8px; overflow-wrap: anywhere; }
+.approval { margin-bottom: 10px; padding: 11px; border-color: #9bab93; }
+.approval h2 { font-size: 14px; margin: 0 0 8px; overflow-wrap: anywhere; }
+pre { margin: 8px 0 0; padding: 9px; max-height: 26vh; overflow: auto; background: #f3f1ea; border-radius: 6px; font-family: "IBM Plex Mono", Consolas, monospace; font-size: 12px; }
+.approval .actions { padding: 9px 0 0; }
+@media (max-width: 790px) {
+  body { grid-template-columns: 188px minmax(0, 1fr); }
+  .topbar, .conversation { padding-left: 19px; padding-right: 19px; }
+}

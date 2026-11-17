@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, render, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import { resolveContextWindow } from "@cooper/core";
-import type { ProtocolKind } from "./config.js";
-import { readSettingsDocument, userConfigFile, writeSettingsDocument } from "./settings.js";
+import type { ProtocolKind } from "@cooper/host";
+import { readSettingsDocument, userConfigFile, writeSettingsDocument } from "@cooper/host";
 
 /**
  * First-run setup: shown when any of protocol/model/baseURL/apiKey is

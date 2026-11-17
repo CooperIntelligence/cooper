@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+    <title>Cooper Desktop</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="renderer.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand"><span class="mark" aria-hidden="true">C</span> Cooper</div>
+      <button id="open-workspace" class="folder" type="button">Open workspace</button>
+      <div id="workspace-path" class="workspace-path" hidden></div>
+      <div class="session-heading"><h2>Conversations</h2><button id="new-chat" type="button" aria-label="New conversation">+</button></div>
+      <nav id="sessions" aria-label="Conversations"></nav>
+    </aside>
+    <main>
+      <header class="topbar">
+        <h1 id="conversation-title">Conversation</h1>
+        <span id="model" class="model"></span>
+      </header>
+      <section id="conversation" class="conversation" aria-label="Conversation">
+        <div id="empty" class="empty"><span class="mark" aria-hidden="true">C</span><p>Open a workspace to get started.</p></div>
+        <div id="messages" class="messages" role="log" aria-label="Messages"></div>
+      </section>
+      <div class="bottom">
+        <div id="error" class="error" role="alert" hidden></div>
+        <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
+          <h2 id="approval-title"></h2>
+          <pre id="approval-preview" tabindex="0"></pre>
+          <div class="actions"><button id="deny" type="button">Deny</button><button id="allow" class="primary" type="button">Approve</button></div>
+        </section>
+        <form id="composer">
+          <textarea id="prompt" aria-label="Message" rows="2" placeholder="Ask Cooper about your workspace"></textarea>
+          <div class="composer-actions">
+            <label class="composer-label">Mode
+              <select id="mode"><option value="ask">Ask</option><option value="plan">Plan</option></select>
+            </label>
+            <label class="composer-label">Send with
+              <select id="send-shortcut">
+                <option value="enter">Enter</option>
+                <option value="mod-enter">Ctrl/⌘+Enter</option>
+                <option value="shift-enter">Shift+Enter</option>
+              </select>
+            </label>
+            <span id="activity" role="status"></span>
+            <button id="stop" type="button" hidden>Stop</button>
+            <button id="send" class="primary" type="submit">Send</button>
+          </div>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>

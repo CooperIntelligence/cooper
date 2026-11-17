@@ -9,11 +9,11 @@ import { render } from "ink";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app.js";
 import { parseArgs } from "../src/args.js";
-import { describeModel, resolveConfig, selectModelTier } from "../src/config.js";
+import { describeModel, resolveConfig, selectModelTier } from "@cooper/host";
 import { runHeadless } from "../src/headless.js";
-import { compactForModel, modelBudget } from "../src/model-transition.js";
-import { createProvider } from "../src/provider.js";
-import { parseSettings } from "../src/settings.js";
+import { compactForModel, modelBudget } from "@cooper/host";
+import { createProvider } from "@cooper/host";
+import { parseSettings } from "@cooper/host";
 
 const settings = {
   protocol: "openai-chat", model: "ash", baseURL: "https://gateway.example/v1", apiKey: "key",

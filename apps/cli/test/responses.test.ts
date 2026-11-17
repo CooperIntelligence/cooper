@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { createSession, loadSession, readFileTool } from "@cooper/core";
 import { afterEach, expect, it, vi } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { loadConfig } from "@cooper/host";
 import { runHeadless } from "../src/headless.js";
-import { createProvider } from "../src/provider.js";
+import { createProvider } from "@cooper/host";
 
 type WireEvent = { type: string; [key: string]: unknown };
 const servers: Server[] = [];

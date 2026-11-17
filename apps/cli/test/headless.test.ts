@@ -16,7 +16,7 @@ import {
   type Provider,
   type ProviderEvent,
 } from "@cooper/core";
-import type { Config } from "../src/config.js";
+import type { Config } from "@cooper/host";
 import { runHeadless } from "../src/headless.js";
 
 const config: Config = {

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { prepareTools } from "../src/mcp.js";
+import { prepareTools } from "@cooper/host";
 
 const fixture = fileURLToPath(
   new URL(

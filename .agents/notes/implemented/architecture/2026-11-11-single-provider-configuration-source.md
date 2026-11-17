@@ -9,7 +9,7 @@ Status: implemented
 
 ## Decision
 
-TUI 和 headless 的连接参数来自同一个用户级 `config.json`。引导用文件里的
+TUI、headless 和 Desktop 的连接参数来自同一个用户级 `config.json`。引导用文件里的
 已有值初始化，并把验证的连接参数写回该文件。Cooper 将文件里的密钥直接交给
 provider。创建 SDK 客户端时隔离供应商环境变量，防止 SDK 的隐式默认值参与
 连接配置。
@@ -17,7 +17,7 @@ provider。创建 SDK 客户端时隔离供应商环境变量，防止 SDK 的�
 ## Alternatives considered
 
 **保留逐字段的环境变量和命令行覆盖。** 这些入口便于临时切换，但各字段独立解析
-会产生用户未整体配置过的连接组合。两种运行方式共用一个文件可以消除这层歧义。
+会产生用户未整体配置过的连接组合。各运行方式共用一个文件可以消除这层歧义。
 
 ## Consequences
 

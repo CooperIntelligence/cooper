@@ -26,15 +26,15 @@ import {
   selectModelTier,
   type ApprovalMode,
   type Config,
-} from "./config.js";
+} from "@cooper/host";
 import { runHeadless } from "./headless.js";
-import { prepareTools, type PreparedTools } from "./mcp.js";
+import { prepareTools, type PreparedTools } from "@cooper/host";
 import {
   runOnboarding,
   writeOnboardingConfig,
 } from "./onboarding.js";
-import { createProvider } from "./provider.js";
-import { userConfigFile } from "./settings.js";
+import { createProvider } from "@cooper/host";
+import { userConfigFile } from "@cooper/host";
 
 const HELP = `Cooper — a terminal coding agent
 

@@ -9,7 +9,7 @@ import { createBuiltinTools, type Provider, type ToolCall } from "@cooper/core";
 import { render, type RenderOptions } from "ink";
 import { expect, it, vi } from "vitest";
 import { App, tuiRenderOptions } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig } from "@cooper/host";
 
 function call(id: string, name: string, input: object): ToolCall {
   return { id, name, arguments: JSON.stringify(input) };
