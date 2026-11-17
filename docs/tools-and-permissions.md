@@ -59,4 +59,6 @@
 
 `read_file` 按零基 `offset` 分页流式读取，默认最多返回 400 行，显式 `limit` 可请求最多 2,000 行。每页正文上限 48,000 字符，页尾提示给出下一次 `offset`。超长行截断后，可以按提示设置 `limit: 1` 和零基 `column_offset` 继续同一行，偏移按 Unicode 码点计数。跳到下一行时只需使用提示里的下一行 `offset`。
 
+`edit_file` 匹配 `old_string` 时将 LF 与 CRLF 视为等价，其余字符逐字匹配。新增换行沿用匹配位置所在行的行尾。文件末行没有换行时沿用前一行的行尾，文件没有任何换行时使用 LF。未替换的原文直接保留。多处匹配时会给出候选行号，显式传入 `replace_all` 可全部替换。
+
 相关测试：[工具](../packages/core/test/tools.test.ts)、[权限](../packages/core/test/permissions.test.ts)、[审批面板](../apps/cli/test/approval.test.tsx)、[预览](../apps/cli/test/preview.test.ts)、[路径包含性](../.agents/notes/implemented/bug-fix/2026-11-11-workspace-real-path-containment.md)。

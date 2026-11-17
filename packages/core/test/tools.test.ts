@@ -226,6 +226,54 @@ describe("edit_file", () => {
     );
   });
 
+  it("previews and applies a multiline LF edit to a CRLF file", async () => {
+    const file = path.join(root, "a.txt");
+    const original = "header\r\none\r\ntwo\r\ntrailer\r\n";
+    const expected = "header\r\nalpha\r\nbeta\r\ntrailer\r\n";
+    await fs.writeFile(file, original, "utf8");
+
+    const input = { path: "a.txt", old_string: "one\ntwo", new_string: "alpha\nbeta" };
+    await expect(editFileTool.preview?.(input, { root })).resolves.toMatchObject({
+      kind: "diff",
+      before: original,
+      after: expected,
+    });
+    await editFileTool.execute(input, { root });
+    await expect(fs.readFile(file)).resolves.toEqual(Buffer.from(expected));
+  });
+
+  it("treats matches across mixed line endings as ambiguous and preserves local endings with replace_all", async () => {
+    const file = path.join(root, "a.txt");
+    const original = "header\none\r\ntwo\r\nmiddle\r\none\ntwo\ntrailer";
+    await fs.writeFile(file, original, "utf8");
+
+    const input = { path: "a.txt", old_string: "one\r\ntwo", new_string: "alpha\n$&\nbeta" };
+    await expect(editFileTool.preview?.(input, { root })).resolves.toMatchObject({
+      kind: "invalid",
+      reason: expect.stringContaining("2 times in a.txt (lines 2, 5)"),
+    });
+    await expect(editFileTool.execute(input, { root })).rejects.toThrow(/lines 2, 5/);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe(original);
+
+    const replaceAll = { ...input, replace_all: true };
+    const expected = "header\nalpha\r\n$&\r\nbeta\r\nmiddle\r\nalpha\n$&\nbeta\ntrailer";
+    await expect(editFileTool.preview?.(replaceAll, { root })).resolves.toMatchObject({
+      kind: "diff",
+      after: expected,
+    });
+    await editFileTool.execute(replaceAll, { root });
+    await expect(fs.readFile(file)).resolves.toEqual(Buffer.from(expected));
+  });
+
+  it("removes a whole CRLF line when the match ends in LF", async () => {
+    const file = path.join(root, "a.txt");
+    await fs.writeFile(file, "header\r\nremove\r\nlast", "utf8");
+
+    await editFileTool.execute({ path: "a.txt", old_string: "remove\n", new_string: "" }, { root });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("header\r\nlast");
+  });
+
   it("refuses ambiguous edits unless replace_all is set", async () => {
     await fs.writeFile(path.join(root, "a.txt"), "foo foo", "utf8");
     await expect(
