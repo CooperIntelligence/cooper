@@ -228,6 +228,11 @@ export async function* runAgent(
   const maxTurns = options.maxTurns ?? 25;
   const specs = tools.map(toToolSpec);
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+  for (const tool of tools) {
+    for (const alias of tool.aliases ?? []) {
+      if (!toolsByName.has(alias)) toolsByName.set(alias, tool);
+    }
+  }
 
   const contextConfig =
     options.contextBudget === false
@@ -375,9 +380,13 @@ export async function* runAgent(
 
     if (toolCalls.length === 0) return;
 
-    for (const call of toolCalls) {
+    for (const originalCall of toolCalls) {
       toolContext.signal?.throwIfAborted();
-      const tool = toolsByName.get(call.name);
+      const tool = toolsByName.get(originalCall.name);
+      // Keep the provider's call in history and use the canonical name for execution events.
+      const call = tool && tool.name !== originalCall.name
+        ? { ...originalCall, name: tool.name }
+        : originalCall;
 
       let input: unknown;
       let invalid: Error | null = null;

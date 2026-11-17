@@ -13,6 +13,12 @@
 - `summarize()` 是审批面板与状态行展示的内容，代替原始 JSON 参数；`preview()` 必须无副作用、不抛异常，无法给出有意义的预览时可以返回 `undefined`。
 - 新工具经 [`index.ts`](../packages/core/src/index.ts) 导出，由 [CLI 的装配层](../apps/cli/src/mcp.ts) 统一注册；MCP 工具一律声明 `execute`，服务器自报的 `readOnlyHint` 不参与决策。
 
+### 工具命名
+
+常用工作区操作采用简短的动作名 `read`、`edit`、`write`、`shell`。需要说明资源或操作范围时，用 `list_dir`、`web_fetch` 这类带限定词的名称。MCP 服务器工具使用 `mcp__<server>__<tool>`。
+
+工具可以声明旧名 `aliases`。分发层接受旧名，按规范名执行权限检查、记录进程授权和发送执行事件。模型的工具列表只声明规范名，旧会话和新调用的历史保留模型原始工具名及调用 ID。
+
 ## 权限决策
 
 [`PermissionPolicy.decide()`](../packages/core/src/permissions.ts) 按固定顺序求值，先命中的规则生效：
@@ -33,7 +39,7 @@
 
 `prompt` 只有在宿主真的提供了审批回调时才会出现；[`runAgent()`](../packages/core/src/agent.ts) 拿不到回调就按拒绝处理（fail-closed），因此忘记接审批不会变成无人值守执行。
 
-进程内授权由 `grantSession()` 记录：按工具名、仅当前进程、不落会话；`supportsProcessGrant()` 只排除带 `network` 的工具（能力缺失时仍可授权），所以网络请求永远逐次确认。`setPreset()` 只能在空闲时调用，切换保留已有授权。实际 shell 发生变化时，宿主撤销 `run_command` 的授权，避免批准过的命令换了个执行器还在生效。
+进程内授权由 `grantSession()` 记录：按工具名、仅当前进程、不落会话；`supportsProcessGrant()` 只排除带 `network` 的工具（能力缺失时仍可授权），所以网络请求永远逐次确认。`setPreset()` 只能在空闲时调用，切换保留已有授权。实际 shell 发生变化时，宿主撤销 `shell` 的授权，避免批准过的命令换了个执行器还在生效。
 
 ## 审批与预览
 
@@ -55,6 +61,10 @@
 - 解析结果必须仍位于真实工作区根之内，悬空链接、指向外部的链接一律拒绝；
 - Windows 上额外拒绝盘符、流后缀、结尾的点/空格和设备名（`CON`、`PRN`、`AUX` 等），因为这些在打开时会被系统重新解释。
 
-命令进程以当前操作系统用户的权限运行，工作区校验约束的是**启动目录**而不是权限本身。默认 shell、超时与输出上限等用户可见参数见 [使用参考](../USAGE.md)；实现侧的关键上限是：`run_command` 默认超时 120,000 ms（可传 1,000–600,000），流式保留尾部 60,000 字符、最终输出 30,000 字符（头尾各半）；`read_file` 单次最多 48,000 字符，文件上限 2 MiB，目录条目最多 500 条；`grep` 默认返回 100 行、上限 500 行。shell 的解析与平台默认值在 [`resolveCommandShell()`](../packages/core/src/tools/shell.ts)。
+命令进程以当前操作系统用户的权限运行，工作区校验约束的是**启动目录**而不是权限本身。默认 shell、超时与输出上限等用户可见参数见 [使用参考](../USAGE.md)；实现侧的关键上限是：`shell` 默认超时 120,000 ms（可传 1,000–600,000），流式保留尾部 60,000 字符、最终输出 30,000 字符（头尾各半）；目录条目最多 500 条；`grep` 默认返回 100 行、上限 500 行。shell 的解析与平台默认值在 [`resolveCommandShell()`](../packages/core/src/tools/shell.ts)。
+
+`read` 按零基 `offset` 分页流式读取，默认最多返回 400 行，显式 `limit` 可请求最多 2,000 行。每页正文上限 48,000 字符，页尾提示给出下一次 `offset`。超长行截断后，可以按提示设置 `limit: 1` 和零基 `column_offset` 继续同一行，偏移按 Unicode 码点计数。跳到下一行时只需使用提示里的下一行 `offset`。
+
+`edit` 匹配 `old_string` 时将 LF 与 CRLF 视为等价，其余字符逐字匹配。新增换行沿用匹配位置所在行的行尾。文件末行没有换行时沿用前一行的行尾，文件没有任何换行时使用 LF。未替换的原文直接保留。多处匹配时会给出候选行号，显式传入 `replace_all` 可全部替换。
 
 相关测试：[工具](../packages/core/test/tools.test.ts)、[权限](../packages/core/test/permissions.test.ts)、[审批面板](../apps/cli/test/approval.test.tsx)、[预览](../apps/cli/test/preview.test.ts)、[路径包含性](../.agents/notes/implemented/bug-fix/2026-11-11-workspace-real-path-containment.md)。

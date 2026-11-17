@@ -262,7 +262,8 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
     return cwd;
   }
   return {
-    name: "run_command",
+    name: "shell",
+    aliases: ["run_command"],
     description:
       `Run a command in the workspace using ${shellName} on ${process.platform}. ` +
       "Use this shell's syntax. Returns combined output and the exit code. Commands require user approval.",

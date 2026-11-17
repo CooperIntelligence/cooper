@@ -16,6 +16,7 @@ import {
   resolveContextConfig,
   resumeSession,
   runAgent,
+  runCommandTool,
   sessionsDir,
   toToolSpec,
   type ApprovalOutcome,
@@ -539,7 +540,7 @@ export function App({
       return process.platform === "win32" ? normalized.toLowerCase() : normalized;
     };
     if (previous.kind !== shell.kind || executableKey(previous.executable) !== executableKey(shell.executable)) {
-      permissions.revokeSession("run_command");
+      permissions.revokeSession(runCommandTool.name);
     }
     active.current = next;
   };
@@ -1289,7 +1290,7 @@ export function App({
             const label = event.outcome === "deny" ? "Denied"
               : event.outcome === "allow-session" ? "Allowed until exit" : "Allowed once";
             const lines = event.summary.split(/\r?\n/);
-            const action = event.call.name === "run_command" ? lines[1] ?? lines[0] : lines[0];
+            const action = event.call.name === runCommandTool.name ? lines[1] ?? lines[0] : lines[0];
             notice(`${label} · ${truncate(visiblePreviewText(action ?? event.call.name), 120)}`);
             break;
           }

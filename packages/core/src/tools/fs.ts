@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { z } from "zod";
@@ -33,6 +33,7 @@ const BINARY_EXTS = new Set([
 const MAX_LIST_ENTRIES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 48_000;
+const DEFAULT_READ_LINES = 400;
 /** Above this, an approval preview is skipped rather than rendered. */
 const MAX_PREVIEW_CHARS = 400_000;
 const MAX_SEARCH_FILE_BYTES = 1024 * 1024;
@@ -175,67 +176,145 @@ const readFileSchema = z.object({
     .min(1)
     .max(2000)
     .optional()
-    .describe("Maximum number of lines to return. Defaults to 400."),
+    .describe(`Maximum number of lines to return. Defaults to ${DEFAULT_READ_LINES}.`),
+  column_offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("0-based Unicode code point offset within the line. Requires limit: 1."),
+}).refine(({ column_offset, limit }) => column_offset === undefined || limit === 1, {
+  path: ["column_offset"],
+  message: "column_offset requires limit: 1.",
 });
 
+async function* readTextLines(
+  absolute: string,
+  offset: number,
+  columnOffset: number,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const stream = createReadStream(absolute, { encoding: "utf8", signal });
+  const prefixLimit = MAX_OUTPUT_CHARS + 1;
+  let skipped = 0;
+  let columnsToSkip = columnOffset;
+  let line = "";
+  let trailingCR = "";
+
+  for await (const chunk of stream) {
+    const text: string = trailingCR + chunk;
+    // Wait for the next chunk to tell whether a trailing CR is part of CRLF.
+    trailingCR = text.endsWith("\r") ? "\r" : "";
+    const chunkEnd = text.length - trailingCR.length;
+    let start = 0;
+    while (start < chunkEnd) {
+      const newline = text.indexOf("\n", start);
+      if (skipped === offset) {
+        const end = newline === -1 ? chunkEnd : newline - Number(text[newline - 1] === "\r");
+        while (columnsToSkip > 0 && start < end) {
+          start += (text.codePointAt(start) ?? 0) > 0xffff ? 2 : 1;
+          columnsToSkip -= 1;
+        }
+        line += text.slice(start, Math.min(end, start + prefixLimit - line.length));
+        if (line.length === prefixLimit) {
+          // The caller can finish the page without scanning the rest of this line.
+          yield line;
+          return;
+        }
+      }
+      if (newline === -1) break;
+
+      if (skipped < offset) {
+        skipped += 1;
+      } else {
+        if (columnsToSkip > 0) return;
+        yield line;
+        line = "";
+      }
+      start = newline + 1;
+    }
+  }
+
+  if (skipped === offset && columnsToSkip <= trailingCR.length) {
+    yield line + trailingCR.slice(columnsToSkip);
+  }
+}
+
 export const readFileTool: Tool<typeof readFileSchema> = {
-  name: "read_file",
+  name: "read",
+  aliases: ["read_file"],
   description:
-    "Read a text file from the workspace. Output lines are prefixed with their 1-based line number.",
+    "Read a text file from the workspace with 1-based output line numbers. " +
+    "Set offset and limit for a known range, or use grep to locate a symbol first. " +
+    "Follow the offsets in the result to continue a partial read, including column_offset for a long line.",
   inputSchema: readFileSchema,
   capabilities: ["read"],
   summarize(input) {
     const from = input.offset ? ` from line ${input.offset + 1}` : "";
+    if (input.column_offset !== undefined) {
+      return `Read ${input.path} from line ${(input.offset ?? 0) + 1}, column ${input.column_offset + 1}`;
+    }
     return `Read ${input.path}${from}`;
   },
   async execute(input, ctx) {
+    ctx.signal?.throwIfAborted();
     const absolute = await resolveInRoot(ctx.root, input.path);
     const stat = await fs.stat(absolute);
     if (!stat.isFile()) {
       throw new Error(`Not a file: ${input.path}`);
     }
-    if (stat.size > MAX_FILE_BYTES) {
-      throw new Error(
-        `File is too large (${stat.size} bytes, limit ${MAX_FILE_BYTES}). Read it in chunks with offset/limit.`,
-      );
+    const start = input.offset ?? 0;
+    const limit = input.limit ?? DEFAULT_READ_LINES;
+    const columnOffset = input.column_offset ?? 0;
+    const lines: string[] = [];
+    let textChars = 0;
+    let stop: "line-limit" | "character-limit" | "long-line" | undefined;
+
+    for await (const line of readTextLines(absolute, start, columnOffset, ctx.signal)) {
+      if (lines.length === limit) {
+        stop = "line-limit";
+        break;
+      }
+
+      // A wider line number increases the prefix width for every line on the page.
+      const width = String(start + lines.length + 1).length;
+      const room = MAX_OUTPUT_CHARS - textChars - (lines.length + 1) * (width + 3) - lines.length;
+      if (line.length > room) {
+        stop = "character-limit";
+        if (lines.length === 0) {
+          lines.push(line.slice(0, room).replace(/[\uD800-\uDBFF]$/u, ""));
+          stop = "long-line";
+        }
+        break;
+      }
+      lines.push(line);
+      textChars += line.length;
     }
 
-    const text = await fs.readFile(absolute, "utf8");
-    const lines = text.split(/\r?\n/);
-    const start = input.offset ?? 0;
-    const limit = input.limit ?? 400;
-    const slice = lines.slice(start, start + limit);
+    if (lines.length === 0) return { content: "(no content in requested range)" };
 
-    const width = String(start + slice.length).length;
-    const body = slice
+    const end = start + lines.length;
+    const width = String(end).length;
+    const body = lines
       .map(
         (line, index) =>
           `${String(start + index + 1).padStart(width, " ")} | ${line}`,
       )
       .join("\n");
 
-    if (slice.length === 0) return { content: "(no content in requested range)" };
-
-    const end = start + slice.length;
-    const notes: string[] = [];
-    if (end < lines.length) {
-      notes.push(`[truncated: lines ${start + 1}-${end} of ${lines.length}]`);
+    if (stop === undefined) return { content: body };
+    if (stop === "long-line") {
+      const nextColumn = columnOffset + Array.from(lines[0] ?? "").length;
+      return {
+        content: `${body}\n\n[Line ${end} was truncated at the ${MAX_OUTPUT_CHARS}-character output limit. ` +
+          `Continue this line with offset=${start}, limit=1, column_offset=${nextColumn}. ` +
+          `To skip to the next line, use offset=${end} and omit column_offset.]`,
+      };
     }
 
-    // A few "lines" can still be megabytes (minified output, long data lines),
-    // and one oversized tool result can exceed the whole context window. Cap
-    // the rendered output so a single call can never dominate the budget.
-    let content = body;
-    if (content.length > MAX_OUTPUT_CHARS) {
-      const boundary = content.lastIndexOf("\n", MAX_OUTPUT_CHARS);
-      content = content.slice(0, boundary > 0 ? boundary : MAX_OUTPUT_CHARS);
-      notes.push(
-        `[output capped at ${MAX_OUTPUT_CHARS} characters; use offset/limit to read further]`,
-      );
-    }
-
+    const reason = stop === "character-limit" ? `Output capped at ${MAX_OUTPUT_CHARS} characters. ` : "";
     return {
-      content: notes.length > 0 ? `${content}\n\n${notes.join("\n")}` : content,
+      content: `${body}\n\n[${reason}Showing lines ${start + 1}-${end}. Use offset=${end} to continue.]`,
     };
   },
 };
@@ -411,9 +490,10 @@ const writeFileSchema = z.object({
 });
 
 export const writeFileTool: Tool<typeof writeFileSchema> = {
-  name: "write_file",
+  name: "write",
+  aliases: ["write_file"],
   description:
-    "Create or overwrite a file with the given content. Parent directories are created automatically. Prefer edit_file for small changes to existing files.",
+    "Create or overwrite a workspace file with the given content. Parent directories are created automatically. Prefer edit for small changes to existing files.",
   inputSchema: writeFileSchema,
   capabilities: ["write"],
   summarize(input) {
@@ -456,8 +536,8 @@ const editFileSchema = z.object({
   path: z.string().describe("File path relative to the workspace root."),
   old_string: z
     .string()
-    .describe("Exact text to replace. Must match the file byte-for-byte."),
-  new_string: z.string().describe("Replacement text."),
+    .describe("Exact text to replace, with LF and CRLF treated as equivalent."),
+  new_string: z.string().describe("Replacement text. New lines follow the line endings near the match."),
   replace_all: z
     .boolean()
     .optional()
@@ -466,42 +546,91 @@ const editFileSchema = z.object({
     ),
 });
 
-function applyEdit(
+function originalEditOffset(offset: number, collapsedEnds: number[]): number {
+  // Each CRLF ending at or before this offset adds one code unit to the raw span.
+  let lower = 0;
+  let upper = collapsedEnds.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    if (collapsedEnds[middle]! <= offset) lower = middle + 1;
+    else upper = middle;
+  }
+  return offset + lower;
+}
+
+function planEdit(
   original: string,
-  oldString: string,
-  newString: string,
-  replaceAll: boolean,
-): string {
-  // A function replacement keeps `$&`-style sequences in newString literal.
-  return replaceAll
-    ? original.split(oldString).join(newString)
-    : original.replace(oldString, () => newString);
-}
+  input: z.infer<typeof editFileSchema>,
+  maxOutputChars = Number.POSITIVE_INFINITY,
+): { kind: "edit"; after: string; count: number } |
+  Extract<ToolPreview, { kind: "invalid" | "unavailable" }> {
+  const collapsedEnds: number[] = [];
+  const logical = original.replace(/\r\n/g, (_ending, offset: number) => {
+    collapsedEnds.push(offset - collapsedEnds.length + 1);
+    return "\n";
+  });
+  const needle = input.old_string.replaceAll("\r\n", "\n");
+  const matches: number[] = [];
+  for (let at = logical.indexOf(needle); at !== -1; at = logical.indexOf(needle, at + needle.length)) {
+    matches.push(at);
+  }
+  if (matches.length === 0) {
+    return {
+      kind: "invalid",
+      reason: `old_string was not found in ${input.path}. Read the file and provide the exact text, including whitespace.`,
+    };
+  }
+  if (matches.length > 1 && !input.replace_all) {
+    let line = 1;
+    let end = logical.indexOf("\n");
+    const locations = matches.slice(0, 5).map((at) => {
+      while (end !== -1 && end < at) {
+        line += 1;
+        end = logical.indexOf("\n", end + 1);
+      }
+      return line;
+    });
+    const extra = matches.length > locations.length ? ", …" : "";
+    return {
+      kind: "invalid",
+      reason: `old_string appears ${matches.length} times in ${input.path} (lines ${locations.join(", ")}${extra}). ` +
+        "Add more surrounding context to make it unique, or set replace_all to true.",
+    };
+  }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (needle.length === 0) return 0;
-  let count = 0;
-  let index = 0;
-  while ((index = haystack.indexOf(needle, index)) !== -1) {
-    count += 1;
-    index += needle.length;
+  const lfReplacement = input.new_string.replaceAll("\r\n", "\n");
+  const crlfReplacement = lfReplacement.replaceAll("\n", "\r\n");
+  const parts: string[] = [];
+  let cursor = 0;
+  let outputChars = original.length;
+  let nextLineEnd = original.indexOf("\n");
+  let previousLineEnd = -1;
+  for (const match of matches) {
+    const start = originalEditOffset(match, collapsedEnds);
+    const end = originalEditOffset(match + needle.length, collapsedEnds);
+    while (nextLineEnd !== -1 && nextLineEnd < start) {
+      previousLineEnd = nextLineEnd;
+      nextLineEnd = original.indexOf("\n", nextLineEnd + 1);
+    }
+    // Prefer the ending at or after the match. On an unterminated last line, use the preceding ending.
+    const lineEnd = nextLineEnd === -1 ? previousLineEnd : nextLineEnd;
+    const replacement = original[lineEnd - 1] === "\r" ? crlfReplacement : lfReplacement;
+    parts.push(original.slice(cursor, start), replacement);
+    outputChars += replacement.length - (end - start);
+    cursor = end;
   }
-  return count;
-}
-
-function editMatchError(file: string, count: number, replaceAll: boolean): string | undefined {
-  if (count === 0) {
-    return `old_string was not found in ${file}. Read the file and provide the exact text, including whitespace.`;
+  if (outputChars > maxOutputChars) {
+    return { kind: "unavailable", reason: "The new content exceeds the preview size limit." };
   }
-  if (count > 1 && !replaceAll) {
-    return `old_string appears ${count} times in ${file}. Add more surrounding context to make it unique, or set replace_all to true.`;
-  }
+  parts.push(original.slice(cursor));
+  return { kind: "edit", after: parts.join(""), count: matches.length };
 }
 
 export const editFileTool: Tool<typeof editFileSchema> = {
-  name: "edit_file",
+  name: "edit",
+  aliases: ["edit_file"],
   description:
-    "Replace an exact string in an existing file. old_string must match exactly and be unique unless replace_all is true. Prefer this over write_file for targeted changes.",
+    "Replace text in an existing workspace file. old_string must match exactly except for LF/CRLF and be unique unless replace_all is true. Prefer this over write for targeted changes.",
   inputSchema: editFileSchema,
   capabilities: ["write"],
   summarize(input) {
@@ -517,18 +646,12 @@ export const editFileTool: Tool<typeof editFileSchema> = {
     const snapshot = await readPreviewFile(input.path, ctx.root);
     if (snapshot.kind !== "file") return snapshot;
     if (snapshot.bytes === null) return { kind: "invalid", reason: `File not found: ${input.path}` };
-    const replaceAll = input.replace_all === true;
-    const count = countOccurrences(snapshot.text, input.old_string);
-    const reason = editMatchError(input.path, count, replaceAll);
-    if (reason) return { kind: "invalid", reason };
-    if (snapshot.text.length + count * (input.new_string.length - input.old_string.length) > MAX_PREVIEW_CHARS) {
+    const planned = planEdit(snapshot.text, input, MAX_PREVIEW_CHARS);
+    if (planned.kind !== "edit") return planned;
+    if (Buffer.byteLength(planned.after, "utf8") > MAX_PREVIEW_CHARS) {
       return { kind: "unavailable", reason: "The new content exceeds the preview size limit." };
     }
-    const after = applyEdit(snapshot.text, input.old_string, input.new_string, replaceAll);
-    if (Buffer.byteLength(after, "utf8") > MAX_PREVIEW_CHARS) {
-      return { kind: "unavailable", reason: "The new content exceeds the preview size limit." };
-    }
-    return previewFileChange(input.path, ctx, snapshot, after);
+    return previewFileChange(input.path, ctx, snapshot, planned.after);
   },
   async execute(input, ctx) {
     if (input.old_string.length === 0) {
@@ -545,23 +668,14 @@ export const editFileTool: Tool<typeof editFileSchema> = {
     }
 
     const original = await fs.readFile(absolute, "utf8");
-    const count = countOccurrences(original, input.old_string);
-
-    const reason = editMatchError(input.path, count, input.replace_all === true);
-    if (reason) throw new Error(reason);
-
-    const updated = applyEdit(
-      original,
-      input.old_string,
-      input.new_string,
-      input.replace_all === true,
-    );
+    const planned = planEdit(original, input);
+    if (planned.kind !== "edit") throw new Error(planned.reason);
 
     if (await resolveInRoot(ctx.root, input.path) !== absolute) {
       throw new Error(`Path "${input.path}" changed while preparing the edit`);
     }
-    await fs.writeFile(absolute, updated, "utf8");
-    return { content: `Replaced ${count} occurrence(s) in ${input.path}` };
+    await fs.writeFile(absolute, planned.after, "utf8");
+    return { content: `Replaced ${planned.count} occurrence(s) in ${input.path}` };
   },
 };
 

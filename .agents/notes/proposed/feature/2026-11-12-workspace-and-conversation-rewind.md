@@ -11,7 +11,7 @@ checkpoint（Esc-Esc 回退文件与对话），Codex 有 sandbox 回滚；Coope
 - 审批面板显示的是**正向** diff——批准将要发生的事（`preview()` /
   `buildPreviewRows` 只服务审批）——批准之后没有反向操作。
 - 会话是 append-only JSONL；`/clear` 只清对话不动文件。唯一的文件级恢复手段是
-  用户自己的 git，它覆盖不了非 git 目录、脏工作区、以及 `run_command` 造成的
+  用户自己的 git，它覆盖不了非 git 目录、脏工作区、以及 `shell` 造成的
   改动。
 - `ask` 模式下用户被迫逐条审批来换取安全感；`auto` 则不可逆，README 自己标注
   "谨慎使用"。批准是一瞬间的，收拾残局是手动的——代价不对称，所以用户不敢批。
@@ -26,11 +26,11 @@ checkpoint（Esc-Esc 回退文件与对话），Codex 有 sandbox 回滚；Coope
 
 三个组成部分：
 
-1. **文件（可恢复）**：`write_file` / `edit_file` 首次写入某路径前，把原内容存入
+1. **文件（可恢复）**：`write` / `edit` 首次写入某路径前，把原内容存入
    按会话分区的 content-addressed blob store。这是唯一保证能恢复的改动来源。
 2. **检测（只报告，不恢复）**：每个用户回合开始时记录工作区指纹清单
    （path / size / mtime），用于在 rewind 时识别日志覆盖不到的改动
-   （`run_command`、用户外部编辑），并在报告中如实列出——绝不静默部分恢复。
+   （`shell`、用户外部编辑），并在报告中如实列出——绝不静默部分恢复。
 3. **对话**：rewind 向会话文件追加一条 `checkpoint` 记录（现有记录类型，action
    新增 `"rewind"`），复用 loadSession "以最后一个 checkpoint 为基底"的既有
    机制完成截断，不引入新的会话语义。
@@ -84,7 +84,7 @@ type JournalEntry = {
 
 不改 `fs.ts`：在 core 导出一个工具包装器，宿主组装工具时套上即可。包装器在
 `tool.execute` 之前读取原内容——此时审批已通过，读到的正是写入前状态；只读工具
-与 `run_command` 不受影响。
+与 `shell` 不受影响。
 
 ```ts
 // packages/core/src/checkpoint/journal.ts（原型）
@@ -193,7 +193,7 @@ ANSI 清屏 + 重挂载路径重建滚动区（`buildResumeView` 需小改：把
 - **v1（本提案）**：journal 包装器、回合指纹清单、sidecar、`/rewind`、恢复预览
   面板、压缩纪元规则、保留与 GC。
 - **v2（方向已定，另行立项）**：git 临时 index（`GIT_INDEX_FILE` 建树、不动用户
-  index）快照，把 `run_command` 的改动纳入可恢复范围；Esc-Esc 快捷键；按文件
+  index）快照，把 `shell` 的改动纳入可恢复范围；Esc-Esc 快捷键；按文件
   选择性恢复；headless `--rewind`。
 
 ## Alternatives considered
@@ -210,15 +210,15 @@ ANSI 清屏 + 重挂载路径重建滚动区（`buildResumeView` 需小改：把
   之前"而非"回到上一个动作"。拒绝。
 - **依赖用户自己的 git**：就是现状问题本身；Cooper 不应假设工作区是 git 仓库。
 
-明确放弃的范围：v1 不恢复 `run_command` 造成的改动（改为如实报告）；checkpoint
+明确放弃的范围：v1 不恢复 `shell` 造成的改动（改为如实报告）；checkpoint
 不跨会话（`/clear` 新会话即新 sidecar，旧会话的 checkpoint 随其会话保留）。
 
 ## Acceptance criteria
 
-- 一个回合内 `write_file`/`edit_file` 改了 3 个文件、创建了 1 个文件；
+- 一个回合内 `write`/`edit` 改了 3 个文件、创建了 1 个文件；
   `/rewind` 后这 3 个文件字节级回到回合前，创建的文件被删除，对话回到该用户
   消息之前；`--resume` 同一会话后状态一致。
-- `run_command` 改动的文件**不在**恢复集中，而是逐条出现在 "not restorable"
+- `shell` 改动的文件**不在**恢复集中，而是逐条出现在 "not restorable"
   报告里；任何情况下都不存在静默的部分恢复。
 - 目标回合之后发生过 `summarize`/`truncate` 压缩 → 对话回退被拒并明确提示，
   文件回退照常完成。

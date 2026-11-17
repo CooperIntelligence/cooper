@@ -162,10 +162,10 @@ echo "列出行数最多的文件" | npm run dev -- -p
 
 | 工具 | 能力 |
 | --- | --- |
-| `list_dir`、`read_file`、`grep` | `read` |
+| `list_dir`、`read`、`grep` | `read` |
 | `load_skill`、`mcp_list_resources`、`mcp_list_resource_templates`、`mcp_read_resource` | `read` |
-| `write_file`、`edit_file` | `write` |
-| `run_command` | `execute` |
+| `write`、`edit` | `write` |
+| `shell` | `execute` |
 | MCP 服务器暴露的工具（`mcp__<server>__<tool>`） | `execute` |
 | `web_fetch`、`web_search` | `network` |
 
@@ -175,7 +175,7 @@ echo "列出行数最多的文件" | npm run dev -- -p
 
 - 目录：`<工作区>/.cooper/skills/`、`<工作区>/.agents/skills/`、`~/.cooper/skills/`、`~/.agents/skills/`，同名时前者优先。
 - 每个 Skill 是一个目录，内含 `SKILL.md`：YAML frontmatter 必须有 `name`（与目录同名）和 `description`。
-- 正文和引用文件各限 64 KiB，引用路径只能在该 Skill 目录内；`allowed-tools` 之类字段不改变权限，脚本仍通过 `run_command` 按常规权限执行。
+- 正文和引用文件各限 64 KiB，引用路径只能在该 Skill 目录内；`allowed-tools` 之类字段不改变权限，脚本仍通过 `shell` 按常规权限执行。
 - 新增或修改 Skill 后重启进程刷新目录。TUI 用 `/skills` 查看、`/skill <name> [请求]` 启用，无头模式把 `/skill <name> [请求]` 作为提示传入。
 
 ## MCP

@@ -20,7 +20,7 @@ Status: implemented
 
 单次批准只需按 `y`。按 `a` 会打开二次确认页，说明授权覆盖当前调用和同一工具在本进程中的后续调用，后续参数可以不同。确认页按 `Esc` 返回预览。两页均用 `n` 拒绝，`Enter` 无审批动作。
 
-工具授权随进程结束而失效，在同一进程切换对话或重载相同 shell 时继续有效。成功应用配置后，如果实际 shell 类型或可执行文件路径发生变化，只撤销 `run_command` 的授权，因为相同命令在不同 shell 中可能有不同效果。`PermissionPolicy` 执行权限规则，`plan` 和无交互的 `ask` 拒绝受管控工具。[运行时权限模式](2026-11-09-runtime-permission-modes.md) · [进程级自动授权](2026-11-11-per-process-auto-authorization.md) · [命令 shell](2026-11-11-configurable-command-shell.md) · [配置重载](2026-11-12-reload-user-config.md)
+工具授权随进程结束而失效，在同一进程切换对话或重载相同 shell 时继续有效。成功应用配置后，如果实际 shell 类型或可执行文件路径发生变化，只撤销 `shell` 的授权，因为相同命令在不同 shell 中可能有不同效果。`PermissionPolicy` 执行权限规则，`plan` 和无交互的 `ask` 拒绝受管控工具。[运行时权限模式](2026-11-09-runtime-permission-modes.md) · [进程级自动授权](2026-11-11-per-process-auto-authorization.md) · [命令 shell](2026-11-11-configurable-command-shell.md) · [配置重载](2026-11-12-reload-user-config.md)
 
 ### 让终端历史还原用户决定
 

@@ -44,6 +44,8 @@ export type ToolPreview =
 
 export type Tool<S extends z.ZodType = z.ZodType> = {
   name: string;
+  /** Legacy names accepted by the agent dispatcher and omitted from the model's tool list. */
+  aliases?: readonly string[];
   description: string;
   inputSchema: S;
   /**

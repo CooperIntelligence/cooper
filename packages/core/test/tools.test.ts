@@ -22,13 +22,97 @@ afterEach(async () => {
 });
 
 describe("read_file", () => {
-  it("caps a single line that would otherwise blow the context window", async () => {
-    await fs.writeFile(path.join(root, "minified.js"), "x".repeat(200_000), "utf8");
+  it("uses a 400-line default page and allows an explicit larger range", async () => {
+    const pathInRoot = "lines.txt";
+    const lines = Array.from({ length: 801 }, (_, index) => `text ${index + 1}`);
+    await fs.writeFile(path.join(root, pathInRoot), lines.join("\n"));
 
-    const result = await readFileTool.execute({ path: "minified.js" }, { root });
+    const first = await readFileTool.execute({ path: pathInRoot }, { root });
+    const second = await readFileTool.execute({ path: pathInRoot, offset: 400 }, { root });
+    const wide = await readFileTool.execute({ path: pathInRoot, limit: 500 }, { root });
 
-    expect(result.content.length).toBeLessThan(48_100);
-    expect(result.content).toContain("output capped at 48000 characters");
+    expect(first.content).toContain("400 | text 400\n\n[Showing lines 1-400. Use offset=400");
+    expect(second.content).toMatch(/^401 \| text 401\n/);
+    expect(second.content).toContain("800 | text 800\n\n[Showing lines 401-800. Use offset=800");
+    expect(wide.content).toContain("500 | text 500\n\n[Showing lines 1-500. Use offset=500");
+  });
+
+  it("leaves an otherwise complete line for the next page when the page is full", async () => {
+    const pathInRoot = "wide.txt";
+    const firstLine = "a".repeat(30_000);
+    const secondLine = "b".repeat(24_000);
+    await fs.writeFile(path.join(root, pathInRoot), `${firstLine}\n${secondLine}\nlast`);
+
+    const first = await readFileTool.execute({ path: pathInRoot }, { root });
+    const second = await readFileTool.execute({ path: pathInRoot, offset: 1 }, { root });
+
+    expect(first.content).toBe(
+      `1 | ${firstLine}\n\n[Output capped at 48000 characters. Showing lines 1-1. Use offset=1 to continue.]`,
+    );
+    expect(second.content).toBe(`2 | ${secondLine}\n3 | last`);
+  });
+
+  it("resumes a long line in a file over 2 MiB at the reported code point", async () => {
+    const pathInRoot = "minified.js";
+    const prefix = `x${"😀".repeat(23_997)}`;
+    // The output budget lands between the surrogate halves of the apple.
+    const longLine = `${prefix}🍎${"😀".repeat(1_100_000)}`;
+    await fs.writeFile(path.join(root, pathInRoot), `${longLine}\r\nnext`);
+
+    const result = await readFileTool.execute({ path: pathInRoot }, { root });
+    const continuation = result.content.match(/offset=0, limit=1, column_offset=(\d+)/);
+    const continued = await readFileTool.execute(readFileTool.inputSchema.parse({
+      path: pathInRoot, offset: 0, limit: 1, column_offset: Number(continuation?.[1]),
+    }), { root });
+    const next = await readFileTool.execute({ path: pathInRoot, offset: 1 }, { root });
+
+    expect(result.content).toBe(
+      `1 | ${prefix}\n\n[Line 1 was truncated at the 48000-character output limit. ` +
+        "Continue this line with offset=0, limit=1, column_offset=23998. " +
+        "To skip to the next line, use offset=1 and omit column_offset.]",
+    );
+    expect(continued.content).toMatch(/^1 \| 🍎😀/u);
+    expect(continued.content).toContain("column_offset=47996");
+    expect(next.content).toBe("2 | next");
+  });
+
+  it.each([undefined, 2])("rejects a column offset when limit is %s", (limit) => {
+    expect(readFileTool.inputSchema.safeParse({
+      path: "lines.txt", limit, column_offset: 0,
+    }).error?.issues).toMatchObject([{ path: ["column_offset"], message: "column_offset requires limit: 1." }]);
+  });
+
+  it("excludes a CRLF split across stream chunks from column offsets", async () => {
+    const pathInRoot = "columns.txt";
+    await fs.writeFile(path.join(root, pathInRoot), `${"x".repeat(65_535)}\r\nnext`);
+    const result = await readFileTool.execute({
+      path: pathInRoot, limit: 1, column_offset: 65_534,
+    }, { root });
+    const pastEnd = await readFileTool.execute({
+      path: pathInRoot, limit: 1, column_offset: 65_536,
+    }, { root });
+
+    expect(result.content).toBe("1 | x\n\n[Showing lines 1-1. Use offset=1 to continue.]");
+    expect(pastEnd.content).toBe("(no content in requested range)");
+  });
+
+  it("keeps UTF-8, CRLF and a final line without a newline across stream chunks", async () => {
+    const pathInRoot = "encoding.txt";
+    await fs.writeFile(path.join(root, pathInRoot), `${"x".repeat(65_532)}\nA😀\r\nB\rC\nlast`);
+
+    const result = await readFileTool.execute({ path: pathInRoot, offset: 1 }, { root });
+    const pastEnd = await readFileTool.execute({ path: pathInRoot, offset: 4 }, { root });
+
+    expect(result.content).toBe("2 | A😀\n3 | B\rC\n4 | last");
+    expect(pastEnd.content).toBe("(no content in requested range)");
+  });
+
+  it("preserves cancellation as an error", async () => {
+    const cancellation = new Error("Read cancelled");
+    await expect(readFileTool.execute(
+      { path: "lines.txt" },
+      { root, signal: AbortSignal.abort(cancellation) },
+    )).rejects.toThrow(cancellation);
   });
 });
 
@@ -140,6 +224,54 @@ describe("edit_file", () => {
     await expect(fs.readFile(path.join(root, "a.txt"), "utf8")).resolves.toBe(
       "hello cooper",
     );
+  });
+
+  it("previews and applies a multiline LF edit to a CRLF file", async () => {
+    const file = path.join(root, "a.txt");
+    const original = "header\r\none\r\ntwo\r\ntrailer\r\n";
+    const expected = "header\r\nalpha\r\nbeta\r\ntrailer\r\n";
+    await fs.writeFile(file, original, "utf8");
+
+    const input = { path: "a.txt", old_string: "one\ntwo", new_string: "alpha\nbeta" };
+    await expect(editFileTool.preview?.(input, { root })).resolves.toMatchObject({
+      kind: "diff",
+      before: original,
+      after: expected,
+    });
+    await editFileTool.execute(input, { root });
+    await expect(fs.readFile(file)).resolves.toEqual(Buffer.from(expected));
+  });
+
+  it("treats matches across mixed line endings as ambiguous and preserves local endings with replace_all", async () => {
+    const file = path.join(root, "a.txt");
+    const original = "header\none\r\ntwo\r\nmiddle\r\none\ntwo\ntrailer";
+    await fs.writeFile(file, original, "utf8");
+
+    const input = { path: "a.txt", old_string: "one\r\ntwo", new_string: "alpha\n$&\nbeta" };
+    await expect(editFileTool.preview?.(input, { root })).resolves.toMatchObject({
+      kind: "invalid",
+      reason: expect.stringContaining("2 times in a.txt (lines 2, 5)"),
+    });
+    await expect(editFileTool.execute(input, { root })).rejects.toThrow(/lines 2, 5/);
+    await expect(fs.readFile(file, "utf8")).resolves.toBe(original);
+
+    const replaceAll = { ...input, replace_all: true };
+    const expected = "header\nalpha\r\n$&\r\nbeta\r\nmiddle\r\nalpha\n$&\nbeta\ntrailer";
+    await expect(editFileTool.preview?.(replaceAll, { root })).resolves.toMatchObject({
+      kind: "diff",
+      after: expected,
+    });
+    await editFileTool.execute(replaceAll, { root });
+    await expect(fs.readFile(file)).resolves.toEqual(Buffer.from(expected));
+  });
+
+  it("removes a whole CRLF line when the match ends in LF", async () => {
+    const file = path.join(root, "a.txt");
+    await fs.writeFile(file, "header\r\nremove\r\nlast", "utf8");
+
+    await editFileTool.execute({ path: "a.txt", old_string: "remove\n", new_string: "" }, { root });
+
+    await expect(fs.readFile(file, "utf8")).resolves.toBe("header\r\nlast");
   });
 
   it("refuses ambiguous edits unless replace_all is set", async () => {

@@ -21,7 +21,7 @@
 
 加载路径有两条：模型通过只读的 [`load_skill`](../packages/core/src/tools/skill.ts) 按需读取；用户用 `/skill <name> [请求]` 显式激活，此时 [`skillActivation()`](../packages/core/src/skills.ts) 生成一条带 `runtime: "skill"` 标记的用户消息，与请求本身在[分组](context-and-sessions.md)时绑成一组。系统提示里附 Skill 目录（名称 + 描述），共用 16,000 字符预算，超限截断并提示模型用 `load_skill` 浏览。
 
-Skill 内声明的 `allowed-tools` 之类字段**不改变权限**：脚本仍通过 `run_command` 按常规策略执行。Skill 文本是任务指引，权限规则始终在其之前（见 [架构总览](architecture.md)）。相关测试：[skills](../packages/core/test/skills.test.ts)、[系统提示目录](../apps/cli/test/system-prompt.test.ts)。
+Skill 内声明的 `allowed-tools` 之类字段**不改变权限**：脚本仍通过 `shell` 按常规策略执行。Skill 文本是任务指引，权限规则始终在其之前（见 [架构总览](architecture.md)）。相关测试：[skills](../packages/core/test/skills.test.ts)、[系统提示目录](../apps/cli/test/system-prompt.test.ts)。
 
 ## MCP
 
