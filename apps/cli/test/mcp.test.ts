@@ -43,9 +43,9 @@ describe("prepareTools", () => {
       loadProject: false,
     });
     try {
-      expect(prepared.tools.some((tool) => tool.name === "read_file")).toBe(
-        true,
-      );
+      expect(prepared.tools.map((tool) => tool.name)).toEqual([
+        "list_dir", "read", "grep", "write", "edit", "shell", "web_fetch",
+      ]);
       expect(prepared.mcp.statuses).toEqual([]);
       expect(prepared.mcp.warnings).toEqual([]);
     } finally {
@@ -69,7 +69,7 @@ describe("prepareTools", () => {
     try {
       expect(prepared.mcp.warnings.join("\n")).toContain("--mcp-project");
       expect(prepared.mcp.statuses).toEqual([]);
-      expect(prepared.tools.some((tool) => tool.name === "read_file")).toBe(
+      expect(prepared.tools.some((tool) => tool.name === "read")).toBe(
         true,
       );
     } finally {

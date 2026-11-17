@@ -132,7 +132,7 @@ it("uses Responses from CLI config and replays ordered items through a tool turn
       model: "test-model", stream: true, store: false,
       include: ["reasoning.encrypted_content"], max_output_tokens: 1024,
       reasoning: { summary: "auto" },
-      tools: [{ type: "function", name: "read_file", strict: false, parameters: expect.any(Object) }],
+      tools: [{ type: "function", name: "read", strict: false, parameters: expect.any(Object) }],
     },
   });
   expect(requests[0]?.body).not.toHaveProperty("messages");

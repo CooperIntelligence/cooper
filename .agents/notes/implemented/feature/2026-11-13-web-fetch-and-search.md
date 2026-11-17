@@ -4,7 +4,7 @@ Status: implemented
 
 ## Problem
 
-Cooper 能检查工作区，但依赖升级、外部 API 参数或已知报错往往要到官方文档、issue 和发布说明核对。用 `run_command` 联网会把网络请求、命令解释和输出处理都交给通用 shell。模型既能读取工作区，又能生成 URL 和查询词，因此网页读取也需要明确数据发给谁、发了什么。
+Cooper 能检查工作区，但依赖升级、外部 API 参数或已知报错往往要到官方文档、issue 和发布说明核对。用 `shell` 联网会把网络请求、命令解释和输出处理都交给通用 shell。模型既能读取工作区，又能生成 URL 和查询词，因此网页读取也需要明确数据发给谁、发了什么。
 
 ## Decision
 
@@ -28,7 +28,7 @@ Cooper 内置 `web_fetch`，通过用户配置启用 Tavily `web_search`。抓�
 
 **按 `read` 自动放行。** 这样 `plan` 也能查文档，交互成本最低。代价是用户无法在模型发送工作区数据前查看目的地和内容。
 
-**通过 `run_command` 联网。** 现成的 shell 命令可以发请求。Cooper 只能按通用命令审批，难以统一限制目标、重定向、凭证和响应。
+**通过 `shell` 联网。** 现成的 shell 命令可以发请求。Cooper 只能按通用命令审批，难以统一限制目标、重定向、凭证和响应。
 
 **使用模型供应商托管的网页工具。** 供应商可提供内置索引或引用，但请求在供应商的模型调用期间执行，本地 `PermissionPolicy` 无法逐次核对出站参数，工具可用性也取决于模型和协议。 [OpenAI Web Search](https://developers.openai.com/api/docs/guides/tools-web-search) · [Anthropic Web Fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)
 

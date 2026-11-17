@@ -9,7 +9,7 @@ Status: implemented
 
 ## Decision
 
-`run_command` 由 Cooper 选择 shell。Windows 默认使用系统自带的 Windows
+`shell` 由 Cooper 选择 shell。Windows 默认使用系统自带的 Windows
 PowerShell 5.1，便于调用 Windows 管理命令。Linux 默认使用 Bash，macOS 默认
 使用 zsh。用户级 `config.json` 可指定 shell 类型和绝对可执行文件路径。
 工具说明、审批和状态界面都由同一份解析结果生成。

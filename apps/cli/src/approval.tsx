@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Box, Text, useInput, useWindowSize } from "ink";
-import { supportsProcessGrant, type ApprovalOutcome, type ApprovalRequest } from "@cooper/core";
+import { editFileTool, supportsProcessGrant, writeFileTool, type ApprovalOutcome, type ApprovalRequest } from "@cooper/core";
 import { buildPreviewRows, visiblePreviewText, wrapPreviewText, type PreviewRow } from "./preview.js";
 
 const colors = { add: "green", remove: "red", hunk: "cyan", context: "gray" } as const;
@@ -10,7 +10,7 @@ function describePreview(request: ApprovalRequest) {
   if (preview?.kind === "diff") {
     const diff = buildPreviewRows(preview);
     return {
-      title: preview.createsFile ? "Create file" : toolName === "write_file" ? "Overwrite file" : "Edit file",
+      title: preview.createsFile ? "Create file" : toolName === writeFileTool.name ? "Overwrite file" : "Edit file",
       target: `${preview.path} · +${diff.added} −${diff.removed}`,
       rows: diff.rows,
     };
@@ -29,8 +29,8 @@ function describePreview(request: ApprovalRequest) {
     return { title: preview.title, target: toolName, rows: [{ text: preview.text, tone: "context" }] satisfies PreviewRow[] };
   }
   const reason = preview?.kind === "unavailable" ? ` ${preview.reason}` : "";
-  const title = toolName === "write_file" ? "Write file"
-    : toolName === "edit_file" ? "Edit file"
+  const title = toolName === writeFileTool.name ? "Write file"
+    : toolName === editFileTool.name ? "Edit file"
     : toolName.startsWith("mcp__") ? "MCP tool" : "Run tool";
   const [headline, ...details] = summary.split(/\r?\n/);
   return {

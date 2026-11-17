@@ -11,7 +11,8 @@ import type {
   ProviderEvent,
 } from "../src/provider/types.js";
 import { PermissionPolicy } from "../src/permissions.js";
-import { readFileTool } from "../src/tools/fs.js";
+import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
+import { runCommandTool } from "../src/tools/shell.js";
 import type { Tool } from "../src/tools/tool.js";
 import type { Message } from "../src/types.js";
 
@@ -129,6 +130,57 @@ describe("runAgent", () => {
       content: "echo: hi",
     });
     expect(messages[4]).toMatchObject({ role: "assistant", content: "All done." });
+  });
+
+  it("advertises short names and applies canonical permissions to legacy calls", async () => {
+    const previous = { id: "prior_read", name: "read_file", arguments: '{"path":"package.json"}' };
+    const calls = [
+      { id: "r", name: "read_file", arguments: '{"path":"package.json","limit":1}' },
+      { id: "e", name: "edit_file", arguments: '{"path":"package.json","old_string":"a","new_string":"b"}' },
+      { id: "w", name: "write_file", arguments: '{"path":"unused.txt","content":"blocked"}' },
+      { id: "s", name: "run_command", arguments: '{"command":"echo unused"}' },
+    ];
+    const messages: Message[] = [
+      { role: "user", content: "Inspect the workspace" },
+      { role: "assistant", content: "", toolCalls: [previous] },
+      { role: "tool", toolCallId: previous.id, content: "Earlier file contents." },
+      { role: "user", content: "Continue" },
+    ];
+    let requests = 0;
+    const provider: Provider = {
+      async *stream(request) {
+        expect(request.tools.map((tool) => tool.name)).toEqual(["read", "edit", "write", "shell"]);
+        expect(request.messages[1]).toMatchObject({ toolCalls: [previous] });
+        requests += 1;
+        yield {
+          type: "done",
+          message: { content: "", toolCalls: requests === 1 ? calls : [] },
+          finishReason: requests === 1 ? "tool_calls" : "stop",
+        };
+      },
+    };
+    const outcomes: Array<{ name: string; denied: boolean; isError: boolean }> = [];
+    for await (const event of runAgent({
+      provider,
+      model: "test-model",
+      tools: [readFileTool, editFileTool, writeFileTool, runCommandTool],
+      messages,
+      context: { root: process.cwd() },
+      permissions: new PermissionPolicy({ preset: "plan", interactive: true }),
+      approve: () => { throw new Error("Plan mode must not prompt"); },
+    })) {
+      if (event.type === "tool-end") {
+        outcomes.push({ name: event.call.name, denied: event.denied, isError: event.isError });
+      }
+    }
+
+    expect(outcomes).toEqual([
+      { name: "read", denied: false, isError: false },
+      { name: "edit", denied: true, isError: true },
+      { name: "write", denied: true, isError: true },
+      { name: "shell", denied: true, isError: true },
+    ]);
+    expect(messages[4]).toMatchObject({ toolCalls: calls });
   });
 
   it("carries protocol continuation into history and events", async () => {

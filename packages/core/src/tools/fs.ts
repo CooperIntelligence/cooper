@@ -241,7 +241,8 @@ async function* readTextLines(
 }
 
 export const readFileTool: Tool<typeof readFileSchema> = {
-  name: "read_file",
+  name: "read",
+  aliases: ["read_file"],
   description:
     "Read a text file from the workspace with 1-based output line numbers. " +
     "Set offset and limit for a known range, or use grep to locate a symbol first. " +
@@ -489,9 +490,10 @@ const writeFileSchema = z.object({
 });
 
 export const writeFileTool: Tool<typeof writeFileSchema> = {
-  name: "write_file",
+  name: "write",
+  aliases: ["write_file"],
   description:
-    "Create or overwrite a file with the given content. Parent directories are created automatically. Prefer edit_file for small changes to existing files.",
+    "Create or overwrite a workspace file with the given content. Parent directories are created automatically. Prefer edit for small changes to existing files.",
   inputSchema: writeFileSchema,
   capabilities: ["write"],
   summarize(input) {
@@ -625,9 +627,10 @@ function planEdit(
 }
 
 export const editFileTool: Tool<typeof editFileSchema> = {
-  name: "edit_file",
+  name: "edit",
+  aliases: ["edit_file"],
   description:
-    "Replace text in an existing file. old_string must match exactly except for LF/CRLF and be unique unless replace_all is true. Prefer this over write_file for targeted changes.",
+    "Replace text in an existing workspace file. old_string must match exactly except for LF/CRLF and be unique unless replace_all is true. Prefer this over write for targeted changes.",
   inputSchema: editFileSchema,
   capabilities: ["write"],
   summarize(input) {

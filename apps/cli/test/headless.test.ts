@@ -203,7 +203,7 @@ const writeCall: AssistantMessage = {
   toolCalls: [
     {
       id: "call_1",
-      name: "write_file",
+      name: "write",
       arguments: JSON.stringify({ path: "hello.txt", content: "hi" }),
     },
   ],
@@ -274,7 +274,7 @@ describe("runHeadless", () => {
 
     expect(code).toBe(0);
     expect(await readFile(path.join(root, "hello.txt"), "utf8")).toBe("hi");
-    expect(err.text).toContain("→ write_file");
+    expect(err.text).toContain("→ write");
     expect(err.text).toContain("✓");
     expect(out.text).toBe("Done.\n");
   });
@@ -412,11 +412,16 @@ describe("runHeadless", () => {
     expect(messages[noticeIndex]?.content).toContain('mode="plan"');
   });
 
-  it("saves a headless turn and resumes it in a later run", async () => {
+  it("resumes a headless session with legacy tool names in its history", async () => {
     const root = await makeWorkspace();
     const home = await makeWorkspace();
     const writer = createSession({ cwd: root, model: config.model, home });
     const err = collector();
+    const legacyCall = { ...writeCall.toolCalls[0]!, name: "write_file" };
+    const legacyHistory = [
+      { role: "assistant", content: "", toolCalls: [legacyCall] },
+      { role: "tool", toolCallId: legacyCall.id, content: "Created hello.txt (2 bytes)" },
+    ];
 
     const first = await runHeadless({
       config,
@@ -425,7 +430,10 @@ describe("runHeadless", () => {
       showReasoning: false,
       mode: "auto",
       prompt: "first",
-      provider: new ScriptedProvider([{ content: "one", toolCalls: [] }]),
+      provider: new ScriptedProvider([
+        { content: "", toolCalls: [legacyCall] },
+        { content: "one", toolCalls: [] },
+      ]),
       out: collector(),
       err,
       session: writer,
@@ -443,10 +451,12 @@ describe("runHeadless", () => {
     expect(saved.preset).toBe("auto");
     expect(saved.messages.filter((message) => !isRuntimeNotice(message))).toEqual([
       { role: "user", content: "first" },
+      ...legacyHistory,
       { role: "assistant", content: "one" },
     ]);
 
     const resumedErr = collector();
+    const answer = new ScriptedProvider([{ content: "two", toolCalls: [] }]);
     const second = await runHeadless({
       config,
       root,
@@ -454,7 +464,15 @@ describe("runHeadless", () => {
       showReasoning: false,
       mode: "auto",
       prompt: "second",
-      provider: new ScriptedProvider([{ content: "two", toolCalls: [] }]),
+      provider: {
+        stream(request) {
+          const names = request.tools.map((tool) => tool.name);
+          expect(names).toContain("write");
+          expect(names).not.toContain("write_file");
+          for (const message of legacyHistory) expect(request.messages).toContainEqual(message);
+          return answer.stream();
+        },
+      },
       out: collector(),
       err: resumedErr,
       session: SessionWriter.from(saved),
@@ -471,6 +489,7 @@ describe("runHeadless", () => {
       afterSecond.messages.filter((message) => !isRuntimeNotice(message)),
     ).toEqual([
       { role: "user", content: "first" },
+      ...legacyHistory,
       { role: "assistant", content: "one" },
       { role: "user", content: "second" },
       { role: "assistant", content: "two" },
