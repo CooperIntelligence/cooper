@@ -22,13 +22,68 @@ afterEach(async () => {
 });
 
 describe("read_file", () => {
-  it("caps a single line that would otherwise blow the context window", async () => {
-    await fs.writeFile(path.join(root, "minified.js"), "x".repeat(200_000), "utf8");
+  it("uses a 200-line default page and allows an explicit larger range", async () => {
+    const pathInRoot = "lines.txt";
+    const lines = Array.from({ length: 401 }, (_, index) => `text ${index + 1}`);
+    await fs.writeFile(path.join(root, pathInRoot), lines.join("\n"));
 
-    const result = await readFileTool.execute({ path: "minified.js" }, { root });
+    const first = await readFileTool.execute({ path: pathInRoot }, { root });
+    const second = await readFileTool.execute({ path: pathInRoot, offset: 200 }, { root });
+    const wide = await readFileTool.execute({ path: pathInRoot, limit: 400 }, { root });
 
-    expect(result.content.length).toBeLessThan(48_100);
-    expect(result.content).toContain("output capped at 48000 characters");
+    expect(first.content).toContain("200 | text 200\n\n[Showing lines 1-200. Use offset=200");
+    expect(second.content).toMatch(/^201 \| text 201\n/);
+    expect(second.content).toContain("400 | text 400\n\n[Showing lines 201-400. Use offset=400");
+    expect(wide.content).toContain("400 | text 400\n\n[Showing lines 1-400. Use offset=400");
+  });
+
+  it("leaves an otherwise complete line for the next page when the page is full", async () => {
+    const pathInRoot = "wide.txt";
+    const firstLine = "a".repeat(30_000);
+    const secondLine = "b".repeat(24_000);
+    await fs.writeFile(path.join(root, pathInRoot), `${firstLine}\n${secondLine}\nlast`);
+
+    const first = await readFileTool.execute({ path: pathInRoot }, { root });
+    const second = await readFileTool.execute({ path: pathInRoot, offset: 1 }, { root });
+
+    expect(first.content).toBe(
+      `1 | ${firstLine}\n\n[Output capped at 48000 characters. Showing lines 1-1. Use offset=1 to continue.]`,
+    );
+    expect(second.content).toBe(`2 | ${secondLine}\n3 | last`);
+  });
+
+  it("caps a long line in a file over 2 MiB and can read past that line", async () => {
+    const pathInRoot = "minified.js";
+    // The output budget lands between the surrogate halves of this character.
+    const longLine = `x${"😀".repeat(1_100_000)}`;
+    await fs.writeFile(path.join(root, pathInRoot), `${longLine}\r\nnext`);
+
+    const result = await readFileTool.execute({ path: pathInRoot }, { root });
+    const next = await readFileTool.execute({ path: pathInRoot, offset: 1 }, { root });
+
+    expect(result.content).toBe(
+      `1 | x${"😀".repeat(23_997)}\n\n[Line 1 was truncated at the 48000-character output limit. Use offset=1 to skip the rest of this line.]`,
+    );
+    expect(next.content).toBe("2 | next");
+  });
+
+  it("keeps UTF-8, CRLF and a final line without a newline across stream chunks", async () => {
+    const pathInRoot = "encoding.txt";
+    await fs.writeFile(path.join(root, pathInRoot), `${"x".repeat(65_532)}\nA😀\r\nB\rC\nlast`);
+
+    const result = await readFileTool.execute({ path: pathInRoot, offset: 1 }, { root });
+    const pastEnd = await readFileTool.execute({ path: pathInRoot, offset: 4 }, { root });
+
+    expect(result.content).toBe("2 | A😀\n3 | B\rC\n4 | last");
+    expect(pastEnd.content).toBe("(no content in requested range)");
+  });
+
+  it("preserves cancellation as an error", async () => {
+    const cancellation = new Error("Read cancelled");
+    await expect(readFileTool.execute(
+      { path: "lines.txt" },
+      { root, signal: AbortSignal.abort(cancellation) },
+    )).rejects.toThrow(cancellation);
   });
 });
 

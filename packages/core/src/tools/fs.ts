@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { z } from "zod";
@@ -33,6 +33,7 @@ const BINARY_EXTS = new Set([
 const MAX_LIST_ENTRIES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 48_000;
+const DEFAULT_READ_LINES = 200;
 /** Above this, an approval preview is skipped rather than rendered. */
 const MAX_PREVIEW_CHARS = 400_000;
 const MAX_SEARCH_FILE_BYTES = 1024 * 1024;
@@ -175,13 +176,55 @@ const readFileSchema = z.object({
     .min(1)
     .max(2000)
     .optional()
-    .describe("Maximum number of lines to return. Defaults to 400."),
+    .describe(`Maximum number of lines to return. Defaults to ${DEFAULT_READ_LINES}.`),
 });
+
+async function* readTextLines(
+  absolute: string,
+  offset: number,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const stream = createReadStream(absolute, { encoding: "utf8", signal });
+  // Leave room for a trailing CR and one character that proves the line is oversized.
+  const prefixLimit = MAX_OUTPUT_CHARS + 2;
+  let skipped = 0;
+  let line = "";
+
+  for await (const chunk of stream) {
+    const text: string = chunk;
+    let start = 0;
+    while (start < text.length) {
+      const newline = text.indexOf("\n", start);
+      const end = newline === -1 ? text.length : newline;
+      if (skipped === offset) {
+        line += text.slice(start, Math.min(end, start + prefixLimit - line.length));
+        if (line.length === prefixLimit) {
+          // The caller can finish the page without scanning the rest of this line.
+          yield line;
+          return;
+        }
+      }
+      if (newline === -1) break;
+
+      if (skipped < offset) {
+        skipped += 1;
+      } else {
+        yield line.endsWith("\r") ? line.slice(0, -1) : line;
+        line = "";
+      }
+      start = newline + 1;
+    }
+  }
+
+  if (skipped === offset) yield line;
+}
 
 export const readFileTool: Tool<typeof readFileSchema> = {
   name: "read_file",
   description:
-    "Read a text file from the workspace. Output lines are prefixed with their 1-based line number.",
+    "Read a text file from the workspace with 1-based output line numbers. " +
+    "Set offset and limit for a known range, or use grep to locate a symbol first. " +
+    "Use the offset in the result to continue a partial read.",
   inputSchema: readFileSchema,
   capabilities: ["read"],
   summarize(input) {
@@ -189,53 +232,60 @@ export const readFileTool: Tool<typeof readFileSchema> = {
     return `Read ${input.path}${from}`;
   },
   async execute(input, ctx) {
+    ctx.signal?.throwIfAborted();
     const absolute = await resolveInRoot(ctx.root, input.path);
     const stat = await fs.stat(absolute);
     if (!stat.isFile()) {
       throw new Error(`Not a file: ${input.path}`);
     }
-    if (stat.size > MAX_FILE_BYTES) {
-      throw new Error(
-        `File is too large (${stat.size} bytes, limit ${MAX_FILE_BYTES}). Read it in chunks with offset/limit.`,
-      );
+    const start = input.offset ?? 0;
+    const limit = input.limit ?? DEFAULT_READ_LINES;
+    const lines: string[] = [];
+    let textChars = 0;
+    let stop: "line-limit" | "character-limit" | "long-line" | undefined;
+
+    for await (const line of readTextLines(absolute, start, ctx.signal)) {
+      if (lines.length === limit) {
+        stop = "line-limit";
+        break;
+      }
+
+      // A wider line number increases the prefix width for every line on the page.
+      const width = String(start + lines.length + 1).length;
+      const room = MAX_OUTPUT_CHARS - textChars - (lines.length + 1) * (width + 3) - lines.length;
+      if (line.length > room) {
+        stop = "character-limit";
+        if (lines.length === 0) {
+          lines.push(line.slice(0, room).replace(/[\uD800-\uDBFF]$/u, ""));
+          stop = "long-line";
+        }
+        break;
+      }
+      lines.push(line);
+      textChars += line.length;
     }
 
-    const text = await fs.readFile(absolute, "utf8");
-    const lines = text.split(/\r?\n/);
-    const start = input.offset ?? 0;
-    const limit = input.limit ?? 400;
-    const slice = lines.slice(start, start + limit);
+    if (lines.length === 0) return { content: "(no content in requested range)" };
 
-    const width = String(start + slice.length).length;
-    const body = slice
+    const end = start + lines.length;
+    const width = String(end).length;
+    const body = lines
       .map(
         (line, index) =>
           `${String(start + index + 1).padStart(width, " ")} | ${line}`,
       )
       .join("\n");
 
-    if (slice.length === 0) return { content: "(no content in requested range)" };
-
-    const end = start + slice.length;
-    const notes: string[] = [];
-    if (end < lines.length) {
-      notes.push(`[truncated: lines ${start + 1}-${end} of ${lines.length}]`);
+    if (stop === undefined) return { content: body };
+    if (stop === "long-line") {
+      return {
+        content: `${body}\n\n[Line ${end} was truncated at the ${MAX_OUTPUT_CHARS}-character output limit. Use offset=${end} to skip the rest of this line.]`,
+      };
     }
 
-    // A few "lines" can still be megabytes (minified output, long data lines),
-    // and one oversized tool result can exceed the whole context window. Cap
-    // the rendered output so a single call can never dominate the budget.
-    let content = body;
-    if (content.length > MAX_OUTPUT_CHARS) {
-      const boundary = content.lastIndexOf("\n", MAX_OUTPUT_CHARS);
-      content = content.slice(0, boundary > 0 ? boundary : MAX_OUTPUT_CHARS);
-      notes.push(
-        `[output capped at ${MAX_OUTPUT_CHARS} characters; use offset/limit to read further]`,
-      );
-    }
-
+    const reason = stop === "character-limit" ? `Output capped at ${MAX_OUTPUT_CHARS} characters. ` : "";
     return {
-      content: notes.length > 0 ? `${content}\n\n${notes.join("\n")}` : content,
+      content: `${body}\n\n[${reason}Showing lines ${start + 1}-${end}. Use offset=${end} to continue.]`,
     };
   },
 };
