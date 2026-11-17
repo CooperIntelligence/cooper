@@ -57,6 +57,6 @@
 
 命令进程以当前操作系统用户的权限运行，工作区校验约束的是**启动目录**而不是权限本身。默认 shell、超时与输出上限等用户可见参数见 [使用参考](../USAGE.md)；实现侧的关键上限是：`run_command` 默认超时 120,000 ms（可传 1,000–600,000），流式保留尾部 60,000 字符、最终输出 30,000 字符（头尾各半）；目录条目最多 500 条；`grep` 默认返回 100 行、上限 500 行。shell 的解析与平台默认值在 [`resolveCommandShell()`](../packages/core/src/tools/shell.ts)。
 
-`read_file` 按零基 `offset` 分页流式读取，默认最多返回 200 行，显式 `limit` 可请求最多 2,000 行。每页正文上限 48,000 字符，页尾提示给出下一次 `offset`。超长行截断后，可以按提示设置 `limit: 1` 和零基 `column_offset` 继续同一行，偏移按 Unicode 码点计数。跳到下一行时只需使用提示里的下一行 `offset`。
+`read_file` 按零基 `offset` 分页流式读取，默认最多返回 400 行，显式 `limit` 可请求最多 2,000 行。每页正文上限 48,000 字符，页尾提示给出下一次 `offset`。超长行截断后，可以按提示设置 `limit: 1` 和零基 `column_offset` 继续同一行，偏移按 Unicode 码点计数。跳到下一行时只需使用提示里的下一行 `offset`。
 
 相关测试：[工具](../packages/core/test/tools.test.ts)、[权限](../packages/core/test/permissions.test.ts)、[审批面板](../apps/cli/test/approval.test.tsx)、[预览](../apps/cli/test/preview.test.ts)、[路径包含性](../.agents/notes/implemented/bug-fix/2026-11-11-workspace-real-path-containment.md)。

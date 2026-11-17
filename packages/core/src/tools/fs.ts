@@ -33,7 +33,7 @@ const BINARY_EXTS = new Set([
 const MAX_LIST_ENTRIES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 48_000;
-const DEFAULT_READ_LINES = 200;
+const DEFAULT_READ_LINES = 400;
 /** Above this, an approval preview is skipped rather than rendered. */
 const MAX_PREVIEW_CHARS = 400_000;
 const MAX_SEARCH_FILE_BYTES = 1024 * 1024;

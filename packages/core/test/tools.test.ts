@@ -22,19 +22,19 @@ afterEach(async () => {
 });
 
 describe("read_file", () => {
-  it("uses a 200-line default page and allows an explicit larger range", async () => {
+  it("uses a 400-line default page and allows an explicit larger range", async () => {
     const pathInRoot = "lines.txt";
-    const lines = Array.from({ length: 401 }, (_, index) => `text ${index + 1}`);
+    const lines = Array.from({ length: 801 }, (_, index) => `text ${index + 1}`);
     await fs.writeFile(path.join(root, pathInRoot), lines.join("\n"));
 
     const first = await readFileTool.execute({ path: pathInRoot }, { root });
-    const second = await readFileTool.execute({ path: pathInRoot, offset: 200 }, { root });
-    const wide = await readFileTool.execute({ path: pathInRoot, limit: 400 }, { root });
+    const second = await readFileTool.execute({ path: pathInRoot, offset: 400 }, { root });
+    const wide = await readFileTool.execute({ path: pathInRoot, limit: 500 }, { root });
 
-    expect(first.content).toContain("200 | text 200\n\n[Showing lines 1-200. Use offset=200");
-    expect(second.content).toMatch(/^201 \| text 201\n/);
-    expect(second.content).toContain("400 | text 400\n\n[Showing lines 201-400. Use offset=400");
-    expect(wide.content).toContain("400 | text 400\n\n[Showing lines 1-400. Use offset=400");
+    expect(first.content).toContain("400 | text 400\n\n[Showing lines 1-400. Use offset=400");
+    expect(second.content).toMatch(/^401 \| text 401\n/);
+    expect(second.content).toContain("800 | text 800\n\n[Showing lines 401-800. Use offset=800");
+    expect(wide.content).toContain("500 | text 500\n\n[Showing lines 1-500. Use offset=500");
   });
 
   it("leaves an otherwise complete line for the next page when the page is full", async () => {
