@@ -1,4 +1,4 @@
-import { copyFile } from "node:fs/promises";
+import { copyFile, mkdir } from "node:fs/promises";
 import { build } from "esbuild";
 
 await Promise.all([
@@ -20,4 +20,10 @@ await Promise.all([
     outfile: "dist/renderer.js",
   }),
 ]);
-await Promise.all(["index.html", "styles.css"].map((name) => copyFile("src/" + name, "dist/" + name)));
+await mkdir("dist/assets", { recursive: true });
+const images = ["cooper-code-logo.png", "cooper-icon-192.png", "cooper-icon-512.png"];
+await Promise.all([
+  copyFile("src/index.html", "dist/index.html"),
+  copyFile("src/styles.css", "dist/styles.css"),
+  ...images.map((name) => copyFile("src/assets/" + name, "dist/assets/" + name)),
+]);

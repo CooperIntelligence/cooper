@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@cooper/core": "0.1.0",
-    "@cooper/host": "0.1.0"
+    "@cooper/host": "0.1.0",
+    "markdown-it": "^15.0.3"
   },
   "devDependencies": {
     "electron": "^45.3.3",

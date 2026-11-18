@@ -11,6 +11,7 @@ import {
   contextInputBudget,
   estimateContextTokens,
   listSessions,
+  loadSession,
   permissionModeNotice,
   prepareContext,
   resolveContextConfig,
@@ -52,6 +53,7 @@ import { ConfigEditor, configFieldIndex } from "./config-editor.js";
 import type { McpReport } from "@cooper/host";
 import { createProvider } from "@cooper/host";
 import { buildResumeView } from "./session-view.js";
+import { CliSessionRun, reloadReadySession, requireReadySession } from "./session-run.js";
 import { formatSkills, resolveSkillPrompt, skillTools } from "./skills.js";
 import { parseSettings, readSettingsDocument, writeSettingsDocument, type SettingsDocument } from "@cooper/host";
 import { splitCompletedLines, splitContent } from "./stream-lines.js";
@@ -335,6 +337,7 @@ export function App({
   // Mutable so /clear can swap in a fresh SessionWriter; `sessionsEnabled`
   // is fixed at mount (--no-session never starts saving on clear either).
   const [sessionWriter, setSessionWriter] = useState(session);
+  useEffect(() => () => sessionWriter?.close(), [sessionWriter]);
   const sessionsEnabled = useRef(session !== null).current;
   const history = useRef<Message[]>([
     {
@@ -762,29 +765,37 @@ export function App({
       return;
     }
 
-    if (sessionWriter !== null && sessionWriter.id === loaded.header.id) {
+    if (sessionWriter?.hasWriteAccess && sessionWriter.id === loaded.header.id) {
       notice(`Already in session ${loaded.header.id}.`);
       return;
     }
 
-    let writer: SessionWriter;
+    let writer: SessionWriter | undefined;
     let effective: Message[];
     let next: ReturnType<typeof prepareConfig>;
     let changed: boolean;
     let compacted: boolean;
     const modeMessage = permissionModeNotice(modeState);
     try {
+      if (loaded.header.version === 2) {
+        writer = SessionWriter.from(loaded, { writeV2: true });
+        loaded = reloadReadySession(writer);
+      }
       next = prepareConfig(selectModelTier(active.current.config,
         loaded.modelSelection ? loaded.modelSelection.tier : undefined));
       changed = modelSelectionChanged(loaded.modelSelection, next.config);
       const original: Message[] = [history.current[0]!, ...loaded.messages, modeMessage];
       const result = await prepareModelHistory(next, original, needsResumeBudgetCheck(next.config, loaded.modelSelection));
-      if (result === null) return;
+      if (result === null) {
+        writer?.close();
+        return;
+      }
       effective = result;
       compacted = effective !== original;
-      writer = SessionWriter.from(loaded);
+      writer ??= SessionWriter.from(loaded);
       saveModelSelection(writer, next.config, original, effective);
     } catch (error) {
+      writer?.close();
       notice(
         `Could not open session: ${error instanceof Error ? error.message : String(error)}`,
         "error",
@@ -1076,12 +1087,27 @@ export function App({
         });
         return;
       }
+      if (sessionWriter && !sessionWriter.hasWriteAccess && parsed.kind === "command" &&
+          !["resume", "clear", "exit", "help", "status", "sessions", "tools", "mcp", "skills"].includes(parsed.name)) {
+        notice("Recover the last turn in Cooper Desktop or use /clear to start a new conversation.", "info");
+        return;
+      }
       await handleCommand(parsed);
       return;
     }
 
     const text = value.trim();
     if (!text || busyRef.current) return;
+    const durable = sessionWriter?.header.version === 2;
+    if (durable) {
+      try {
+        if (!sessionWriter!.hasWriteAccess) throw new Error("Recover the last turn in Cooper Desktop, then use /resume.");
+        reloadReadySession(sessionWriter!);
+      } catch (error) {
+        notice(visiblePreviewText(error instanceof Error ? error.message : String(error)), "error");
+        return;
+      }
+    }
     const { config, provider, tools } = active.current;
     const { showReasoning } = config;
 
@@ -1102,13 +1128,13 @@ export function App({
     const push = pushCommitted;
 
     setBusy(true);
-    push({ id: nextId.current++, kind: "user", text });
+    if (!durable) push({ id: nextId.current++, kind: "user", text });
     if (prompt.activation) {
       history.current.push(prompt.activation);
-      warnSession(sessionWriter?.appendMessage(prompt.activation) ?? null);
+      if (!durable) warnSession(sessionWriter?.appendMessage(prompt.activation) ?? null);
     }
     history.current.push(prompt.user);
-    warnSession(sessionWriter?.appendMessage(prompt.user) ?? null);
+    if (!durable) warnSession(sessionWriter?.appendMessage(prompt.user) ?? null);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -1231,7 +1257,14 @@ export function App({
       }
     };
 
+    let run: CliSessionRun | undefined;
+    const onStop = () => warnSession(run?.requestStop() ?? null);
     try {
+      if (durable) {
+        run = new CliSessionRun(sessionWriter!, prompt.activation ? [prompt.activation, prompt.user] : [prompt.user]);
+        controller.signal.addEventListener("abort", onStop, { once: true });
+        push({ id: nextId.current++, kind: "user", text });
+      }
       const preserve = preserveFittingHistory.current;
       preserveFittingHistory.current = false;
       for await (const event of runAgent({
@@ -1245,12 +1278,16 @@ export function App({
         useProviderEstimate: Boolean(config.modelSelection?.tier),
         preserveFittingInitialHistory: preserve,
         signal: controller.signal,
+        beforeTool: run?.beforeTool,
+        requireCompleteResponse: durable,
         approve: (request) =>
           new Promise<ApprovalOutcome>((resolve) => {
+            run?.awaitingApproval();
             approvalResolver.current = resolve;
             setPendingApproval({ id: nextId.current++, request });
           }),
       })) {
+        if (run) run.record(event, history.current);
         switch (event.type) {
           case "turn-start":
             break;
@@ -1348,17 +1385,18 @@ export function App({
 
         // Persist only messages (and compaction snapshots); text/reasoning
         // deltas are ephemeral and never enter the conversation history.
-        if (
+        if (!run && (
           event.type === "assistant-done" ||
           event.type === "tool-end" ||
           event.type === "context-compacted"
-        ) {
+        )) {
           warnSession(
             sessionWriter?.recordEvent(event, history.current) ?? null,
           );
         }
       }
     } catch (error) {
+      warnSession(run?.finish(true) ?? null);
       resolveApproval("deny");
       setLive(null);
       if (controller.signal.aborted) {
@@ -1380,6 +1418,16 @@ export function App({
         });
       }
     } finally {
+      controller.signal.removeEventListener("abort", onStop);
+      if (durable) {
+        try {
+          const current = loadSession(sessionWriter!.file);
+          history.current = [history.current[0]!, ...current.messages];
+          requireReadySession(current);
+        } catch {
+          sessionWriter!.close();
+        }
+      }
       abortRef.current = null;
       busyRef.current = false;
       setBusy(false);

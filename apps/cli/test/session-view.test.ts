@@ -24,6 +24,11 @@ function session(
     toolUi,
     preset: null,
     repaired: 0,
+    submissions: new Map(),
+    runs: [],
+    damaged: false,
+    needsReview: false,
+    recoveryNeeded: false,
   };
 }
 

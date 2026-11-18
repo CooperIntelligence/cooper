@@ -334,6 +334,7 @@ export class AnthropicProvider implements Provider {
       new Anthropic({
         apiKey: options.apiKey,
         baseURL: options.baseURL,
+        maxRetries: 0,
       });
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.endpoint = createHash("sha256").update(this.client.baseURL).digest("hex");

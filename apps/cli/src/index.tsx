@@ -14,6 +14,7 @@ import {
   type LoadedSession,
 } from "@cooper/core";
 import { App, tuiRenderOptions } from "./app.js";
+import { reloadReadySession } from "./session-run.js";
 import {
   parseArgs,
   resolveModeForSession,
@@ -195,6 +196,11 @@ async function main(): Promise<void> {
 
     if (args.resume !== null) {
       resumed = resumeSession({ cwd: root, id: args.resume });
+      if (resumed.header.version === 2) {
+        if (!args.session) throw new Error("Resuming a v2 conversation requires session writes.");
+        session = SessionWriter.from(resumed, { writeV2: true });
+        resumed = reloadReadySession(session);
+      }
     }
     config = selectModelTier(config, args.tier ?? (resumed?.modelSelection ? resumed.modelSelection.tier : undefined));
 
@@ -216,7 +222,7 @@ async function main(): Promise<void> {
     }
 
     if (args.resume !== null && resumed !== null) {
-      session = args.session ? SessionWriter.from(resumed) : null;
+      session ??= args.session ? SessionWriter.from(resumed) : null;
     } else if (args.session) {
       session = SessionWriter.create({ cwd: root, model: config.model });
     }
@@ -272,6 +278,7 @@ async function main(): Promise<void> {
         resumed,
       });
     } finally {
+      session?.close();
       await prepared.close();
     }
     process.exitCode = code;
@@ -299,6 +306,7 @@ async function main(): Promise<void> {
     );
     await waitUntilExit();
   } finally {
+    session?.close();
     await prepared.close();
   }
 }

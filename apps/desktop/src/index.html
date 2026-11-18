@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
     <title>Cooper Desktop</title>
     <link rel="stylesheet" href="styles.css">
     <script src="renderer.js" defer></script>
   </head>
   <body>
     <aside class="sidebar">
-      <div class="brand"><span class="mark" aria-hidden="true">C</span> Cooper</div>
+      <div class="brand"><img src="assets/cooper-code-logo.png" alt="Cooper Code" width="308" height="72"></div>
       <button id="open-workspace" class="folder" type="button">Open workspace</button>
       <div id="workspace-path" class="workspace-path" hidden></div>
       <div class="session-heading"><h2>Conversations</h2><button id="new-chat" type="button" aria-label="New conversation">+</button></div>
@@ -22,17 +22,32 @@
         <span id="model" class="model"></span>
       </header>
       <section id="conversation" class="conversation" aria-label="Conversation">
-        <div id="empty" class="empty"><span class="mark" aria-hidden="true">C</span><p>Open a workspace to get started.</p></div>
+        <div id="empty" class="empty">
+          <img class="empty-mark" src="assets/cooper-icon-192.png" alt="" width="48" height="48">
+          <p>Open a workspace to get started.</p>
+        </div>
         <div id="messages" class="messages" role="log" aria-label="Messages"></div>
       </section>
       <div class="bottom">
         <div id="error" class="error" role="alert" hidden></div>
+        <div id="run-status" class="pending-draft run-status" hidden>
+          <span id="run-detail" role="status"></span>
+          <button id="continue-turn" type="button" hidden>Continue</button>
+        </div>
         <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
           <h2 id="approval-title"></h2>
           <pre id="approval-preview" tabindex="0"></pre>
-          <div class="actions"><button id="deny" type="button">Deny</button><button id="allow" class="primary" type="button">Approve</button></div>
+          <div class="actions">
+            <button id="stop-approval" type="button">Stop</button>
+            <button id="deny" type="button">Deny</button>
+            <button id="allow" class="primary" type="button">Approve</button>
+          </div>
         </section>
         <form id="composer">
+          <div id="pending-draft" class="pending-draft" hidden>
+            <span>This draft may have been sent. Check the conversation before sending it again.</span>
+            <button id="keep-editing" type="button">Keep editing</button>
+          </div>
           <textarea id="prompt" aria-label="Message" rows="2" placeholder="Ask Cooper about your workspace"></textarea>
           <div class="composer-actions">
             <label class="composer-label">Mode

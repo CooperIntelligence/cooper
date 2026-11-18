@@ -30,6 +30,8 @@ export * from "./home.js";
 export * from "./instructions.js";
 export * from "./skills.js";
 export * from "./session.js";
+export { hasSessionLocks, sessionWriterBusy, SessionBusyError } from "./session-lock.js";
+export type { RunEnd, RunPhase, RunReason, RunStatus, SessionRun, StopCause } from "./session-run.js";
 export * from "./mcp/config.js";
 export * from "./mcp/resources.js";
 export * from "./mcp/tool.js";
