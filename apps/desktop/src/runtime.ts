@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
-  PermissionPolicy, SessionWriter, createSkillTool, diffText, discoverSkills,
+  PermissionPolicy, SessionWriter, createRunCommandTool, createSkillTool, createWebSearchTool, diffText, discoverSkills,
   hasSessionLocks, isRuntimeNotice, latestRuntimeNotice, listSessions, loadProjectInstructions, loadSession, newSessionId, permissionModeNotice,
   resumeSession, runAgent, sessionWriterBusy, sessionsDir, workspaceKey,
   type ApprovalOutcome, type ApprovalRequest, type LoadedSession, type Message,
@@ -12,6 +12,7 @@ import {
 import {
   buildSystemPrompt, createProvider, loadConfig, modelBudget, needsResumeBudgetCheck,
   prepareTools, selectModelTier, transitionMessage, type Config, type PreparedTools,
+  writeSettingsDocument, type SettingsDocument,
 } from "@cooper/host";
 import type { Draft, DraftStore } from "./drafts.js";
 import type { ActiveTool, ApprovalEvent, DesktopDraft, DesktopEvent, DesktopMode, DesktopState, RunDisplay, ToolDisplay } from "./ipc.js";
@@ -104,6 +105,47 @@ export class DesktopRuntime {
     return { ...state, run: active?.writer.hasActiveRun ? active.run : state.run,
       approval: this.approval?.event, preparingTool: this.preparingTool, activeTool: this.activeTool,
       running: Boolean(this.running) };
+  }
+
+  saveConnection(config: Config, document: SettingsDocument, values: Record<string, unknown>): DesktopState | null {
+    this.requireIdle();
+    const workspace = this.workspace;
+    const chat = this.chat;
+    const selected = selectModelTier(config, chat?.config.modelSelection?.tier);
+    const provider = createProvider(selected);
+    if (!workspace || !chat) {
+      writeSettingsDocument(document, values);
+      return null;
+    }
+
+    let tools = workspace.tools;
+    if (config.shell.kind !== workspace.config.shell.kind || config.shell.executable !== workspace.config.shell.executable) {
+      const command = createRunCommandTool(config.shell);
+      tools = tools.map((tool) => tool.name === command.name ? command : tool);
+    }
+    if (config.webSearchApiKey !== workspace.config.webSearchApiKey) {
+      tools = tools.filter((tool) => tool.name !== "web_search");
+      if (config.webSearchApiKey) tools.push(createWebSearchTool(config.webSearchApiKey));
+    }
+    const previous = chat.config;
+    const budgetChanged = (selected.modelSelection?.inputLimit ?? 0) < (previous.modelSelection?.inputLimit ?? 0);
+    const checkBudget = budgetChanged || (Boolean(selected.modelSelection?.tier) &&
+      (selected.model !== previous.model || selected.protocol !== previous.protocol || selected.baseURL !== previous.baseURL));
+    if (checkBudget) {
+      const budget = modelBudget(selected, chat.messages, tools, provider);
+      if (budget.estimated > budget.limit) {
+        throw new Error(`${transitionMessage(selected, budget)} Open a new conversation and try again.`);
+      }
+    }
+
+    writeSettingsDocument(document, values);
+    workspace.config = config;
+    workspace.tools = tools;
+    chat.config = selected;
+    chat.provider = provider;
+    chat.recordMode = true;
+    chat.preserveFittingHistory ||= checkBudget;
+    return this.snapshot(workspace, chat);
   }
 
   async openWorkspace(directory: string): Promise<DesktopState> {

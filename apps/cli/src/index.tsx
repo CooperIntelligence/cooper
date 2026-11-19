@@ -25,15 +25,13 @@ import {
   IncompleteConfigError,
   loadConfig,
   selectModelTier,
+  writeOnboardingConfig,
   type ApprovalMode,
   type Config,
 } from "@cooper/host";
 import { runHeadless } from "./headless.js";
 import { prepareTools, type PreparedTools } from "@cooper/host";
-import {
-  runOnboarding,
-  writeOnboardingConfig,
-} from "./onboarding.js";
+import { runOnboarding } from "./onboarding.js";
 import { createProvider } from "@cooper/host";
 import { userConfigFile } from "@cooper/host";
 

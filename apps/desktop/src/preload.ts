@@ -2,7 +2,13 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopApi, DesktopEvent } from "./ipc.js";
 
 const cooper: DesktopApi = {
+  windowsTitlebar: process.platform === "win32",
+  openMenu: (id, x, y) => ipcRenderer.invoke("cooper:menu", id, x, y),
   getState: () => ipcRenderer.invoke("cooper:state"),
+  getConnection: () => ipcRenderer.invoke("cooper:config"),
+  testConnection: (revision, input) => ipcRenderer.invoke("cooper:config-test", revision, input),
+  saveConnection: (revision, input) => ipcRenderer.invoke("cooper:config-save", revision, input),
+  openConfigFolder: () => ipcRenderer.invoke("cooper:config-folder"),
   openWorkspace: () => ipcRenderer.invoke("cooper:open"),
   newChat: () => ipcRenderer.invoke("cooper:new"),
   restoreSession: (id) => ipcRenderer.invoke("cooper:restore", id),

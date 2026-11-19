@@ -1,3 +1,16 @@
+import type { OnboardingResult } from "@cooper/host";
+
+export type ConnectionInput = Omit<OnboardingResult, "apiKey" | "contextWindow"> & { apiKey?: string };
+export type ConnectionStatus =
+  | { kind: "invalid"; file: string; message: string }
+  | {
+    kind: "ready" | "incomplete";
+    revision: string;
+    fields: Partial<Omit<ConnectionInput, "apiKey">>;
+    hasKey: boolean;
+  };
+export type ConnectionTest = { ok: true } | { ok: false; error: string };
+
 export type DesktopMode = "ask" | "plan";
 export type ChatMessage = { role: "user" | "assistant"; text: string };
 export type ToolDisplay = {
@@ -57,7 +70,13 @@ export type DesktopEvent =
   | { type: "approval-closed"; id: string; preparing?: boolean };
 
 export type DesktopApi = {
+  windowsTitlebar: boolean;
+  openMenu(id: string, x: number, y: number): Promise<void>;
   getState(): Promise<DesktopState | null>;
+  getConnection(): Promise<ConnectionStatus>;
+  testConnection(revision: string, input: ConnectionInput): Promise<ConnectionTest>;
+  saveConnection(revision: string, input: ConnectionInput): Promise<DesktopState | null>;
+  openConfigFolder(): Promise<void>;
   openWorkspace(): Promise<DesktopState | null>;
   newChat(): Promise<DesktopState>;
   restoreSession(id: string): Promise<DesktopState>;

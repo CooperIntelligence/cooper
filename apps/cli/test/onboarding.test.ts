@@ -7,7 +7,7 @@ import {
   mergeOnboardingConfig,
   probeRequest,
   writeOnboardingConfig,
-} from "../src/onboarding.js";
+} from "@cooper/host";
 
 describe("probeRequest", () => {
   it("targets the OpenAI models listing with a bearer token", () => {

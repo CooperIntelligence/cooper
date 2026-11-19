@@ -1,6 +1,8 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type IpcMainInvokeEvent } from "electron";
+import { probeEndpoint, userConfigFile } from "@cooper/host";
+import { DesktopConnection } from "./connection.js";
 import { DraftStore } from "./drafts.js";
 import type { DesktopEvent } from "./ipc.js";
 import { webLink } from "./links.js";
@@ -10,12 +12,17 @@ function openWindow(): void {
   const page = path.join(__dirname, "index.html");
   const pageUrl = pathToFileURL(page).href;
   const icon = path.join(__dirname, "assets", "cooper-icon-512.png");
+  const windows = process.platform === "win32";
   app.dock?.setIcon(icon);
   const window = new BrowserWindow({
     title: "Cooper Desktop", width: 1150, height: 790, minWidth: 690, minHeight: 510,
     icon,
     show: false,
     backgroundColor: "#edf3fa",
+    ...(windows ? {
+      titleBarStyle: "hidden",
+      titleBarOverlay: { height: 40, color: "#edf3fa", symbolColor: "#16324f" },
+    } as const : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -23,6 +30,16 @@ function openWindow(): void {
       nodeIntegration: false,
     },
   });
+  const menu = windows ? Menu.buildFromTemplate([
+    { id: "file", role: "fileMenu" },
+    { id: "edit", role: "editMenu" },
+    { id: "view", role: "viewMenu" },
+    { id: "window", role: "windowMenu" },
+  ]) : null;
+  if (menu) {
+    window.setMenu(menu);
+    window.setMenuBarVisibility(false);
+  }
   const emit = (event: DesktopEvent) => {
     if (!window.isDestroyed()) window.webContents.send("cooper:event", event);
   };
@@ -30,6 +47,7 @@ function openWindow(): void {
     emit({ type: "draft-error", key, message: `Could not save draft: ${String(error)}` });
   });
   const runtime = new DesktopRuntime(emit, drafts);
+  const connection = new DesktopConnection();
 
   function handle(channel: string, handler: (...args: unknown[]) => unknown): void {
     ipcMain.handle(channel, (event: IpcMainInvokeEvent, ...args: unknown[]) => {
@@ -44,6 +62,29 @@ function openWindow(): void {
   }
 
   handle("cooper:state", () => runtime.getState());
+  handle("cooper:config", () => connection.read());
+  handle("cooper:config-test", (revision, input) => {
+    const { config } = connection.prepare(revision, input);
+    return probeEndpoint(config.protocol, config.baseURL, config.apiKey);
+  });
+  handle("cooper:config-save", (revision, input) => {
+    const { config, document, values } = connection.prepare(revision, input);
+    return runtime.saveConnection(config, document, values);
+  });
+  handle("cooper:config-folder", async () => {
+    const error = await shell.openPath(path.dirname(userConfigFile()));
+    if (error) throw new Error("Could not open the Cooper configuration directory.");
+  });
+  handle("cooper:menu", (id, x, y) => {
+    const submenu = typeof id === "string" ? menu?.getMenuItemById(id)?.submenu : undefined;
+    if (!submenu || typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error("Invalid menu request.");
+    }
+    const zoom = window.webContents.getZoomFactor();
+    const { width, height } = window.getContentBounds();
+    submenu.popup({ window, x: Math.max(0, Math.min(width - 1, Math.round(x * zoom))),
+      y: Math.max(0, Math.min(height - 1, Math.round(y * zoom))) });
+  });
   handle("cooper:open", async () => {
     const selection = await dialog.showOpenDialog(window, { properties: ["openDirectory"] });
     const directory = selection.filePaths[0];

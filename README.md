@@ -32,7 +32,9 @@ npm run dev -- --resume <id>                        # 继续已有会话
 
 ### Desktop 开发预览
 
-完成上述模型配置后，在仓库根目录运行 `npm run dev:desktop`。首次启动会下载 Electron 运行时。在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。桌面端提供 `ask` 和 `plan` 两种权限模式。
+在仓库根目录运行 `npm run dev:desktop`。首次启动会下载 Electron 运行时。Desktop 与 CLI 共用 `~/.cooper/config.json`，缺少模型配置时会在打开工作区前提供引导。之后可从侧栏的 **Model settings** 修改连接。
+
+在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。桌面端提供 `ask` 和 `plan` 两种权限模式。
 
 输入框默认用 Enter 发送，Shift+Enter 换行。可在 **Send with** 中改为 Ctrl/⌘+Enter 或 Shift+Enter 发送，单按 Enter 即换行。此偏好会在重启后保留。
 

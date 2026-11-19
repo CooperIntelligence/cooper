@@ -1,5 +1,6 @@
 import type { ActiveTool, ChatMessage, DesktopApi, DesktopDraft, DesktopEvent, DesktopMode, DesktopState, RunDisplay, ToolDisplay } from "./ipc.js";
 import { renderMarkdown } from "./markdown.js";
+import { bindModelSetup } from "./model-setup.js";
 
 declare global {
   interface Window { cooper: DesktopApi }
@@ -13,6 +14,12 @@ function element<T extends HTMLElement>(id: string): T {
 
 const api = window.cooper;
 const openButton = element<HTMLButtonElement>("open-workspace");
+const settingsButton = element<HTMLButtonElement>("model-settings");
+const main = element("main");
+const newWorkspace = element<HTMLButtonElement>("new-workspace");
+const titlebar = element("window-titlebar");
+const sidebar = element("sidebar");
+const toggleSidebar = element<HTMLButtonElement>("toggle-sidebar");
 const newButton = element<HTMLButtonElement>("new-chat");
 const sendButton = element<HTMLButtonElement>("send");
 const stopButton = element<HTMLButtonElement>("stop");
@@ -22,6 +29,8 @@ const denyButton = element<HTMLButtonElement>("deny");
 const mode = element<HTMLSelectElement>("mode");
 const sendShortcut = element<HTMLSelectElement>("send-shortcut");
 const composer = element<HTMLFormElement>("composer");
+const sendOptions = element("send-options");
+const model = element("model");
 const prompt = element<HTMLTextAreaElement>("prompt");
 const pendingDraft = element("pending-draft");
 const keepEditingButton = element<HTMLButtonElement>("keep-editing");
@@ -40,7 +49,15 @@ const savedShortcut = localStorage.getItem(sendShortcutKey);
 if (savedShortcut && Array.from(sendShortcut.options).some((option) => option.value === savedShortcut)) {
   sendShortcut.value = savedShortcut;
 }
-sendShortcut.addEventListener("change", () => localStorage.setItem(sendShortcutKey, sendShortcut.value));
+function displaySendShortcut(): void {
+  sendButton.title = `Send (${sendShortcut.selectedOptions[0]?.textContent})`;
+}
+
+sendShortcut.addEventListener("change", () => {
+  localStorage.setItem(sendShortcutKey, sendShortcut.value);
+  displaySendShortcut();
+});
+displaySendShortcut();
 
 let state: DesktopState | null = null;
 let liveAnswer: { row: HTMLElement; text: string; timer?: ReturnType<typeof setTimeout> } | undefined;
@@ -49,6 +66,7 @@ let liveTool: (ActiveTool & { card: ToolCard; timer: ReturnType<typeof setInterv
 let pendingApproval: string | undefined;
 let preparingTool = false;
 let working = false;
+let connectionReady = false;
 let reattached = false;
 let running = false;
 let displayedRun: RunDisplay | undefined;
@@ -67,19 +85,30 @@ function showError(error: unknown): void {
   errorBox.hidden = false;
 }
 
+function isReadOnly(): boolean {
+  return displayedRun?.status === "in-use" || displayedRun?.status === "read-only";
+}
+
+function updateSendButton(): void {
+  sendButton.disabled = working || isReadOnly() || !state || prompt.readOnly || Boolean(displayedRun?.needsReview) || !prompt.value.trim();
+}
+
 function updateControls(): void {
-  openButton.disabled = working;
+  openButton.disabled = working || !connectionReady;
+  newWorkspace.disabled = working || !connectionReady;
+  settingsButton.disabled = working;
   newButton.disabled = working || state === null;
   for (const button of sessions.querySelectorAll("button")) button.disabled = working;
-  const readOnly = displayedRun?.status === "in-use" || displayedRun?.status === "read-only";
-  mode.disabled = working || readOnly || state === null;
+  mode.disabled = working || isReadOnly() || state === null;
   prompt.disabled = working || state === null;
   prompt.readOnly = state?.draft.pending ?? false;
-  sendButton.disabled = working || readOnly || state === null || prompt.readOnly || Boolean(displayedRun?.needsReview);
+  updateSendButton();
   pendingDraft.hidden = !prompt.readOnly;
   keepEditingButton.disabled = working;
   stopButton.hidden = !running;
-  composer.hidden = pendingApproval !== undefined;
+  sendButton.hidden = running;
+  composer.hidden = state === null || pendingApproval !== undefined;
+  if (composer.hidden && sendOptions.matches(":popover-open")) sendOptions.hidePopover();
   const stopping = displayedRun?.status === "stopping";
   stopButton.disabled = stopping;
   approvalStopButton.disabled = stopping;
@@ -115,6 +144,7 @@ function displayDraft(draft: DesktopDraft): void {
 }
 
 function saveCurrentDraft(): void {
+  updateSendButton();
   const draft = state?.draft;
   if (draft && !draft.pending) void api.saveDraft(draft.key, prompt.value).catch(showError);
 }
@@ -254,11 +284,16 @@ function appendReasoning(delta: string): void {
 function displayState(next: DesktopState, resetConversation: boolean): void {
   state = next;
   displayedRun = next.run;
+  main.dataset.view = next.sessionId === null ? "new" : "chat";
   const workspacePath = element("workspace-path");
   workspacePath.hidden = false;
   workspacePath.title = next.root;
   workspacePath.textContent = next.root;
-  element("model").textContent = next.model;
+  newWorkspace.textContent = next.root.split(/[\\/]/).filter(Boolean).at(-1) ?? next.root;
+  newWorkspace.title = next.root;
+  newWorkspace.setAttribute("aria-label", `Change workspace from ${newWorkspace.textContent}`);
+  model.textContent = next.model;
+  model.title = next.model;
   mode.value = next.mode;
   const active = next.sessions.find(({ id }) => id === next.sessionId);
   const title = element("conversation-title");
@@ -286,7 +321,6 @@ function displayState(next: DesktopState, resetConversation: boolean): void {
     }
     const empty = element("empty");
     empty.hidden = next.messages.length > 0 || next.activeTool !== undefined;
-    empty.querySelector("p")!.textContent = "Start a conversation.";
     preparingTool = Boolean(next.preparingTool);
     if (next.activeTool) showActiveTool(next.activeTool);
     scrollToEnd();
@@ -421,8 +455,14 @@ messages.addEventListener("click", (event) => {
   void api.openLink(target.href).catch(showError);
 });
 
-openButton.addEventListener("click", () => { void transition(() => api.openWorkspace()); });
-newButton.addEventListener("click", () => { void transition(() => api.newChat()); });
+function focusNewPrompt(): void {
+  if (state?.sessionId === null && !prompt.disabled && !prompt.readOnly) prompt.focus({ preventScroll: true });
+}
+
+for (const button of [openButton, newWorkspace]) {
+  button.addEventListener("click", () => { void transition(() => api.openWorkspace()).then(focusNewPrompt); });
+}
+newButton.addEventListener("click", () => { void transition(() => api.newChat()).then(focusNewPrompt); });
 mode.addEventListener("change", () => { void transition(() => api.setMode(mode.value as DesktopMode), false); });
 allowButton.addEventListener("click", () => { void approve(true); });
 denyButton.addEventListener("click", () => { void approve(false); });
@@ -474,7 +514,32 @@ prompt.addEventListener("keydown", (event) => {
 
 const unsubscribe = api.subscribe(receive);
 window.addEventListener("beforeunload", unsubscribe, { once: true });
+if (api.windowsTitlebar) {
+  titlebar.hidden = false;
+  toggleSidebar.addEventListener("click", () => {
+    sidebar.hidden = !sidebar.hidden;
+    toggleSidebar.setAttribute("aria-expanded", String(!sidebar.hidden));
+  });
+  for (const button of titlebar.querySelectorAll<HTMLButtonElement>("button[data-menu]")) {
+    button.addEventListener("mousedown", (event) => {
+      // Native Edit commands should still target the focused editor.
+      if (event.button === 0) event.preventDefault();
+    });
+    button.addEventListener("click", () => {
+      const { left, bottom } = button.getBoundingClientRect();
+      void api.openMenu(button.dataset.menu!, left, bottom).catch(showError);
+    });
+  }
+}
+const setup = bindModelSetup(api, (next) => {
+  connectionReady = true;
+  if (next) displayState(next, false);
+  updateControls();
+  if (next === null && !state) newWorkspace.focus();
+}, showError);
+settingsButton.addEventListener("click", setup.open);
 updateControls();
+void setup.start();
 void api.getState().then((current) => {
   if (!current || state) return;
   displayState(current, true);

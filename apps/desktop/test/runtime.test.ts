@@ -4,6 +4,7 @@ import path from "node:path";
 import { hasSessionLocks, SessionWriter, resumeSession, runCommandTool, sessionsDir, type AssistantMessage, type ChatRequest, type ProviderEvent, type Tool } from "@cooper/core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DraftStore } from "../src/drafts.js";
+import { DesktopConnection } from "../src/connection.js";
 import type { DesktopEvent } from "../src/ipc.js";
 import { DesktopRuntime } from "../src/runtime.js";
 
@@ -82,6 +83,24 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.dispose();
   await rm(directory, { recursive: true, force: true });
+});
+
+it("applies saved connection settings to the next message without replacing the conversation or draft", async () => {
+  replies = [done, done];
+  const previous = await runtime.send("First message");
+  runtime.saveDraft(previous.draft.key, "Second message");
+  const connection = new DesktopConnection(home);
+  const status = connection.read();
+  if (status.kind !== "ready") throw new Error("Expected valid configuration");
+  const { config, document, values } = connection.prepare(status.revision, {
+    ...status.fields, model: "new-model",
+  });
+
+  const state = runtime.saveConnection(config, document, values);
+  expect(state).toMatchObject({ sessionId: previous.sessionId, model: "new-model", draft: { text: "Second message" } });
+  expect(state?.messages).toEqual(previous.messages);
+  await runtime.send("Second message");
+  expect(requests.map(({ model }) => model)).toEqual(["test-model", "new-model"]);
 });
 
 it.each(hasSessionLocks() ? [1, 2] : [1])("restores the tool results in a v%i conversation", async (version) => {
