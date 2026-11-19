@@ -3,6 +3,7 @@ import type { ApprovalMode } from "@cooper/host";
 import type { Settings } from "@cooper/host";
 
 export type ParsedArgs = {
+  maintenance?: "update" | "check-update" | "rollback";
   tier?: ModelTier;
   /** Explicit --mode; otherwise use the saved or configured mode. */
   mode: ApprovalMode | undefined;
@@ -40,7 +41,7 @@ function parseModeValue(value: string | undefined): ApprovalMode {
  *
  * Accepted forms:
  *   cooper                                interactive
- *   cooper "fix the tests"                shorthand for --print
+ *   cooper update [--check] / rollback    maintenance
  *   cooper -p "..." / --print=...         non-interactive
  *   cooper -p -   / -p                    prompt from stdin
  *   -m/--mode, -C/--cwd, --flag=value
@@ -58,6 +59,18 @@ export function parseArgs(argv: string[]): ParsedArgs {
     mcpProject: false,
     help: false,
   };
+
+  if (argv[0] === "update") {
+    if (argv.length === 1) return { ...parsed, maintenance: "update" };
+    if (argv.length === 2 && argv[1] === "--check") {
+      return { ...parsed, maintenance: "check-update" };
+    }
+    throw new Error("Usage: cooper update [--check]");
+  }
+  if (argv[0] === "rollback") {
+    if (argv.length === 1) return { ...parsed, maintenance: "rollback" };
+    throw new Error("Usage: cooper rollback");
+  }
 
   const takeValue = (index: number, flag: string): string => {
     const value = argv[index + 1];
@@ -208,8 +221,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
           }
           throw new Error(`Unexpected extra argument: ${arg}. Try --help.`);
         }
-        parsed.prompt = arg;
-        break;
+        throw new Error(`Unknown command: ${arg}. Use -p to send a prompt, or try --help.`);
       }
     }
   }

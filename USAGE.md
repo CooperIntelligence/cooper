@@ -17,8 +17,9 @@ npm run build              # 打包到 apps/cli/dist/cooper.mjs（bin 名 cooper
 
 | 参数 | 行为 |
 | --- | --- |
-| 位置参数 | 单次请求的提示，等价于 `-p <文本>` |
-| `-p` / `--print [文本]` | 无头单次请求；省略文本或写 `-` 时从 stdin 读取 |
+| `-p` / `--print [文本]` | 显式启动无头单次请求，省略文本或写 `-` 时从 stdin 读取 |
+| `update [--check]` | 更新命令，当前构建会提示在线更新尚未接入 |
+| `rollback` | 通过原生 launcher 激活上一个本地安装版本 |
 | `-m` / `--mode <模式>` | 启动模式：`plan`、`ask`、`auto` |
 | `-C` / `--cwd <目录>` | 工作区目录，默认启动目录 |
 | `-r` / `--resume <id>` | 继续已保存的会话；接受完整 id 或唯一前缀 |
@@ -38,6 +39,8 @@ npm run build              # 打包到 apps/cli/dist/cooper.mjs（bin 名 cooper
 - 启动模式取值顺序：`--mode` > 会话保存的 `plan`/`ask` > `config.json` 的 `mode` > `ask`。配置里的 `mode` 只接受 `plan` 和 `ask`，环境变量不参与选择；要在一个新进程里启用自动批准，必须显式传 `--mode auto`。
 
 ## 无头模式（`-p`）
+
+旧脚本中的 `cooper "解释这个项目"` 改用 `cooper -p "解释这个项目"`。裸文本按命令解析，未知命令直接报错。
 
 ```bash
 npm run --silent dev -- -p "解释这个项目的入口" > answer.md   # --silent 避免 npm 输出命令标题

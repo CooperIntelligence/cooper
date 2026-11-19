@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, readFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { inject } from "postject";
@@ -31,6 +31,7 @@ function run(label, args) {
   }
 }
 
+await mkdir(path.dirname(exePath), { recursive: true });
 run("bundle", ["scripts/build.mjs"]);
 run("sea-config", ["--experimental-sea-config", "scripts/sea-config.json"]);
 

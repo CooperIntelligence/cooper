@@ -39,8 +39,10 @@ const HELP = `Cooper — a terminal coding agent
 
 Usage:
   cooper                          start the interactive TUI
-  cooper "fix the failing test"   one-shot; prints the answer to stdout
+  cooper -p "fix the failing test"  one-shot; prints the answer to stdout
   cooper -p - < prompt.txt        read the prompt from stdin
+  cooper update [--check]         online update command (updater pending)
+  cooper rollback                 activate the previous native CLI version
 
 Options:
   -m, --mode <mode>   override the startup mode: ask | auto | plan
@@ -133,6 +135,13 @@ async function main(): Promise<void> {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
     fail(error);
+  }
+
+  if (args.maintenance === "rollback") {
+    fail("Rollback requires Cooper's native launcher. Run cooper rollback from the native installation.");
+  }
+  if (args.maintenance !== undefined) {
+    fail("Online updates are unavailable in this build. For an npm installation, use npm to update Cooper.");
   }
 
   if (args.help) {

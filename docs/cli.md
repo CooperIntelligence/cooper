@@ -8,7 +8,7 @@
 
 [`parseArgs()`](../apps/cli/src/args.ts) 是纯函数：不读文件、不读环境变量，因此可以直接单测（[测试](../apps/cli/test/args.test.ts)）。它同时负责组合约束——只允许一个提示、`--resume` 与 `--no-session` 互斥、`--sessions` 不能带提示——并在解析失败时给出可执行的错误信息。
 
-[入口](../apps/cli/src/index.tsx)决定三种去向：TUI、单次无头请求、列出会话。`--sessions` 在读取配置之前执行，因此配置缺失时仍能查看会话。工作区由 `--cwd` / `-C` 指定，[`resolveRoot()`](../apps/cli/src/index.tsx) 校验它是存在的目录，随后 `process.chdir()`，使文件工具、命令启动目录、项目指令、项目级 MCP 配置和会话归属同一个根。
+[入口](../apps/cli/src/index.tsx)在解析工作区和读取模型配置前分流 `update [--check]` 和 `rollback`。在线更新当前返回不可用，原生 launcher 直接处理回滚。无头单次请求由 `-p` 或 `--print` 显式启动。`--sessions` 在读取配置之前执行，因此配置缺失时仍能查看会话。工作区由 `--cwd` / `-C` 指定，[`resolveRoot()`](../apps/cli/src/index.tsx) 校验它是存在的目录，随后 `process.chdir()`，使文件工具、命令启动目录、项目指令、项目级 MCP 配置和会话归属同一个根。
 
 ## 无头输出契约
 
