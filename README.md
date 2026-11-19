@@ -1,6 +1,6 @@
 # Cooper Code
 
-Cooper Code 是在终端里工作的 AI 编码助手。用自然语言交代任务，它会阅读代码、修改文件、运行测试，再把结果带回同一个对话。
+Cooper Code 是 AI 编码助手，提供终端界面和 Electron 桌面开发预览。用自然语言交代任务，它会阅读代码、修改文件、运行测试，再把结果带回同一个对话。
 
 ## 它能做什么
 
@@ -29,6 +29,20 @@ npm run --silent dev -- -p "解释这个项目的入口"      # 单次请求，�
 npm run dev -- --sessions                           # 列出当前工作区的会话
 npm run dev -- --resume <id>                        # 继续已有会话
 ```
+
+### Desktop 开发预览
+
+在仓库根目录运行 `npm run dev:desktop`。首次启动会下载 Electron 运行时。Desktop 与 CLI 共用 `~/.cooper/config.json`，缺少模型配置时会在打开工作区前提供引导。之后可从侧栏的 **Model settings** 修改连接。
+
+在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。桌面端提供 `ask` 和 `plan` 两种权限模式。
+
+输入框默认用 Enter 发送，Shift+Enter 换行。可在 **Send with** 中改为 Ctrl/⌘+Enter 或 Shift+Enter 发送，单按 Enter 即换行。此偏好会在重启后保留。
+
+Desktop 会按工作区和会话保存草稿，用户消息写入会话后才清空输入框。重开时如有发送状态待确认的草稿，先检查会话记录，再选择继续编辑。
+
+Desktop 新建的 v2 会话会记录回合终态。重开时，Cooper 会核对未确认的提交，并在找到原记录后打开对应会话。被停止或中断的回合可点 **Continue**。如果有副作用的工具结果未知，先点 **Review interrupted tools** 做只读核对，再确认继续。TUI 和 headless 可以恢复已完成的 v2 会话，待恢复的回合在 Desktop 处理。已有 v1 会话继续使用原格式。
+
+模型端点提供的推理文本或摘要可以在当次对话里展开查看。开启配置中的 `showReasoning` 会默认展开。推理展示不会随会话保存。
 
 ## 文档
 

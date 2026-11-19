@@ -370,6 +370,25 @@ describe("run_command", () => {
     expect(result.content).toContain("exit code: 3");
   });
 
+  it("cancels a running command", async () => {
+    const controller = new AbortController();
+    const marker = path.join(root, "running.txt");
+    const running = runCommandTool.execute({
+      command: "node -e \"require('node:fs').writeFileSync('running.txt','running');setTimeout(()=>{},60000)\"",
+      timeout_ms: 60_000,
+    }, { root, signal: controller.signal });
+
+    try {
+      await expect.poll(() => fs.readFile(marker, "utf8").catch(() => ""), { timeout: 4_000 }).toBe("running");
+    } finally {
+      controller.abort();
+    }
+    await expect(running).resolves.toMatchObject({
+      isError: true,
+      content: expect.stringContaining("Command cancelled."),
+    });
+  }, 10_000);
+
   it("rejects working directories outside the workspace", async () => {
     await expect(
       runCommandTool.execute({ command: "echo x", cwd: ".." }, { root }),

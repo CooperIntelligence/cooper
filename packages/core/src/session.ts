@@ -5,6 +5,11 @@ import type { AgentEvent } from "./agent.js";
 import { cooperHome } from "./home.js";
 import { modelSelectionSchema, type ModelSelection } from "./model-selection.js";
 import type { PermissionPreset } from "./permissions.js";
+import { acquireSessionLock } from "./session-lock.js";
+import {
+  lifecycleRecordSchema, messageMetaSchema, type LifecycleRecord, type MessageMeta,
+  type RunEnd, type RunPhase, type SessionRun, type StopCause, type Submission,
+} from "./session-run.js";
 import { isContinuation } from "./provider/continuation.js";
 import type { Message, RuntimeNoticeKind, ToolCall } from "./types.js";
 
@@ -32,11 +37,11 @@ export { cooperHome } from "./home.js";
  * process.
  */
 
-const SESSION_VERSION = 1;
+const LEGACY_SESSION_VERSION = 1;
 const SESSION_FILE_SUFFIX = ".jsonl";
 const HEADER_PREFIX_BYTES = 64 * 1024;
 
-export type SessionAction = "prune" | "summarize" | "truncate" | "model-switch";
+export type SessionAction = "prune" | "summarize" | "truncate" | "model-switch" | "recovery";
 
 export type SessionHeader = {
   type: "session";
@@ -55,6 +60,9 @@ export type SessionToolUi = {
   isError: boolean;
   denied: boolean;
   durationMs: number;
+  recovery?: "not-started" | "outcome-unknown" | "unconfirmed";
+  requiresReview?: boolean;
+  reviewRunId?: string;
 };
 
 export type SessionMessageRecord = {
@@ -62,6 +70,7 @@ export type SessionMessageRecord = {
   at: string;
   message: Message;
   ui?: SessionToolUi;
+  meta?: MessageMeta;
 };
 
 export type SessionCheckpointRecord = {
@@ -91,6 +100,7 @@ export type SessionRecord =
   | SessionMessageRecord
   | SessionCheckpointRecord
   | SessionPolicyRecord
+  | LifecycleRecord
   | { type: "model-selection"; at: string; selection: ModelSelection };
 
 export type SessionSummary = {
@@ -115,6 +125,11 @@ export type LoadedSession = {
   modelSelection?: ModelSelection;
   /** Number of malformed rows and dropped messages repaired during load. */
   repaired: number;
+  submissions: Map<string, Submission>;
+  runs: SessionRun[];
+  damaged: boolean;
+  needsReview: boolean;
+  recoveryNeeded: boolean;
 };
 
 export type CreateSessionOptions = {
@@ -125,6 +140,7 @@ export type CreateSessionOptions = {
   now?: Date;
   /** Explicit id (tests or import). Generated from the timestamp otherwise. */
   id?: string;
+  version?: 1 | 2;
 };
 
 export type ResumeSessionOptions = {
@@ -216,7 +232,7 @@ function isPermissionPreset(value: unknown): value is PermissionPreset {
 }
 
 function isRuntimeNoticeKind(value: unknown): value is RuntimeNoticeKind {
-  return value === "permission-mode" || value === "skill";
+  return value === "permission-mode" || value === "skill" || value === "recovery";
 }
 
 function parseMessage(value: unknown): Message | null {
@@ -300,6 +316,10 @@ function parseToolUi(value: unknown): SessionToolUi | undefined {
     denied: value.denied === true,
     durationMs:
       typeof value.durationMs === "number" ? value.durationMs : 0,
+    ...(value.recovery === "not-started" || value.recovery === "outcome-unknown" || value.recovery === "unconfirmed"
+      ? { recovery: value.recovery } : {}),
+    ...(typeof value.requiresReview === "boolean" ? { requiresReview: value.requiresReview } : {}),
+    ...(isString(value.reviewRunId) ? { reviewRunId: value.reviewRunId } : {}),
   };
 }
 
@@ -307,7 +327,7 @@ function parseHeader(value: Record<string, unknown>, file: string): SessionHeade
   if (value.type !== "session") {
     throw new Error(`Not a Cooper session file: ${file}`);
   }
-  if (value.version !== SESSION_VERSION) {
+  if (value.version !== LEGACY_SESSION_VERSION && value.version !== 2) {
     throw new Error(
       `Unsupported session version ${String(value.version)} in ${file}.`,
     );
@@ -322,7 +342,7 @@ function parseHeader(value: Record<string, unknown>, file: string): SessionHeade
   }
   return {
     type: "session",
-    version: SESSION_VERSION,
+    version: value.version,
     id: value.id,
     cwd: value.cwd,
     model: value.model,
@@ -333,6 +353,7 @@ function parseHeader(value: Record<string, unknown>, file: string): SessionHeade
 type TranscriptEntry = {
   message: Message;
   ui?: SessionToolUi;
+  meta?: MessageMeta;
 };
 
 /**
@@ -340,7 +361,9 @@ type TranscriptEntry = {
  * incomplete. Called on load because a process can die between recording the
  * assistant message and its tool results.
  */
-function repairEntries(entries: TranscriptEntry[]): {
+function repairEntries(entries: TranscriptEntry[], recover?: (
+  call: ToolCall, assistant: Extract<MessageMeta, { kind: "assistant" }>,
+) => TranscriptEntry): {
   entries: TranscriptEntry[];
   dropped: number;
 } {
@@ -363,12 +386,25 @@ function repairEntries(entries: TranscriptEntry[]): {
         if (candidate === undefined) break;
         if (candidate.message.role !== "tool") break;
         if (!expected.has(candidate.message.toolCallId)) break;
+        if (entry.meta?.kind === "assistant" && (
+          candidate.meta?.kind !== "tool" || candidate.meta.assistantId !== entry.meta.assistantId ||
+          candidate.meta.runId !== entry.meta.runId || candidate.meta.callId !== candidate.message.toolCallId
+        )) break;
         expected.delete(candidate.message.toolCallId);
         results.push(candidate);
         next += 1;
       }
 
       if (expected.size > 0) {
+        if (recover && entry.meta?.kind === "assistant" &&
+            new Set(message.toolCalls!.map(({ id }) => id)).size === message.toolCalls!.length) {
+          const assistant = entry.meta;
+          out.push(entry, ...message.toolCalls!.map((call) =>
+            results.find(({ message }) => message.role === "tool" && message.toolCallId === call.id) ?? recover(call, assistant),
+          ));
+          index = next;
+          continue;
+        }
         // Incomplete group: drop the assistant call and the partial results.
         dropped += 1 + results.length;
         index = next;
@@ -405,6 +441,33 @@ export function loadSession(file: string): LoadedSession {
   let modelSelection: ModelSelection | undefined;
   let skipped = 0;
   let entries: TranscriptEntry[] = [];
+  const submissions = new Map<string, Submission>();
+  const runs = new Map<string, SessionRun>();
+  const reviewEvidence = new Set<string>();
+  const dispatched = new Map<string, Extract<LifecycleRecord, { type: "tool-dispatched" }>>();
+
+  function readToolUi(value: unknown): SessionToolUi | undefined {
+    const ui = parseToolUi(value);
+    if (ui?.requiresReview && ui.reviewRunId) reviewEvidence.add(ui.reviewRunId);
+    return ui;
+  }
+
+  function observe(record: LifecycleRecord): boolean {
+    if (record.type === "run-start") {
+      if (runs.has(record.runId)) return false;
+      runs.set(record.runId, { runId: record.runId, turnId: record.turnId, startedAt: record.at,
+        reviewOnly: record.reviewOnly, reviewConfirmed: record.reviewConfirmed });
+      return true;
+    }
+    const run = runs.get(record.runId);
+    if (!run || run.turnId !== record.turnId || run.end) return false;
+    switch (record.type) {
+      case "stop-requested": run.stopRequested ??= record.reason; break;
+      case "run-end": run.end = record; break;
+      case "tool-dispatched": dispatched.set(JSON.stringify([record.runId, record.assistantId, record.callId]), record); break;
+    }
+    return true;
+  }
 
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -438,7 +501,21 @@ export function loadSession(file: string): LoadedSession {
           skipped += 1;
           continue;
         }
-        entries.push({ message, ui: parseToolUi(value.ui) });
+        const parsedMeta = header.version === 2 && value.meta !== undefined ? messageMetaSchema.safeParse(value.meta) : undefined;
+        if (parsedMeta && !parsedMeta.success) skipped += 1;
+        const meta = parsedMeta?.data;
+        if (meta?.kind === "submission" && message.role === "user" && !message.runtime) {
+          if (submissions.has(meta.requestId)) {
+            skipped += 1;
+            continue;
+          }
+          submissions.set(meta.requestId, { ...meta, text: message.content });
+        }
+        if (meta?.kind === "assistant" && meta.final && message.role === "assistant" && !message.toolCalls?.length) {
+          if (!observe({ type: "run-end", at: isString(value.at) ? value.at : header.createdAt,
+            runId: meta.runId, turnId: meta.turnId, status: "completed", reason: "completed", source: "observed" })) skipped += 1;
+        }
+        entries.push({ message, ui: readToolUi(value.ui), meta });
         break;
       }
 
@@ -450,7 +527,7 @@ export function loadSession(file: string): LoadedSession {
           continue;
         }
         const ui = Array.isArray(value.ui)
-          ? value.ui.map((entry) => parseToolUi(entry))
+          ? value.ui.map(readToolUi)
           : [];
         entries = messages.map((message, index) => ({
           message,
@@ -476,6 +553,15 @@ export function loadSession(file: string): LoadedSession {
         // A repeated header (e.g. from a future append) carries no new state.
         break;
 
+      case "run-start":
+      case "run-end":
+      case "stop-requested":
+      case "tool-dispatched": {
+        const record = lifecycleRecordSchema.safeParse(value);
+        if (header.version !== 2 || !record.success || !observe(record.data)) skipped += 1;
+        break;
+      }
+
       default:
         skipped += 1;
         break;
@@ -486,7 +572,25 @@ export function loadSession(file: string): LoadedSession {
     throw new Error(`Not a Cooper session file: ${file}`);
   }
 
-  const repaired = repairEntries(entries);
+  const damaged = skipped > 0 || !text.endsWith("\n");
+  let recoveryNeeded = false;
+  const repaired = repairEntries(entries, header.version === 2 ? (call, assistant) => {
+    recoveryNeeded = true;
+    const dispatch = dispatched.get(JSON.stringify([assistant.runId, assistant.assistantId, call.id]));
+    const end = runs.get(assistant.runId)?.end;
+    const recovery = dispatch ? "outcome-unknown" :
+      !damaged && end?.source === "observed" && end.phase !== "storage" ? "not-started" : "unconfirmed";
+    const content = recovery === "not-started"
+      ? "Tool was not executed because the run ended. Check the user's intent before proposing it again."
+      : "Tool outcome could not be verified after interruption. Check current state before any action that could repeat its effects.";
+    const requiresReview = recovery === "unconfirmed" || (recovery === "outcome-unknown" && dispatch?.mutable !== false);
+    if (requiresReview) reviewEvidence.add(assistant.runId);
+    return {
+      message: { role: "tool", toolCallId: call.id, content, isError: true },
+      ui: { toolName: call.name, summary: `${call.name}: ${recovery}`, isError: true, denied: false, durationMs: 0, recovery,
+        requiresReview, reviewRunId: assistant.runId },
+    };
+  } : undefined);
   const messages: Message[] = [];
   const toolUi = new Map<number, SessionToolUi>();
 
@@ -498,6 +602,9 @@ export function loadSession(file: string): LoadedSession {
     }
   }
 
+  const timeline = [...runs.values()];
+  const confirmation = timeline.findLastIndex(({ reviewConfirmed }) => reviewConfirmed);
+  const needsReview = timeline.slice(Math.max(0, confirmation)).some(({ runId }) => reviewEvidence.has(runId));
   return {
     header,
     file,
@@ -506,6 +613,11 @@ export function loadSession(file: string): LoadedSession {
     preset,
     ...(modelSelection === undefined ? {} : { modelSelection }),
     repaired: skipped + repaired.dropped,
+    submissions,
+    runs: timeline,
+    damaged,
+    needsReview,
+    recoveryNeeded,
   };
 }
 
@@ -518,6 +630,8 @@ export class SessionWriter {
   readonly file: string;
   private readonly toolUiByCall = new Map<string, SessionToolUi>();
   private separateTrailingRow = false;
+  private release?: () => void;
+  private activeRun?: { turnId: string; runId: string; assistantId?: string };
 
   private constructor(header: SessionHeader, file: string) {
     this.header = header;
@@ -526,6 +640,14 @@ export class SessionWriter {
 
   get id(): string {
     return this.header.id;
+  }
+
+  get hasWriteAccess(): boolean {
+    return this.header.version === 1 || this.release !== undefined;
+  }
+
+  get hasActiveRun(): boolean {
+    return this.activeRun !== undefined;
   }
 
   static create(options: CreateSessionOptions): SessionWriter {
@@ -541,49 +663,72 @@ export class SessionWriter {
     const file = path.join(dir, `${id}${SESSION_FILE_SUFFIX}`);
     const header: SessionHeader = {
       type: "session",
-      version: SESSION_VERSION,
+      version: options.version ?? LEGACY_SESSION_VERSION,
       id,
       cwd,
       model: options.model,
       createdAt: now.toISOString(),
     };
 
-    fs.writeFileSync(file, `${JSON.stringify(header)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      // Conversations can contain source code and command output.
-      mode: 0o600,
-    });
-    return new SessionWriter(header, file);
+    const writer = new SessionWriter(header, file);
+    if (header.version === 2) writer.release = acquireSessionLock(file);
+    try {
+      fs.writeFileSync(file, `${JSON.stringify(header)}\n`, {
+        encoding: "utf8", flag: "wx", mode: 0o600, flush: header.version === 2,
+      });
+      return writer;
+    } catch (error) {
+      writer.close();
+      throw error;
+    }
   }
 
   /** Continues an existing session, seeding tool labels for checkpoints. */
-  static from(session: LoadedSession): SessionWriter {
+  static from(session: LoadedSession, options: { writeV2?: boolean } = {}): SessionWriter {
     const writer = new SessionWriter(session.header, session.file);
-    const fd = fs.openSync(session.file, "r");
+    if (session.header.version === 2) {
+      if (!options.writeV2) throw new Error("Continue this v2 conversation in Cooper Desktop.");
+      writer.release = acquireSessionLock(session.file);
+    }
     try {
-      const size = fs.fstatSync(fd).size;
-      const last = Buffer.alloc(1);
-      writer.separateTrailingRow = size > 0 && fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 10;
-    } finally {
-      fs.closeSync(fd);
-    }
-    for (const [index, ui] of session.toolUi) {
-      const message = session.messages[index];
-      if (message?.role === "tool") {
-        writer.toolUiByCall.set(message.toolCallId, ui);
+      const current = writer.release ? loadSession(session.file) : session;
+      const fd = fs.openSync(session.file, "r");
+      try {
+        const size = fs.fstatSync(fd).size;
+        const last = Buffer.alloc(1);
+        writer.separateTrailingRow = size > 0 && fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 10;
+      } finally {
+        fs.closeSync(fd);
       }
+      for (const [index, ui] of current.toolUi) {
+        const message = current.messages[index];
+        if (message?.role === "tool") writer.toolUiByCall.set(message.toolCallId, ui);
+      }
+      return writer;
+    } catch (error) {
+      writer.close();
+      throw error;
     }
-    return writer;
+  }
+
+  close(): void {
+    const release = this.release;
+    this.release = undefined;
+    this.activeRun = undefined;
+    release?.();
   }
 
   private append(record: SessionRecord): Error | null {
     try {
+      if (this.header.version === 2 && !this.release) throw new Error("The session writer is closed.");
       const prefix = this.separateTrailingRow ? "\n" : "";
-      fs.appendFileSync(this.file, `${prefix}${JSON.stringify(record)}\n`, "utf8");
+      fs.appendFileSync(this.file, `${prefix}${JSON.stringify(record)}\n`, { encoding: "utf8", flush: this.header.version === 2 });
       this.separateTrailingRow = false;
       return null;
     } catch (error) {
+      // The failed append may have left a partial line. Keep a later terminal
+      // record readable even if the underlying storage has recovered.
+      if (this.header.version === 2) this.separateTrailingRow = true;
       return error instanceof Error ? error : new Error(String(error));
     }
   }
@@ -604,6 +749,7 @@ export class SessionWriter {
     message: Message,
     ui?: SessionToolUi,
     now: Date = new Date(),
+    meta?: MessageMeta,
   ): Error | null {
     // The system prompt is rebuilt per run (mode and instructions can change).
     if (message.role === "system") return null;
@@ -612,12 +758,69 @@ export class SessionWriter {
       type: "message",
       at: now.toISOString(),
       message,
+      ...(this.header.version === 2 && meta ? { meta } : {}),
     };
     if (message.role === "tool" && ui !== undefined) {
       record.ui = ui;
       this.toolUiByCall.set(message.toolCallId, ui);
     }
     return this.append(record);
+  }
+
+  startRun(turnId: string, options: { reviewOnly?: boolean; reviewConfirmed?: boolean } = {}): string {
+    if (this.header.version !== 2 || this.activeRun) throw new Error("Cannot start this session run.");
+    const runId = crypto.randomUUID();
+    const error = this.append({ type: "run-start", at: new Date().toISOString(), turnId, runId, ...options });
+    if (error) throw error;
+    this.activeRun = { turnId, runId };
+    return runId;
+  }
+
+  stopRequested(reason: StopCause): Error | null {
+    const run = this.activeRun;
+    if (!run) return null;
+    return this.append({ type: "stop-requested", at: new Date().toISOString(), turnId: run.turnId, runId: run.runId, reason });
+  }
+
+  beforeTool(call: ToolCall, mutable: boolean): void {
+    const run = this.activeRun;
+    if (!run?.assistantId) throw new Error("Tool dispatch has no persisted assistant call.");
+    const error = this.append({ type: "tool-dispatched", at: new Date().toISOString(), turnId: run.turnId,
+      runId: run.runId, assistantId: run.assistantId, callId: call.id, toolName: call.name, mutable });
+    if (error) throw error;
+  }
+
+  endRun(status: RunEnd["status"], reason: RunEnd["reason"], phase?: RunPhase): Error | null {
+    const run = this.activeRun;
+    if (!run) return null;
+    if (phase === "storage") {
+      // A write can reach the journal even when reporting failure. Preserve
+      // an atomically committed final answer before recording a fallback end.
+      try {
+        if (loadSession(this.file).runs.some(({ runId, end }) => runId === run.runId && end)) {
+          this.activeRun = undefined;
+          return null;
+        }
+      } catch { /* Attempt the terminal write if the journal could not be read. */ }
+    }
+    const error = this.append({ type: "run-end", at: new Date().toISOString(), turnId: run.turnId, runId: run.runId,
+      status, reason, phase, source: "observed" });
+    if (!error) this.activeRun = undefined;
+    return error;
+  }
+
+  recover(session: LoadedSession): Error | null {
+    if (this.header.version !== 2 || session.file !== this.file) throw new Error("Invalid session recovery.");
+    const checkpointError = session.recoveryNeeded ? this.append({ type: "checkpoint", action: "recovery", at: new Date().toISOString(),
+      messages: session.messages, ui: session.messages.map((_, index) => session.toolUi.get(index) ?? null) }) : null;
+    if (checkpointError) return checkpointError;
+    for (const run of session.runs) {
+      if (run.end) continue;
+      const error = this.append({ type: "run-end", at: new Date().toISOString(), turnId: run.turnId, runId: run.runId,
+        status: "interrupted", reason: "unknown", source: "recovered" });
+      if (error) return error;
+    }
+    return null;
   }
 
   appendModelSelection(selection: ModelSelection): Error | null {
@@ -683,10 +886,22 @@ export class SessionWriter {
                     ? { providerData: event.providerData }
                     : {}),
               };
-        return this.appendMessage(message, undefined, now);
+        const run = this.activeRun;
+        if (!run) return this.appendMessage(message, undefined, now);
+        const assistantId = crypto.randomUUID();
+        const final = !event.toolCalls.length;
+        const error = this.appendMessage(message, undefined, now, {
+          kind: "assistant", turnId: run.turnId, runId: run.runId, assistantId, final,
+        });
+        if (!error) {
+          run.assistantId = assistantId;
+          if (final) this.activeRun = undefined;
+        }
+        return error;
       }
 
-      case "tool-end":
+      case "tool-end": {
+        const run = this.activeRun;
         return this.appendMessage(
           {
             role: "tool",
@@ -700,9 +915,13 @@ export class SessionWriter {
             isError: event.isError,
             denied: event.denied,
             durationMs: event.durationMs,
+            ...(run && event.requiresReview ? { requiresReview: true, reviewRunId: run.runId } : {}),
           },
           now,
+          run?.assistantId ? { kind: "tool", turnId: run.turnId, runId: run.runId,
+            assistantId: run.assistantId, callId: event.call.id } : undefined,
         );
+      }
 
       case "context-compacted":
         return this.appendCheckpoint(event.action, messages, now);

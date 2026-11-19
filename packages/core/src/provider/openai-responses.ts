@@ -209,11 +209,12 @@ export class OpenAIResponsesProvider implements Provider {
           }
           break;
         case "response.failed":
-          throw new Error(event.response.error?.message ?? "OpenAI Responses request failed.");
+          throw Object.assign(new Error(event.response.error?.message ?? "OpenAI Responses request failed."),
+            { code: event.response.error?.code });
         case "response.incomplete":
           throw new Error(`OpenAI Responses returned an incomplete response (${event.response.incomplete_details?.reason ?? "unknown reason"}).`);
         case "error":
-          throw new Error(event.message);
+          throw Object.assign(new Error(event.message), { code: event.code });
         case "response.completed": {
           // Wait for the terminal response before handing any tool call to the agent.
           const { output, status, usage } = event.response;

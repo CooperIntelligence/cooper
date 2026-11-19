@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PermissionPolicy } from "@cooper/core";
-import { buildSystemPrompt, describeInstructions } from "../src/system-prompt.js";
+import { buildSystemPrompt, describeInstructions } from "@cooper/host";
 
 const interactiveAsk = new PermissionPolicy({
   preset: "ask",

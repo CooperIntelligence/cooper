@@ -1,6 +1,6 @@
 import { modelTierSchema, type ModelTier } from "@cooper/core";
-import type { ApprovalMode } from "./config.js";
-import type { Settings } from "./settings.js";
+import type { ApprovalMode } from "@cooper/host";
+import type { Settings } from "@cooper/host";
 
 export type ParsedArgs = {
   tier?: ModelTier;

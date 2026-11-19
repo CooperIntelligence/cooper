@@ -8,7 +8,7 @@ import { createBuiltinTools, type Provider } from "@cooper/core";
 import { render } from "ink";
 import { expect, it, vi } from "vitest";
 import { App } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig } from "@cooper/host";
 
 it("keeps both approvals visible for two writes in one model response", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cooper-tool-batch-"));

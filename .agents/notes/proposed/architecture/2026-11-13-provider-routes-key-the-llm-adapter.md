@@ -4,9 +4,9 @@ Status: proposed
 
 ## Problem
 
-Cooper 现在把 `protocol` 当作连接的第一分类：`apps/cli/src/settings.ts:17` 只接受
-`openai-chat` / `anthropic-messages` / `openai-responses`，`apps/cli/src/config.ts:29`
-把它和 model、baseURL、apiKey 并列为必填连接字段，`apps/cli/src/provider.ts:23-42`
+Cooper 现在把 `protocol` 当作连接的第一分类：`packages/host/src/settings.ts:17` 只接受
+`openai-chat` / `anthropic-messages` / `openai-responses`，`packages/host/src/config.ts:29`
+把它和 model、baseURL、apiKey 并列为必填连接字段，`packages/host/src/provider.ts:23-42`
 用三个 `if` 选适配器。厂商在这一层不可见。
 
 但真正的错不在“选了 protocol”，而在**把 protocol 当成有约束力的契约**。协议只是

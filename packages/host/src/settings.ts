@@ -26,8 +26,10 @@ const modelTier = z.strictObject({
   maxOutputTokens: z.number().int().positive().optional(),
 });
 
+export const providerProtocols = ["openai-chat", "anthropic-messages", "openai-responses"] as const;
+
 const settingsSchema = z.object({
-  protocol: z.enum(["openai-chat", "anthropic-messages", "openai-responses"]).optional(),
+  protocol: z.enum(providerProtocols).optional(),
   model: z.string().trim().min(1).optional(),
   baseURL: z.string().trim().min(1).optional(),
   apiKey: z.string().trim().min(1).optional(),

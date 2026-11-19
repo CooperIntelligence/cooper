@@ -22,7 +22,7 @@ export type ProviderData = Record<string, unknown>;
  * Host-authored context that is model-visible but must never be presented as
  * user input. `permission-mode` carries the latest permission mode notice.
  */
-export type RuntimeNoticeKind = "permission-mode" | "skill";
+export type RuntimeNoticeKind = "permission-mode" | "skill" | "recovery";
 
 export type Message =
   | { role: "system"; content: string }

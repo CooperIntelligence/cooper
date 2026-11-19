@@ -1,6 +1,8 @@
+import { setTimeout as wait } from "node:timers/promises";
 import type { Message, ProviderData, ToolCall } from "./types.js";
 import type { Provider, TokenUsage } from "./provider/types.js";
 import type { Continuation } from "./provider/continuation.js";
+import { providerRetryDelay } from "./provider/retry.js";
 import {
   DEFAULT_CONTEXT_CONFIG,
   estimateContextTokens,
@@ -50,6 +52,7 @@ export type ApprovalRequest = {
 
 export type AgentEvent =
   | { type: "turn-start"; turn: number }
+  | { type: "retry-wait"; attempt: number; maxAttempts: number; delayMs: number }
   | { type: "text-delta"; delta: string }
   /** Ephemeral reasoning summary. Never added to `messages`. */
   | { type: "reasoning-delta"; delta: string }
@@ -74,6 +77,7 @@ export type AgentEvent =
       denied: boolean;
       durationMs: number;
       approval?: "user-denied" | "process-grant";
+      requiresReview?: boolean;
     }
   | {
       type: "context-compacted";
@@ -106,6 +110,10 @@ export type RunAgentOptions = {
   contextBudget?: ContextSettings | false;
   useProviderEstimate?: boolean;
   preserveFittingInitialHistory?: boolean;
+  retryModelRequests?: boolean;
+  recoveryReadOnly?: boolean;
+  requireCompleteResponse?: boolean;
+  beforeTool?: (call: ToolCall, mutable: boolean) => void;
   /**
    * Called only when the permission policy returns "prompt". Returning
    * "deny" feeds a denial result back to the model instead of running the
@@ -275,8 +283,12 @@ export async function* runAgent(
     let providerData: ProviderData | undefined;
     let emittedText = false;
     let retried = false;
+    let attempt = 0;
+    let waitedMs = 0;
 
     for (;;) {
+      options.signal?.throwIfAborted();
+      attempt += 1;
       content = "";
       toolCalls = [];
       usage = undefined;
@@ -297,13 +309,19 @@ export async function* runAgent(
           tools: specs,
           signal: options.signal,
         })) {
+          options.signal?.throwIfAborted();
           if (event.type === "text") {
             emittedText = true;
             content += event.delta;
             yield { type: "text-delta", delta: event.delta };
           } else if (event.type === "reasoning") {
+            emittedText = true;
             yield { type: "reasoning-delta", delta: event.delta };
           } else if (event.type === "done") {
+            if ((options.requireCompleteResponse || event.message.toolCalls.length) &&
+                ["length", "max_tokens", "model_context_window_exceeded", "content_filter"].includes(event.finishReason ?? "")) {
+              throw new Error(`Model response stopped before completion (${event.finishReason}).`);
+            }
             completed = true;
             content = event.message.content;
             toolCalls = event.message.toolCalls;
@@ -319,13 +337,16 @@ export async function* runAgent(
             }
           }
         }
+        options.signal?.throwIfAborted();
         if (!completed) throw new Error("Provider stream ended before completion.");
         break;
       } catch (error) {
+        options.signal?.throwIfAborted();
         // The window we assumed may be larger than the real one. Compact hard
         // and retry once; only safe before any text reached the user.
         if (
           !retried &&
+          attempt < 3 &&
           !emittedText &&
           contextConfig &&
           isContextLengthError(error)
@@ -342,6 +363,15 @@ export async function* runAgent(
             yield { type: "context-compacted", ...action };
           }
           continue;
+        }
+        if (options.retryModelRequests !== false && !emittedText && !isContextLengthError(error) && attempt < 3) {
+          const delayMs = providerRetryDelay(error, attempt, 15_000 - waitedMs);
+          if (delayMs !== undefined) {
+            waitedMs += delayMs;
+            yield { type: "retry-wait", attempt: attempt + 1, maxAttempts: 3, delayMs };
+            await wait(delayMs, undefined, { signal: options.signal });
+            continue;
+          }
         }
         throw error;
       }
@@ -407,6 +437,7 @@ export async function* runAgent(
       const summary =
         tool && !invalid ? summarize(tool, input, call) : call.arguments;
       let startedAt = Date.now();
+      let executedWithEffects = false;
       let result: ToolResult | undefined;
       let denied = false;
       let approval: "user-denied" | "process-grant" | undefined;
@@ -420,7 +451,10 @@ export async function* runAgent(
       } else {
         const decision = options.permissions.decide(tool);
 
-        if (decision === "deny") {
+        if (options.recoveryReadOnly && needsApproval(tool.capabilities)) {
+          denied = true;
+          result = { content: "This continuation is a read-only recovery check. Report what you can verify and ask the user how to proceed.", isError: true };
+        } else if (decision === "deny") {
           denied = true;
           result = {
             content: policyDeniedMessage(options.permissions),
@@ -430,6 +464,7 @@ export async function* runAgent(
           const response = await requestToolApproval(options.approve, tool, {
             call, toolName: tool.name, summary, input, capabilities: tool.capabilities,
           }, toolContext);
+          if (options.beforeTool) toolContext.signal?.throwIfAborted();
           if ("error" in response) {
             denied = response.denied === true;
             result = { content: `Error: ${response.error}`, isError: true };
@@ -458,7 +493,9 @@ export async function* runAgent(
         if (result === undefined) {
           yield { type: "tool-start", call, summary };
           toolContext.signal?.throwIfAborted();
+          options.beforeTool?.(call, needsApproval(tool.capabilities));
           startedAt = Date.now();
+          executedWithEffects = needsApproval(tool.capabilities);
           result = await executeTool(tool, input, toolContext, approvedPreview);
         }
       }
@@ -478,10 +515,12 @@ export async function* runAgent(
         isError: result.isError === true,
         denied,
         durationMs,
+        ...(executedWithEffects && toolContext.signal?.aborted && result.isError ? { requiresReview: true } : {}),
         ...(approval === undefined ? {} : { approval }),
       };
     }
   }
 
+  options.signal?.throwIfAborted();
   yield { type: "max-turns", turns: maxTurns };
 }

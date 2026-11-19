@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SessionWriter,
   createSession,
   discoverSkills,
+  hasSessionLocks,
   isRuntimeNotice,
   latestRuntimeNotice,
   loadSession,
@@ -16,8 +17,9 @@ import {
   type Provider,
   type ProviderEvent,
 } from "@cooper/core";
-import type { Config } from "../src/config.js";
+import type { Config } from "@cooper/host";
 import { runHeadless } from "../src/headless.js";
+import { requireReadySession } from "../src/session-run.js";
 
 const config: Config = {
   protocol: "openai-chat",
@@ -36,6 +38,38 @@ const config: Config = {
 };
 
 const noInstructions: LoadedInstructions = { text: "", sources: [] };
+
+it.skipIf(!hasSessionLocks())("stops a v2 headless run when it cannot durably dispatch a tool", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "cooper-cli-v2-"));
+  const writer = SessionWriter.create({ cwd: root, home: root, model: config.model, version: 2 });
+  try {
+    const beforeTool = vi.spyOn(writer, "beforeTool").mockImplementation(() => { throw new Error("Storage unavailable"); });
+    const err = collector();
+    const out = collector();
+    const provider: Provider = {
+      async *stream() {
+        yield { type: "done", message: { role: "assistant", content: "",
+          toolCalls: [{ id: "read-1", name: "read", arguments: '{"path":"marker.txt"}' }] }, finishReason: "tool_calls" };
+      },
+    };
+    const code = await runHeadless({
+      config, root, mode: "plan", prompt: "Read the marker", provider,
+      instructions: noInstructions, showReasoning: false, out, err, session: writer,
+    });
+    expect(code).toBe(1);
+    expect(beforeTool).toHaveBeenCalledOnce();
+    expect(out.text).toBe("");
+    expect(err.text).toContain("Storage unavailable");
+    const saved = loadSession(writer.file);
+    expect(saved.runs[0]?.end).toMatchObject({ status: "failed", reason: "storage-error", phase: "storage" });
+    expect([...saved.toolUi.values()][0]?.recovery).toBe("unconfirmed");
+    expect(() => requireReadySession(saved)).toThrow("Cooper Desktop");
+    expect(await readFile(writer.file, "utf8")).not.toContain('"type":"tool-dispatched"');
+  } finally {
+    writer.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it("activates an explicit skill before the first request and keeps its content out of stdout", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "cooper-skill-headless-"));

@@ -25,14 +25,14 @@
 
 ## 配置生命周期
 
-[`settings.ts`](../apps/cli/src/settings.ts) 负责读取与写入 `~/.cooper/config.json`：
+[`settings.ts`](../packages/host/src/settings.ts) 负责读取与写入 `~/.cooper/config.json`：
 
 - 文件不存在是正常状态；JSON 语法错误是硬错误，且错误信息不回显文件内容，避免把凭据带进日志。
 - 未知字段、疑似密钥的其他键、旧的 `env` 对象、`mode: "auto"` 只警告并忽略——打字不会静默改变行为，但也不会被吞掉。
 - 类型或取值不匹配是硬错误（[测试](../apps/cli/test/settings.test.ts)）。
 - 保存先写同目录临时文件（POSIX 上 `0600`，目录 `0700`）、`fsync`、检查保存期间文件是否被外部修改，再 `rename` 替换；失败时清理临时文件。
 
-[`config.ts`](../apps/cli/src/config.ts) 从解析结果计算有效值：四个连接字段缺失时抛 [`IncompleteConfigError`](../apps/cli/src/config.ts)（携带缺失字段与警告），`baseURL` 必须是绝对 http(s) 地址，窗口按模型表推断或取配置值，`sources` 记录每个值来自 flag、配置文件还是默认值，供 `/status` 展示。
+[`config.ts`](../packages/host/src/config.ts) 从解析结果计算有效值：四个连接字段缺失时抛 [`IncompleteConfigError`](../packages/host/src/config.ts)（携带缺失字段与警告），`baseURL` 必须是绝对 http(s) 地址，窗口按模型表推断或取配置值，`sources` 记录每个值来自 flag、配置文件还是默认值，供 `/status` 展示。
 
 - **首次引导**：只有 `IncompleteConfigError` + 交互式 TUI + stdin/stdout 都是 TTY 时才进入；[引导](../apps/cli/src/onboarding.tsx)会用实际配置发起一次请求检查连接，取消则退出并提示手工写入路径。无头与其他配置错误一律直接失败。
 - **配置编辑器**：[`config-editor.tsx`](../apps/cli/src/config-editor.tsx) 中 Enter 进入编辑并暂存、Ctrl+S 保存并应用，编辑态的 Esc 先清空输入退回浏览、再按一次才关闭编辑器；API 密钥遮罩显示，可编辑字段是固定的一张表（`webSearch`、`defaultTier`、`modelTiers` 不在其中）。

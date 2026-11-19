@@ -4,6 +4,8 @@
 
 - TypeScript, Node.js 22.12.0+, npm workspaces
 - `apps/cli`: Ink 8 + React 19 TUI
+- `apps/desktop`: Electron desktop app
+- `packages/host`: shared Node.js host setup
 - `packages/core`: provider abstraction, agent loop, tools
 
 ## Layout
@@ -18,9 +20,10 @@
 - `packages/core/src/instructions.ts` — COOPER.md / AGENTS.md loading
 - `packages/core/src/session.ts` — append-only session files and `--resume`
 - `apps/cli/src/` — surfaces only: `app.tsx` (TUI), `headless.ts` (one-shot),
-  `args.ts`, `commands.ts` (TUI slash commands), `system-prompt.ts`,
-  `stream-lines.ts`, `session-view.ts`, `provider.ts` (adapter factory),
-  `mcp.ts` (trusted config + tool assembly), `config.ts`
+  `args.ts`, `commands.ts` (TUI slash commands), `stream-lines.ts`, `session-view.ts`
+- `apps/desktop/src/` — Electron main process, preload bridge, renderer, desktop sessions
+- `packages/host/src/` — configuration, Provider factory, trusted MCP tool assembly,
+  system prompt, model transition checks
 
 ## Hard rules
 
@@ -119,6 +122,7 @@
 
 ```bash
 npm run dev                              # start the TUI from the repo root
+npm run dev:desktop                      # start Electron from the repo root
 npm run dev -- -p "..." [--mode auto]    # headless, one-shot
 npm run dev -- --cwd <dir>               # run against another workspace
 npm run typecheck

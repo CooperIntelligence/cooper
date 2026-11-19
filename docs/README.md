@@ -20,11 +20,16 @@
 只列目录与关键入口，逐文件的职责由上面各页说明：
 
 ```
-apps/cli/                 宿主：进程、配置、终端界面
+apps/cli/                 CLI 宿主：进程、参数、终端界面
   src/index.tsx           入口与分流（TUI / 无头 / 列出会话）
   src/app.tsx             TUI 主循环与审批交互
   src/headless.ts         无头单次运行（stdout 只有回答）
   src/args.ts             参数解析（纯函数）
+apps/desktop/             Electron 宿主
+  src/main.ts             窗口、目录选择及 IPC 校验
+  src/runtime.ts          工作区、对话、取消及审批
+  src/renderer.ts         桌面界面与交互
+packages/host/            CLI 和 Desktop 共用的 Node.js 装配
   src/config.ts           有效配置计算，src/settings.ts 读写 config.json
 packages/core/            内核：不依赖 Ink/React，不直接读写终端
   src/agent.ts            Agent 循环与事件

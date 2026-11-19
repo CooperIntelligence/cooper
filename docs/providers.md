@@ -12,7 +12,7 @@
 - `protectedToolHistoryLength?()`：适配器声明「这段历史在当前工具轮里不能改写」的长度，[压缩](context-and-sessions.md)据此决定能否编辑前缀。
 - `estimateInputTokens?()`：按**真实请求格式**估算输入（含符合重放条件的续传数据），档位切换与 `useProviderEstimate` 场景优先使用它。
 
-CLI 的 [`createProvider()`](../apps/cli/src/provider.ts) 按显式 `protocol` 构造适配器，不靠猜测。
+[`createProvider()`](../packages/host/src/provider.ts) 按显式 `protocol` 构造适配器。
 
 ## 三个协议适配器
 
@@ -47,10 +47,10 @@ CLI 的 [`createProvider()`](../apps/cli/src/provider.ts) 按显式 `protocol` �
 
 配置结构见 [使用参考](../USAGE.md)。实现侧的约束与流程：
 
-- [`config.ts`](../apps/cli/src/config.ts) 按「档位 `contextWindow` → 顶层 `context.window` → 模型窗口表」依次确定窗口；配置了档位时，每档与兜底模型的有效窗口至少 256,000 tokens，`maxOutputTokens` 必须小于对应窗口。
+- [`config.ts`](../packages/host/src/config.ts) 按「档位 `contextWindow` → 顶层 `context.window` → 模型窗口表」依次确定窗口；配置了档位时，每档与兜底模型的有效窗口至少 256,000 tokens，`maxOutputTokens` 必须小于对应窗口。
 - [`validateModelRequest()`](../packages/core/src/provider/model-request.ts) 校验协议与模型是否接受给定的 `reasoningEffort`（例如 Anthropic 官方端点上的 `none` / `minimal` 不支持）。
 - 选择顺序：`--tier` > 会话保存的档位 > `defaultTier` >（配置了档位时）`cher`；选中的档位缺少独立配置时回退到顶层模型。
-- [`model-transition.ts`](../apps/cli/src/model-transition.ts) 用目标适配器的 `estimateInputTokens` 对比 `contextInputLimit()`：预算不足时 TUI 显示估算与上限，确认后 `compactForModel()` 在副本上压缩（保留最新可见消息），成功才提交切换并写 `model-switch` checkpoint；无头模式直接报告原因、以退出码 1 结束，不发请求也不改会话文件。
+- [`model-transition.ts`](../packages/host/src/model-transition.ts) 用目标适配器的 `estimateInputTokens` 对比 `contextInputLimit()`：预算不足时 TUI 显示估算与上限，确认后 `compactForModel()` 在副本上压缩（保留最新可见消息），成功才提交切换并写 `model-switch` checkpoint；无头模式直接报告原因、以退出码 1 结束，不发请求也不改会话文件。
 - 恢复会话时只要任一端有档位、或新 `inputLimit` 小于保存值，就触发同样的预算检查；切回大窗口则继续使用当前有效历史。
 
 相关测试：[档位与切换](../apps/cli/test/model-tiers.test.tsx)（含三个协议的请求参数与无头超限保护）、[配置解析](../apps/cli/test/config.test.ts)。

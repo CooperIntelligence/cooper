@@ -7,8 +7,8 @@ import { createBuiltinTools, discoverSkills } from "@cooper/core";
 import { render } from "ink";
 import { expect, it, vi } from "vitest";
 import { App } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
-import { createProvider } from "../src/provider.js";
+import { loadConfig } from "@cooper/host";
+import { createProvider } from "@cooper/host";
 
 it("edits and reloads settings in a running TUI without losing the conversation", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cooper-reload-"));

@@ -11,13 +11,14 @@ import {
   type SkillCatalog,
   type Tool,
 } from "@cooper/core";
-import { describeModel, modelRequestError, modelSelectionChanged, type ApprovalMode, type Config } from "./config.js";
-import { modelBudget, needsResumeBudgetCheck, transitionMessage } from "./model-transition.js";
-import type { McpReport } from "./mcp.js";
+import { describeModel, modelRequestError, modelSelectionChanged, type ApprovalMode, type Config } from "@cooper/host";
+import { modelBudget, needsResumeBudgetCheck, transitionMessage } from "@cooper/host";
+import type { McpReport } from "@cooper/host";
 import { resolveSkillPrompt, skillTools } from "./skills.js";
 import { visiblePreviewText } from "./preview.js";
+import { CliSessionRun, persistRunRecord } from "./session-run.js";
 import { webFetchOutput } from "./web-fetch-view.js";
-import { buildSystemPrompt, describeInstructions } from "./system-prompt.js";
+import { buildSystemPrompt, describeInstructions } from "@cooper/host";
 
 /** Minimal sink so tests can capture output without real streams. */
 export type Writer = { write(chunk: string): unknown };
@@ -192,11 +193,13 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       return 1;
     }
   }
+  const durable = session?.header.version === 2;
   if (session) {
-    if (config.modelSelection) warnSession(session.appendModelSelection(config.modelSelection));
-    warnSession(session.appendPolicy(mode));
-    warnSession(session.appendMessage(modeMessage));
-    for (const message of userMessages) warnSession(session.appendMessage(message));
+    const persist = durable ? persistRunRecord : warnSession;
+    if (config.modelSelection) persist(session.appendModelSelection(config.modelSelection));
+    persist(session.appendPolicy(mode));
+    persist(session.appendMessage(modeMessage));
+    if (!durable) for (const message of userMessages) warnSession(session.appendMessage(message));
   }
 
   let atLineStart = true;
@@ -252,7 +255,14 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
   };
 
   let sawToolStart = false;
+  let run: CliSessionRun | undefined;
+  const onStop = () => warnSession(run?.requestStop() ?? null);
   try {
+    if (durable) {
+      run = new CliSessionRun(session!, userMessages);
+      signal?.addEventListener("abort", onStop, { once: true });
+      if (signal?.aborted) onStop();
+    }
     for await (const event of runAgent({
       provider,
       model: config.model,
@@ -264,7 +274,10 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       useProviderEstimate: Boolean(config.modelSelection?.tier),
       preserveFittingInitialHistory: resumed !== null && resumed !== undefined && needsResumeBudgetCheck(config, resumed.modelSelection),
       signal,
+      beforeTool: run?.beforeTool,
+      requireCompleteResponse: durable,
     })) {
+      if (run) run.record(event, messages);
       switch (event.type) {
         case "turn-start": {
           sawDelta = false;
@@ -330,15 +343,16 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
 
       // Reasoning and text deltas are display-only; the durable assistant
       // message and tool results arrive as whole events.
-      if (
+      if (!run && (
         event.type === "assistant-done" ||
         event.type === "tool-end" ||
         event.type === "context-compacted"
-      ) {
+      )) {
         warnSession(session?.recordEvent(event, messages) ?? null);
       }
     }
   } catch (error) {
+    warnSession(run?.finish(true) ?? null);
     closeReasoning();
     endTextLine();
     if (signal?.aborted) {
@@ -349,6 +363,8 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       `Error: ${visiblePreviewText(modelRequestError(config, error))}\n`,
     );
     return 1;
+  } finally {
+    signal?.removeEventListener("abort", onStop);
   }
 
   if (wroteText && !atLineStart) out.write("\n");

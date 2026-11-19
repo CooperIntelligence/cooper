@@ -156,11 +156,12 @@ function runProcess(
   command: string,
   cwd: string,
   timeoutMs: number,
+  abortSignal?: AbortSignal,
 ): Promise<ToolResult> {
   return new Promise((resolvePromise) => {
     let stdout = "";
     let stderr = "";
-    let timedOut = false;
+    let stopped: "timeout" | "abort" | undefined;
     let finished = false;
 
     let child;
@@ -184,12 +185,19 @@ function runProcess(
       return;
     }
 
-    const timer = setTimeout(() => {
-      if (finished) return;
-      timedOut = true;
+    const stop = (reason: typeof stopped) => {
+      if (finished || stopped !== undefined) return;
+      stopped = reason;
       if (child.pid !== undefined) killProcessTree(child.pid);
       else child.kill("SIGKILL");
-    }, timeoutMs);
+    };
+    const abort = () => stop("abort");
+    const timer = setTimeout(() => stop("timeout"), timeoutMs);
+    const finish = () => {
+      finished = true;
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", abort);
+    };
 
     child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
       stdout = appendCapped(stdout, chunk);
@@ -200,8 +208,7 @@ function runProcess(
 
     child.on("error", (error) => {
       if (finished) return;
-      finished = true;
-      clearTimeout(timer);
+      finish();
       const detail = (error as NodeJS.ErrnoException).code === "ENOENT"
         ? `Could not launch ${shell.executable} in ${cwd}. Check the working directory and shell setting in config.json.`
         : `Error: failed to run command: ${error.message}`;
@@ -213,12 +220,13 @@ function runProcess(
 
     child.on("close", (code, signal) => {
       if (finished) return;
-      finished = true;
-      clearTimeout(timer);
+      finish();
 
       const sections: string[] = [];
-      if (timedOut) {
+      if (stopped === "timeout") {
         sections.push(`Command timed out after ${timeoutMs}ms and was killed.`);
+      } else if (stopped === "abort") {
+        sections.push("Command cancelled.");
       }
       sections.push(
         `exit code: ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`,
@@ -231,9 +239,11 @@ function runProcess(
 
       resolvePromise({
         content: truncateOutput(sections.join("\n\n")),
-        isError: timedOut || code !== 0,
+        isError: stopped !== undefined || code !== 0,
       });
     });
+    abortSignal?.addEventListener("abort", abort, { once: true });
+    if (abortSignal?.aborted) abort();
   });
 }
 
@@ -293,7 +303,8 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
       if (approvedPreview?.kind === "command" && cwd !== approvedPreview.cwd) {
         throw new Error("Command working directory changed after approval.");
       }
-      return runProcess(shell, input.command, cwd, input.timeout_ms ?? 120_000);
+      ctx.signal?.throwIfAborted();
+      return runProcess(shell, input.command, cwd, input.timeout_ms ?? 120_000, ctx.signal);
     },
   };
 }

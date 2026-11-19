@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+    <title>Cooper Desktop</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="renderer.js" defer></script>
+  </head>
+  <body>
+    <header id="window-titlebar" class="window-titlebar" hidden>
+      <div class="window-actions">
+        <button id="toggle-sidebar" class="sidebar-toggle" type="button" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="true">
+          <span class="sidebar-icon" aria-hidden="true"></span>
+        </button>
+        <button type="button" data-menu="file" aria-haspopup="menu">File</button>
+        <button type="button" data-menu="edit" aria-haspopup="menu">Edit</button>
+        <button type="button" data-menu="view" aria-haspopup="menu">View</button>
+        <button type="button" data-menu="window" aria-haspopup="menu">Window</button>
+      </div>
+    </header>
+    <aside id="sidebar" class="sidebar">
+      <div class="brand"><img src="assets/cooper-code-logo.png" alt="Cooper Code" width="308" height="72"></div>
+      <button id="open-workspace" class="folder" type="button">Open workspace</button>
+      <div id="workspace-path" class="workspace-path" hidden></div>
+      <div class="session-heading"><h2>Conversations</h2><button id="new-chat" type="button" aria-label="New conversation">+</button></div>
+      <nav id="sessions" aria-label="Conversations"></nav>
+      <button id="model-settings" class="sidebar-settings" type="button" aria-haspopup="dialog">Model settings</button>
+    </aside>
+    <main id="main" data-view="new">
+      <header class="topbar">
+        <h1 id="conversation-title">Conversation</h1>
+      </header>
+      <section id="conversation" class="conversation" aria-label="Conversation">
+        <p id="empty" class="empty" hidden>Start a conversation.</p>
+        <div id="messages" class="messages" role="log" aria-label="Messages"></div>
+      </section>
+      <div class="bottom">
+        <section class="new-conversation" aria-labelledby="new-conversation-title">
+          <div class="new-conversation-heading">
+            <img src="assets/cooper-icon-192.png" alt="" width="40" height="40">
+            <h1 id="new-conversation-title">New conversation</h1>
+          </div>
+          <div class="new-conversation-context">
+            <button id="new-workspace" type="button">Open workspace</button>
+          </div>
+        </section>
+        <div id="error" class="error" role="alert" hidden></div>
+        <div id="run-status" class="pending-draft run-status" hidden>
+          <span id="run-detail" role="status"></span>
+          <button id="continue-turn" type="button" hidden>Continue</button>
+        </div>
+        <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
+          <h2 id="approval-title"></h2>
+          <pre id="approval-preview" tabindex="0"></pre>
+          <div class="actions">
+            <button id="stop-approval" type="button">Stop</button>
+            <button id="deny" type="button">Deny</button>
+            <button id="allow" class="primary" type="button">Approve</button>
+          </div>
+        </section>
+        <form id="composer" hidden>
+          <div id="pending-draft" class="pending-draft" hidden>
+            <span>This draft may have been sent. Check the conversation before sending it again.</span>
+            <button id="keep-editing" type="button">Keep editing</button>
+          </div>
+          <textarea id="prompt" aria-label="Message" rows="2" placeholder="Ask Cooper about your workspace"></textarea>
+          <div class="composer-actions">
+            <label class="composer-label">Approvals
+              <select id="mode">
+                <option value="ask">Ask</option>
+                <option value="plan">Plan · Read only</option>
+              </select>
+            </label>
+            <button id="composer-settings" type="button" popovertarget="send-options" aria-label="Send shortcut" title="Send shortcut">
+              <span aria-hidden="true">⌨</span>
+            </button>
+            <div id="send-options" popover>
+              <label class="composer-label" for="send-shortcut">Send with</label>
+              <select id="send-shortcut">
+                <option value="enter">Enter</option>
+                <option value="mod-enter">Ctrl/⌘+Enter</option>
+                <option value="shift-enter">Shift+Enter</option>
+              </select>
+            </div>
+            <div class="composer-readouts">
+              <span id="activity" role="status"></span>
+              <span id="model" class="model"></span>
+            </div>
+            <div class="composer-action">
+              <button id="stop" type="button" aria-label="Stop" title="Stop" hidden><span class="stop-icon" aria-hidden="true"></span></button>
+              <button id="send" class="primary" type="submit" aria-label="Send" disabled><span aria-hidden="true">↑</span></button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </main>
+    <dialog id="model-setup" class="model-setup" aria-labelledby="setup-title">
+      <div class="setup-heading">
+        <img src="assets/cooper-icon-192.png" alt="" width="40" height="40">
+        <h1 id="setup-title">Connect a model</h1>
+      </div>
+      <form id="setup-form" autocomplete="off">
+        <div class="setup-fields">
+          <label>API protocol
+            <select id="setup-protocol" required>
+              <option value="">Select a protocol</option>
+              <option value="openai-chat">OpenAI Chat Completions</option>
+              <option value="openai-responses">OpenAI Responses</option>
+              <option value="anthropic-messages">Anthropic Messages</option>
+            </select>
+          </label>
+          <label>API address
+            <input id="setup-address" type="url" spellcheck="false" required>
+          </label>
+          <label>Model ID
+            <input id="setup-model" type="text" spellcheck="false" required>
+          </label>
+          <label>API key
+            <input id="setup-key" type="password" spellcheck="false" aria-describedby="setup-key-note">
+            <span id="setup-key-note" class="setup-note" hidden>The saved key will be used if you leave this field blank.</span>
+          </label>
+        </div>
+        <p id="setup-result" class="setup-result" role="status" hidden></p>
+        <div class="setup-actions">
+          <button id="setup-test" type="button">Test connection</button>
+          <button id="setup-save" class="primary" type="submit">Save without testing</button>
+        </div>
+      </form>
+      <div id="setup-invalid" hidden>
+        <p>Cooper could not load your model configuration. Fix the file, then check again.</p>
+        <code id="setup-file"></code>
+        <div class="setup-actions">
+          <button id="setup-folder" type="button">Open config folder</button>
+          <button id="setup-recheck" class="primary" type="button">Check again</button>
+        </div>
+      </div>
+      <p id="setup-error" class="error" role="alert" hidden></p>
+      <div class="setup-footer">
+        <button id="setup-cancel" type="button">Cancel</button>
+        <button id="setup-reload" type="button" hidden>Reload configuration</button>
+      </div>
+    </dialog>
+  </body>
+</html>

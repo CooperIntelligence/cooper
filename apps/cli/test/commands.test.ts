@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Config } from "../src/config.js";
+import type { Config } from "@cooper/host";
 import {
   COMMANDS,
   commandArgsOf,
