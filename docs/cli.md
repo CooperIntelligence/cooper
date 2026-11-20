@@ -10,6 +10,14 @@
 
 [入口](../apps/cli/src/index.tsx)在解析工作区和读取模型配置前分流 `update [--check]` 和 `rollback`。在线更新当前返回不可用，原生 launcher 直接处理回滚。无头单次请求由 `-p` 或 `--print` 显式启动。`--sessions` 在读取配置之前执行，因此配置缺失时仍能查看会话。工作区由 `--cwd` / `-C` 指定，[`resolveRoot()`](../apps/cli/src/index.tsx) 校验它是存在的目录，随后 `process.chdir()`，使文件工具、命令启动目录、项目指令、项目级 MCP 配置和会话归属同一个根。
 
+## Windows 原生安装包构建
+
+在 Windows x64 上准备仓库依赖、MSVC Rust 工具链和 Inno Setup 7。从仓库根目录运行 [构建脚本](../scripts/build-native-setup.ps1)。也可用 `-InnoCompiler` 指定 `ISCC.exe` 的路径。产物在 `dist/native-setup/`，传入的版本同时写入 Setup、launcher 和 CLI。
+
+```powershell
+./scripts/build-native-setup.ps1 -Version '0.2.0-alpha.2+local.1'
+```
+
 ## 无头输出契约
 
 [`runHeadless()`](../apps/cli/src/headless.ts)把回答写 stdout，其余一律 stderr：工具进度、会话状态与 id、模式提示、指令来源、MCP 状态、诊断，以及 `--show-reasoning` 打开时的推理。stdout 保持「只有回答」，才能安全地重定向给脚本。

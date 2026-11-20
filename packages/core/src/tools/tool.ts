@@ -35,6 +35,7 @@ export type ToolPreview =
       executable: string;
       cwd: string;
       command: string;
+      description: string;
       /** Checks that the working directory still resolves to the previewed path. */
       revalidate?: () => Promise<boolean>;
     }

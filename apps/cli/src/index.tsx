@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import React from "react";
 import { render } from "ink";
+import cliPackage from "../package.json" with { type: "json" };
 import {
   SessionWriter,
   discoverSkills,
@@ -35,10 +36,14 @@ import { runOnboarding } from "./onboarding.js";
 import { createProvider } from "@cooper/host";
 import { userConfigFile } from "@cooper/host";
 
+declare const COOPER_BUILD_VERSION: string | undefined;
+const cliVersion = typeof COOPER_BUILD_VERSION === "string" ? COOPER_BUILD_VERSION : cliPackage.version;
+
 const HELP = `Cooper — a terminal coding agent
 
 Usage:
   cooper                          start the interactive TUI
+  cooper --version                print the CLI version
   cooper -p "fix the failing test"  one-shot; prints the answer to stdout
   cooper -p - < prompt.txt        read the prompt from stdin
   cooper update [--check]         online update command (updater pending)
@@ -135,6 +140,11 @@ async function main(): Promise<void> {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
     fail(error);
+  }
+
+  if (args.version) {
+    console.log(cliVersion);
+    return;
   }
 
   if (args.maintenance === "rollback") {

@@ -20,6 +20,7 @@ function describePreview(request: ApprovalRequest) {
       title: "Run command",
       target: `${preview.shell} · cwd: ${preview.cwd}`,
       rows: [
+        { text: `Purpose: ${preview.description}`, tone: "context" },
         { text: `Shell executable: ${preview.executable}`, tone: "context" },
         { text: preview.command, tone: "hunk" },
       ] satisfies PreviewRow[],

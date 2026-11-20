@@ -24,6 +24,7 @@ export type ParsedArgs = {
   /** Allow loading <workspace>/.cooper/mcp.json. */
   mcpProject: boolean;
   help: boolean;
+  version?: true;
 };
 
 function isMode(value: string): value is ApprovalMode {
@@ -99,6 +100,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     switch (name) {
+      case "--version": {
+        if (inline !== undefined || argv.length !== 1) throw new Error("Usage: cooper --version");
+        parsed.version = true;
+        break;
+      }
+
       case "--help":
       case "-h": {
         parsed.help = true;

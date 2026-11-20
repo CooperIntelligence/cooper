@@ -33,7 +33,7 @@ Desktop 的 v1 路径已接入按会话保存的草稿、发送前的待确认�
 | `submit({ key, revision, requestId, text })` | 返回 `accepted { sessionId, requestId, turnId }`、`rejected { reason }` 或 `unknown { requestId }`。已接收的消息只写一次，接收确认不等待模型结束。若主进程返回前断开，通过对账查询原请求。 |
 | `lookupSubmission(sessionId, requestId)` | 返回已接收、可确认未接收、已撤下或无法确认。对账使用持久化元数据，不比对消息文本。 |
 
-请求标识留在宿主和会话元数据中。对账区分「曾写入」和「仍在有效分支」。常规压缩可以移除有效上下文里的早期消息，确认仍有效。若 [工作区与会话回退](2026-11-12-workspace-and-conversation-rewind.md) 将某个已接收回合撤下，回退记录需要表达对应的回合范围。旧请求 ID 返回「已撤下」，用户再次发起同内容需要新的 ID。 [Core 恢复与日志契约](../architecture/2026-11-18-desktop-turn-interruption-and-recovery.md)
+请求标识留在宿主和会话元数据中。对账区分「曾写入」和「仍在有效分支」。常规压缩可以移除有效上下文里的早期消息，确认仍有效。若 [工作区与会话回退](../../rejected/feature/2026-11-12-workspace-and-conversation-rewind.md) 将某个已接收回合撤下，回退记录需要表达对应的回合范围。旧请求 ID 返回「已撤下」，用户再次发起同内容需要新的 ID。 [Core 恢复与日志契约](../architecture/2026-11-18-desktop-turn-interruption-and-recovery.md)
 
 旧 v1 会话也能保留独立草稿和当次发送确认。重新打开后的幂等对账依赖 v2 提交记录和写入互斥。v1 原文件沿用旧读写方式，有未决提交时保留草稿，显示需要手工核对。
 

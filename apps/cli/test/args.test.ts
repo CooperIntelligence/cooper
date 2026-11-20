@@ -92,6 +92,12 @@ describe("parseArgs", () => {
     expect(parseArgs(["-h"]).help).toBe(true);
   });
 
+  it("parses version as a standalone command", () => {
+    expect(parseArgs(["--version"]).version).toBe(true);
+    expect(() => parseArgs(["--version", "-p", "request"])).toThrow(/Usage: cooper --version/);
+    expect(parseArgs(["--print=--version"]).prompt).toBe("--version");
+  });
+
   it("reads --resume and -r", () => {
     expect(parseArgs(["--resume", "abc123"]).resume).toBe("abc123");
     expect(parseArgs(["--resume=abc123"]).resume).toBe("abc123");

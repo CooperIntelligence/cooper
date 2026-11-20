@@ -154,6 +154,24 @@ it("restores a legacy tool result without display metadata", () => {
   ]);
 });
 
+it("shows the shell description with the command before approval", async () => {
+  const input = {
+    command: "echo ready > result.txt",
+    description: "Write the readiness marker to result.txt.",
+  };
+  replies = [{ content: "", toolCalls: [{ id: "shell-call", name: "shell", arguments: JSON.stringify(input) }] }, done];
+  const sending = runtime.send("Write a readiness marker");
+  const pending = await approval;
+  try {
+    expect(pending.title).toBe("Run command");
+    expect(pending.preview).toContain(`Purpose: ${input.description}`);
+    expect(pending.preview).toContain(input.command);
+  } finally {
+    runtime.approve(pending.id, false);
+    await sending;
+  }
+});
+
 it("exposes a running approved tool until its matching result is written", async () => {
   let entered!: () => void;
   let finish!: () => void;
@@ -169,7 +187,9 @@ it("exposes a running approved tool until its matching result is written", async
     },
   };
   await runtime.openWorkspace(root);
-  replies = [{ content: "", toolCalls: [{ id: "slow-call", name: testTool.name, arguments: '{"command":"test"}' }] }, done];
+  replies = [{ content: "", toolCalls: [{
+    id: "slow-call", name: testTool.name, arguments: '{"command":"test","description":"Run the controlled test task."}',
+  }] }, done];
   const sending = runtime.send("Run the slow task");
   try {
     const pending = await approval;

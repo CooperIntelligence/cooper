@@ -69,7 +69,10 @@ function describeApproval({ preview, summary }: ApprovalRequest): { title: strin
     return { title: preview.path, preview: lines.join("\n") || (preview.createsFile ? "Create an empty file." : "No changes.") };
   }
   if (preview?.kind === "command") {
-    return { title: "Run command", preview: `${preview.shell} · ${preview.cwd}\n\n${preview.command}` };
+    return {
+      title: "Run command",
+      preview: `Purpose: ${preview.description}\n\n${preview.shell} · ${preview.cwd}\n\n${preview.command}`,
+    };
   }
   if (preview?.kind === "text") return { title: preview.title, preview: preview.text };
   return {

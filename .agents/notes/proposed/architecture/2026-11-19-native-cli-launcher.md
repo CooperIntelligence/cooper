@@ -16,6 +16,8 @@ CLI 要求单次请求显式使用 `-p` 或 `--print`。`update [--check]` 和 `
 
 后续下载器应先在同一安装盘暂存并验证平台资产，然后把完整版本目录移入 `versions/`，最后调用 launcher 提交切换。通道和资产仍由现有[发布策略](../../implemented/process/2026-11-10-release-strategy.md)和[标签规则](../../implemented/process/2026-11-10-tag-discipline.md)定义。
 
+本机 Setup 使用 [Inno Setup](../../../../scripts/windows/cooper-setup.iss) 负责当前用户的安装登记和卸载。重跑 Setup 可修复移除的程序文件或损坏的版本指针，也可替换固定入口。launcher 等待 CLI 退出期间持有运行锁，Setup 和卸载需要独占该锁。卸载按安装根目录清理程序和对应的 `PATH` 项，用户配置和会话继续由 `~/.cooper` 管理。
+
 ## Alternatives considered
 
 **直接替换 `cooper.exe`。** Windows 运行中的程序会占用版本文件，替换需要等待已有实例结束或另设更新进程。版本目录让一次切换只提交小型状态文件。

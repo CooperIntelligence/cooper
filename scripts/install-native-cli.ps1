@@ -4,24 +4,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'native-cli-user-path.ps1')
 
 function Add-CooperToUserPath([string]$Bin) {
-    $environment = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
-    try {
-        $userPath = [string]$environment.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        $entries = @($userPath -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ne $Bin })
-        $next = (@($Bin) + $entries) -join ';'
-        if ($next -cne $userPath) {
-            $kind = if ($environment.GetValueNames() -contains 'Path') {
-                $environment.GetValueKind('Path')
-            } else {
-                [Microsoft.Win32.RegistryValueKind]::ExpandString
-            }
-            $environment.SetValue('Path', $next, $kind)
-        }
-    } finally {
-        $environment.Dispose()
-    }
+    Set-CooperUserPath -Action add -Bin $Bin
 
     if (-not ('Cooper.Native.EnvironmentChange' -as [type])) {
         Add-Type -TypeDefinition @'

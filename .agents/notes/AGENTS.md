@@ -5,6 +5,9 @@ moving, or archiving a note.
 
 - Active notes live in `proposed/`, `implemented/`, or `rejected/`, under one of
   the six fixed classes.
+- Every non-trivial change adds or updates a note in the same change; only a
+  purely mechanical or local edit with no behavioral, contractual, structural,
+  process, or rationale change is exempt.
 - `proposed/` records decisions that are not built yet, or only partly built.
 - `implemented/` records shipped decisions and is kept current with the code.
 - Archived notes are frozen; see `archived/AGENTS.md`.

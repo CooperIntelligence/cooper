@@ -35,14 +35,21 @@ fn main() {
 }
 
 fn run() -> Result<i32> {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if matches!(args.as_slice(), [flag] if flag == "--launcher-version") {
+        println!(
+            "{}",
+            option_env!("COOPER_LAUNCHER_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+        );
+        return Ok(0);
+    }
+
     let executable = std::env::current_exe()?;
     let bin = executable.parent().ok_or("missing launcher directory")?;
     let root = bin
         .parent()
         .filter(|_| bin.file_name().is_some_and(|name| name == "bin"))
         .ok_or("install the launcher as bin/cooper.exe")?;
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-
     match args.as_slice() {
         [command, options @ ..] if command == "update" => {
             if !options.is_empty() && !matches!(options, [flag] if flag == "--check") {
@@ -51,12 +58,19 @@ fn run() -> Result<i32> {
             Err("Online updates are unavailable in this build.".into())
         }
         [command] if command == "rollback" => {
+            let _running = hold_launch_lock(root)?;
             change_version(root, None)?;
             Ok(0)
         }
         [command, ..] if command == "rollback" => Err("Usage: cooper rollback".into()),
+        [command, version] if command == "--launcher-setup" => {
+            let version = version.to_str().ok_or("expected a UTF-8 release version")?;
+            setup_version(root, Version::parse(version)?)?;
+            Ok(0)
+        }
         [command, version] if command == "--launcher-activate" => {
             let version = version.to_str().ok_or("expected a UTF-8 release version")?;
+            let _running = hold_launch_lock(root)?;
             change_version(root, Some(Version::parse(version)?))?;
             Ok(0)
         }
@@ -69,6 +83,7 @@ fn run() -> Result<i32> {
         )
         .into()),
         _ => {
+            let _running = hold_launch_lock(root)?;
             let state = read_state(root)?;
             let program = installed_executable(root, &state.active)?;
             keep_launcher_alive_on_interrupt();
@@ -99,13 +114,51 @@ fn installed_executable(root: &Path, version: &Version) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn change_version(root: &Path, requested: Option<Version>) -> Result<()> {
-    let lock = OpenOptions::new()
+fn open_lock(root: &Path, name: &str) -> io::Result<fs::File> {
+    OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(root.join("install.lock"))?;
+        .open(root.join(name))
+}
+
+fn hold_launch_lock(root: &Path) -> Result<fs::File> {
+    // Setup and uninstall open this file with exclusive sharing.
+    open_lock(root, "run.lock")
+        .map_err(|error| format!("could not open Cooper's launch lock: {error}").into())
+}
+
+fn setup_version(root: &Path, version: Version) -> Result<()> {
+    let lock = open_lock(root, "install.lock")?;
+    lock.lock()?;
+    installed_executable(root, &version)?;
+    // A fresh installation or a repair of unreadable state starts without a rollback target.
+    let previous = read_state(root).ok().and_then(|state| {
+        [Some(state.active), state.previous]
+            .into_iter()
+            .flatten()
+            .find(|candidate| {
+                *candidate != version && installed_executable(root, candidate).is_ok()
+            })
+    });
+    let channel = if version.pre.as_str().starts_with("alpha.") {
+        Channel::Alpha
+    } else {
+        Channel::Latest
+    };
+    write_state(
+        root,
+        &InstallState {
+            active: version,
+            previous,
+            channel,
+        },
+    )
+}
+
+fn change_version(root: &Path, requested: Option<Version>) -> Result<()> {
+    let lock = open_lock(root, "install.lock")?;
     lock.lock()?;
     let mut state = read_state(root)?;
     let selected = requested
@@ -165,6 +218,21 @@ compile_error!("the Cooper launcher currently targets Windows");
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    #[test]
+    fn setup_exclusive_lock_blocks_launch_and_version_switching() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let setup_lock = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .open(dir.path().join("run.lock"))?;
+        assert!(hold_launch_lock(dir.path()).is_err());
+        drop(setup_lock);
+        assert!(hold_launch_lock(dir.path()).is_ok());
+        Ok(())
+    }
 
     #[test]
     fn activation_and_rollback_commit_only_installed_versions() -> Result<()> {

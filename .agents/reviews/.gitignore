@@ -1,0 +1,5 @@
+# Review deliberations are internal material, never repository artifacts.
+# A leaked review is a published attack surface: it maps failure modes,
+# recovery gaps and unshipped defenses for anyone reading the history.
+*
+!.gitignore

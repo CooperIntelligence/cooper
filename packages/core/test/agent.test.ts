@@ -138,7 +138,7 @@ describe("runAgent", () => {
       { id: "r", name: "read_file", arguments: '{"path":"package.json","limit":1}' },
       { id: "e", name: "edit_file", arguments: '{"path":"package.json","old_string":"a","new_string":"b"}' },
       { id: "w", name: "write_file", arguments: '{"path":"unused.txt","content":"blocked"}' },
-      { id: "s", name: "run_command", arguments: '{"command":"echo unused"}' },
+      { id: "s", name: "run_command", arguments: '{"command":"echo unused","description":"Check shell output."}' },
     ];
     const messages: Message[] = [
       { role: "user", content: "Inspect the workspace" },

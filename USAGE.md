@@ -4,6 +4,14 @@
 
 ## 运行
 
+### Windows x64 原生试装
+
+运行对应版本的 `CooperSetup-<版本>-windows-x64.exe`。安装使用当前 Windows 账户。完成后打开新的终端，用 `cooper --version` 检查版本，再运行 `cooper`。
+
+重跑安装包可以修复安装文件和用户 `PATH`。如果 Cooper CLI 正在运行，先退出相应实例。卸载入口在 Windows「已安装的应用」里的 **Cooper CLI**，重装后仍可使用 `~/.cooper` 下的配置和会话。
+
+### npm 与源码运行
+
 需要 Node.js 22.12.0 或更高版本。
 
 ```bash
@@ -29,6 +37,7 @@ npm run build              # 打包到 apps/cli/dist/cooper.mjs（bin 名 cooper
 | `--mcp-project` | 允许加载 `<工作区>/.cooper/mcp.json` |
 | `--mcp-config <文件>` | 追加一份 MCP 配置，可重复传入 |
 | `--show-reasoning` | 显示端点支持的推理文本或摘要 |
+| `--version` | 显示实际启动的 CLI 版本并退出 |
 | `-h` / `--help` | 查看帮助 |
 
 规则与优先级：
@@ -173,6 +182,8 @@ echo "列出行数最多的文件" | npm run dev -- -p
 | `web_fetch`、`web_search` | `network` |
 
 `/tools` 可以随时查看当前生效的工具与能力。文件与命令都被限制在工作区内。
+
+`shell` 的每次调用都需要 `description`。模型用一句话说明命令的目的和主要影响，复合命令应概括重要步骤。审批面板同时显示这句说明和实际命令。
 
 ## Skills
 

@@ -248,16 +248,17 @@ function ItemRow({ item, live = false }: { item: UiItem; live?: boolean }) {
   return (
     <Box marginTop={1} flexDirection="column">
       <Box>
-        <Box marginRight={1}>{icon}</Box>
-        <Text color="magenta">{item.name}</Text>
-        <Text dimColor> {truncate(headline, 120)}</Text>
-        {item.durationMs !== undefined ? (
-          <Text dimColor>
-            {"  "}
-            {item.durationMs}ms
-          </Text>
-        ) : null}
-        {item.processGrant ? <Text dimColor> · process grant</Text> : null}
+        <Box flexShrink={0}>
+          <Box marginRight={1}>{icon}</Box>
+          <Text color="magenta">{item.name}</Text>
+        </Box>
+        <Box flexShrink={1} minWidth={0}>
+          <Text dimColor wrap="truncate-end"> {truncate(visiblePreviewText(headline), 120)}</Text>
+        </Box>
+        <Box flexShrink={0}>
+          {item.durationMs !== undefined ? <Text dimColor>{"  "}{item.durationMs}ms</Text> : null}
+          {item.processGrant ? <Text dimColor> · process grant</Text> : null}
+        </Box>
       </Box>
       {item.output ? (
         <Box marginLeft={2} flexDirection="column">

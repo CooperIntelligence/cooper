@@ -1,6 +1,6 @@
 # Agent Notes
 
-An Agent Note records a decision this repository made: the problem, what was decided, what lost and why, and what the decision cost. It carries the reasoning that code, tests, and reference documentation cannot — the part a future maintainer would otherwise reconstruct or re-litigate.
+One kind of design doc lives here. An Agent Note records a decision or proposal that shapes this codebase — the why and what we gave up, the parts code and docs can't carry. This file is the front door and contract: where Agent Notes live, when to write one, and the in-file format.
 
 An Agent Note is not a tutorial, a changelog, a task plan, or an implementation walkthrough. If current code, tests, or documentation already states a fact, do not restate it here.
 
@@ -18,7 +18,7 @@ The date in the filename is when the topic was **first proposed**, per git histo
 
 Cross-references between notes use relative Markdown links (`[topic](../../implemented/architecture/2026-…-….md)`), never bare prose or issue numbers, so they are mechanically checkable and survive moves between folders.
 
-The active tree is the working inventory: browse its lifecycle/class folders or search the repository. Do not add a centralized `INDEX.md`; it duplicates path metadata and makes unrelated note changes contend on one file. Implemented notes with historical decision value but little future guidance move to the separate frozen `archived/` tree.
+The active lifecycle tree is the working inventory: browse its lifecycle/class folders or search the repository. Do not add a centralized `INDEX.md`; it duplicates path metadata and makes unrelated note changes contend on one file. Implemented notes with historical decision value but little future guidance move to the separate frozen `archived/` tree.
 
 One note records one decision. Two independent decisions are two notes that link to each other.
 
@@ -28,7 +28,7 @@ Each Agent Note belongs to exactly one class from this closed set. The set is fi
 
 | Class | What it covers |
 |---|---|
-| `feature` | A new user- or caller-facing capability. |
+| `feature` | A new user- or model-facing capability. |
 | `bug-fix` | Corrects a defect or closes a gap a postmortem surfaced. |
 | `simplification` | Removes code, behavior, or surface area without adding a capability. |
 | `architecture` | A structural decision about the **shipped source** — how packages relate, what the runtime vocabulary is. |
@@ -39,7 +39,9 @@ The `architecture` / `process` line: **architecture** is about the source we shi
 
 ## When to write one
 
-Add or update an Agent Note in the same change only for lasting decision rationale that code, tests, and existing documentation do not explain:
+Every non-trivial change MUST add or update at least one Agent Note in the same change. A change is non-trivial when it alters behavior, architecture, a cross-file or cross-package contract, process or tooling, testing strategy, an on-disk, wire, or configuration format, or another decision a maintainer may reasonably revisit.
+
+Write the note for the lasting rationale that code, tests, and existing documentation do not explain:
 
 - why this shape instead of the obvious alternative;
 - what was knowingly given up;
@@ -47,11 +49,11 @@ Add or update an Agent Note in the same change only for lasting decision rationa
 - a condition under which the decision should be revisited or a capability reintroduced;
 - a rejected option that will look attractive again.
 
-Do not write a note for mechanical or local edits, including local UI presentation and interaction changes; for facts the code, tests, or reference documentation already state; for task plans, acceptance checklists, or implementation walkthroughs; or for change history, which git owns.
+Only a purely mechanical or local edit with no behavioral, contractual, structural, process, or rationale change is exempt. Facts that code, tests, or reference documentation already state, task plans, acceptance checklists, and implementation walkthroughs do not need a note; git owns change history.
 
 Updating the Agent Note that already owns the decision satisfies the rule; do not create a duplicate. A proposal for substantial future work starts in `proposed/`; a decision already made starts in `implemented/`.
 
-**Every new note triggers a supersession check.** Search the active tree for older notes covering the same decision, mechanism, or rejected alternative, and classify any full or partial supersession in the same change. A fully superseded implemented note may be archived in that change if it meets the archive test, or deleted through the consolidation rule below. Partial supersession keeps both notes active and cross-linked. Do not defer a known overlap to a later cleanup.
+**Every new note triggers a supersession check.** Search the active lifecycle tree for older notes covering the same decision, mechanism, or rejected alternative, and classify any full or partial supersession in the same change. A fully superseded implemented note may be archived in that change if it meets the archive test, or deleted through the consolidation rule below. Partial supersession keeps both notes active and cross-linked. Do not defer a known overlap to a later cleanup.
 
 ## The file format
 
@@ -65,13 +67,13 @@ The first three lines of every Agent Note are exactly:
 Status: <status>
 ```
 
-followed by a blank line. The `Status:` value is one of three forms, and agrees with the lifecycle folder the file sits in:
+followed by a blank line. The `Status:` value is one of three forms, and must agree with the lifecycle folder the file sits in — the gate cross-checks them:
 
 - `Status: proposed`
 - `Status: implemented`
 - `Status: rejected — <why, in one line>`
 
-The status carries no date and no parenthetical: the filename holds the first-proposed date, git holds everything else. The rejection reason is the one status with content, because a rejected note's verdict is the fact readers come for. The `Status:` line appears exactly once, on line 3; a second one anywhere outside a code fence is a violation.
+The status carries no dates and no parentheticals: the filename holds the first-proposed date, git holds everything else, and an "accepted in amended form" note is body content (state the amendment where the decision is stated). The rejection reason is the one status with content, because a rejected Agent Note's verdict is the fact readers come for. The `Status:` line appears exactly once, on line 3; a second one anywhere outside a code fence is a violation.
 
 ### The body skeleton
 

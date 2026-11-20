@@ -249,6 +249,12 @@ function runProcess(
 
 const runCommandSchema = z.object({
   command: z.string().describe("Shell command to execute."),
+  description: z
+    .string()
+    .trim()
+    .min(1, "Explain the command's purpose and main effects for the user.")
+    .overwrite((description) => description.replace(/\s+/g, " "))
+    .describe("Briefly explain to the user why this command is needed and what it will do. Cover each significant step and side effect of a compound command."),
   cwd: z
     .string()
     .optional()
@@ -280,7 +286,7 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
     inputSchema: runCommandSchema,
     capabilities: ["execute"],
     summarize(input) {
-      return `[${shellName} · cwd: ${input.cwd ?? "."}]\n$ ${input.command}`;
+      return `${input.description} · [${shellName} · cwd: ${input.cwd ?? "."}]\n$ ${input.command}`;
     },
     async preview(input, ctx) {
       try {
@@ -288,7 +294,7 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
         const cwd = await resolveCwd(ctx.root, relativeCwd);
         return {
           kind: "command", shell: shellName, executable: shell.executable,
-          cwd, command: input.command,
+          cwd, command: input.command, description: input.description,
           async revalidate() {
             const current = await resolveCwd(ctx.root, relativeCwd).catch(() => null);
             return current === cwd;
