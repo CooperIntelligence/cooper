@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { isSea } from "node:sea";
+import { fileURLToPath } from "node:url";
 import React from "react";
 import { render } from "ink";
 import cliPackage from "../package.json" with { type: "json" };
@@ -26,6 +28,7 @@ import {
   IncompleteConfigError,
   loadConfig,
   selectModelTier,
+  windowsShellSandbox,
   writeOnboardingConfig,
   type ApprovalMode,
   type Config,
@@ -66,11 +69,11 @@ Options:
 
 Modes:
   ask    ask before file writes, commands, and web requests
-  auto   approve every tool call without asking (use with care)
+  auto   skip approval prompts; the built-in shell requires the Windows sandbox
   plan   read-only: inspect files, deny writes, commands, and web requests
 
   With -p nobody can answer an approval prompt, so ask denies writes,
-  commands, and web requests. Pass --mode auto to allow them.
+  commands, and web requests. Pass --mode auto to skip prompts.
   Startup precedence: --mode > saved plan/ask > config.json mode > ask.
   Config defaults accept plan and ask. In the TUI, /plan, /ask and /auto
   switch the mode while idle.
@@ -251,6 +254,8 @@ async function main(): Promise<void> {
   const provider = createProvider(config);
 
   const skills = await discoverSkills(root);
+  const appDirectory = isSea() ? path.dirname(process.execPath) : path.dirname(fileURLToPath(import.meta.url));
+  const shellSandbox = windowsShellSandbox(appDirectory);
   let prepared: PreparedTools;
   try {
     prepared = await prepareTools({
@@ -258,7 +263,7 @@ async function main(): Promise<void> {
       explicit: args.mcpConfig,
       loadProject: args.mcpProject,
       shell: config.shell,
-      webSearchApiKey: config.webSearchApiKey,
+      webSearch: config.webSearch,
     });
   } catch (error) {
     fail(error);
@@ -280,6 +285,7 @@ async function main(): Promise<void> {
         config,
         root,
         mode,
+        shellSandbox,
         prompt,
         provider,
         instructions,
@@ -308,6 +314,7 @@ async function main(): Promise<void> {
         config={config}
         root={root}
         mode={mode}
+        shellSandbox={shellSandbox}
         modeSource={modeSource}
         instructions={instructions}
         skills={skills}

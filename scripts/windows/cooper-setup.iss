@@ -25,6 +25,7 @@ UninstallDisplayIcon={app}\cooper.ico
 [Files]
 Source: "{#LauncherPath}"; DestDir: "{app}\bin"; DestName: "cooper.exe"; Flags: ignoreversion
 Source: "{#PayloadPath}"; DestDir: "{app}\versions\{#CooperVersion}"; DestName: "cooper.exe"; Flags: ignoreversion
+Source: "{#SandboxPath}"; DestDir: "{app}\versions\{#CooperVersion}"; DestName: "cooper-shell-sandbox.exe"; Flags: ignoreversion
 Source: "cooper.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]

@@ -59,7 +59,7 @@ echo "列出行数最多的文件" | npm run dev -- -p
 
 - stdout 只写模型的回答，可直接重定向；工具进度、会话状态、模式提示、MCP 状态、诊断和推理输出走 stderr。
 - 退出码：成功 `0`，错误或达到轮次上限 `1`，被中断 `130`。
-- 没有人能回答审批提示，因此 `ask` 和 `plan` 都会拒绝写文件、执行命令和网络请求；需要这些能力时传 `--mode auto`（启动时 stderr 会给出提示）。
+- 无头模式没有交互审批，`ask` 和 `plan` 都会拒绝写文件、执行命令和网络请求。`--mode auto` 跳过审批提示，内置 `shell` 仍要求 Windows 沙箱。
 - 配置缺少必填字段时无头启动直接报错，不进入首次引导。
 - 提示里写 `/skill <name> [请求]` 可以在本次请求中启用一个 Skill。
 
@@ -94,11 +94,12 @@ echo "列出行数最多的文件" | npm run dev -- -p
 | `plan` | 允许 | 直接拒绝 |
 | `ask`（交互） | 允许 | 每次询问，或沿用进程内授权 |
 | `ask`（无头 `-p`） | 允许 | 直接拒绝 |
-| `auto` | 允许 | 自动批准，仍执行工具自身的校验 |
+| `auto` | 允许 | 跳过交互审批，内置 `shell` 必须在 Windows 沙箱内运行 |
 
 - 网络工具在 `ask` 下逐次确认，不能被进程内授权覆盖。
 - 其他受管控工具可以按工具名授权到进程退出，只保存在内存，不写入会话；切换到 `plan` 后先应用只读限制，此前的授权不会变成可写。
 - 恢复会话只会带回 `plan` 或 `ask`；保存过 `auto` 的会话在新进程里不会自动恢复为 `auto`，需要 `--mode auto` 或 TUI 里 `/auto`。
+- AUTO 的内置 `shell` 目前支持 Windows 上的 PowerShell。命令可以读取工作区和写入单次调用的临时目录，网络访问被阻止。工作区文件修改使用 `edit` 和 `write`。助手缺失、系统不支持或沙箱启动失败时，Cooper 会返回错误。
 
 ## 配置文件
 
@@ -125,7 +126,7 @@ echo "列出行数最多的文件" | npm run dev -- -p
 | `context.compact` | `true` |
 | `context.summaryModel` | 使用主模型 |
 | `shell` | Windows 为 PowerShell，Linux 为 Bash，macOS 为 zsh |
-| `webSearch` | 不配置即禁用网页搜索 |
+| `webSearch` | 默认使用 Tavily 免费免 Key 搜索，设为 `false` 可关闭 |
 
 - 首次在交互界面启动且缺少必填字段时进入引导：选择协议、模型 ID（必填）、可选的上下文窗口、服务地址与密钥，再用该配置请求一次模型列表（10 秒超时）验证连接；验证失败可重试、修改或跳过，放弃则退出并提示手工写入。无头或重定向启动不会进入引导，直接报错。
 - 编辑器可改 12 个字段：四个连接字段、`maxOutputTokens`、`showReasoning`、`mode`、`shell` 和四个 `context.*`。`webSearch`、`defaultTier`、`modelTiers` 只能手改文件后用 `/reload` 应用。
@@ -211,8 +212,8 @@ echo "列出行数最多的文件" | npm run dev -- -p
 
 ## 网页工具
 
-- `web_fetch` 抓取公网 HTTP(S) 页面并提取正文；`web_search` 走 Tavily，返回标题、URL 和摘要。
-- 启用搜索需要配置并在环境中提供密钥：
+- `web_fetch` 抓取公网 HTTP(S) 页面并提取正文。`web_search` 默认直连 Tavily 的免费免 Key 接口，返回标题、URL 和摘要。免费接口受 Tavily 的请求额度限制。
+- 使用自己的 Tavily 额度时，按以下方式配置并在环境中提供密钥。
 
 ```json
 { "webSearch": { "provider": "tavily" } }
@@ -222,7 +223,7 @@ echo "列出行数最多的文件" | npm run dev -- -p
 export TAVILY_API_KEY=...        # 可用 webSearch.apiKeyEnv 改用其他变量名
 ```
 
-- 密钥缺失或格式不合法时禁用搜索并在启动时给出警告；编辑配置后用 `/reload` 应用。
+- 显式配置密钥模式后，密钥缺失或格式不合法会禁用搜索并给出警告。设置 `"webSearch": false` 可关闭搜索。编辑配置后在 TUI 用 `/reload` 应用。
 - 两个工具都声明 `network`：交互 `ask` 每次确认出站请求参数，`plan` 与无头 `ask` 拒绝，`auto` 自动批准。
 
 ## 相关文档

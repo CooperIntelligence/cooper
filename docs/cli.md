@@ -18,6 +18,8 @@
 ./scripts/build-native-setup.ps1 -Version '0.2.0-alpha.2+local.1'
 ```
 
+安装包把 `cooper-shell-sandbox.exe` 与同版本的 SEA 一起安装。源码调试时可单独运行 `cargo build --locked --manifest-path packages/shell-sandbox/Cargo.toml`，然后用 `COOPER_SHELL_SANDBOX_EXECUTABLE` 为宿主指定绝对路径。助手必须位于本次工作区之外。npm 分发目前没有捆绑助手，Linux 和 macOS 还没有接入沙箱后端。具体边界与验证见 [AUTO shell 沙箱](../.agents/notes/implemented/architecture/2026-11-21-auto-shell-sandbox.md)。
+
 ## 无头输出契约
 
 [`runHeadless()`](../apps/cli/src/headless.ts)把回答写 stdout，其余一律 stderr：工具进度、会话状态与 id、模式提示、指令来源、MCP 状态、诊断，以及 `--show-reasoning` 打开时的推理。stdout 保持「只有回答」，才能安全地重定向给脚本。

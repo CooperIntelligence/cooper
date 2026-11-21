@@ -60,6 +60,6 @@ MCP 服务器会执行外部代码，因此配置是受信任输入。[`loadMcpC
 - 只支持 HTML/XHTML、Markdown、纯文本；非 2xx、空正文、纯空白、无法识别的字符集都返回结构化状态。
 - 结果区分 `ok` / `no_static_text`（页面可能靠 JavaScript 渲染）/ `empty_body` / `empty_text` / `redirect` / `error`（含状态码、最终 URL、内容类型），附带标题（≤ 256 字符）。
 
-[`web_search`](../packages/core/src/tools/web-search.ts) 把查询发到 Tavily：查询 ≤ 400 字符，`limit` 1–10（默认 5），返回标题、URL、摘要（≤ 1,000 字符）。返回内容会做清洗：URL 不合法的结果丢弃，标题与摘要中的 API 密钥被替换为 `[redacted]`，任何包含密钥的 URL 直接跳过；401/403、429 与其他非 200 状态分别给出可读错误。
+[`web_search`](../packages/core/src/tools/web-search.ts) 默认把查询直连发送到 Tavily 的免 Key 接口。查询最多 400 字符，`limit` 为 1–10（默认 5），返回标题、URL 和最多 1,000 字符的摘要。无效 URL 会被丢弃，标题与摘要中的 API 密钥会被替换为 `[redacted]`，包含密钥的 URL 会被跳过。免费请求收到 429 时会提示上游限流，并在响应提供重试秒数时显示等待时间。 [Tavily 免 Key 接口](https://docs.tavily.com/documentation/keyless)
 
 两个工具都声明 `network`：交互 `ask` 每次展示出站参数逐次确认（进程内授权对网络工具无效），`plan` 与无头 `ask` 拒绝，显式 `auto` 自动批准。结果进入模型上下文，启用持久化时随会话落盘。相关测试：[web-tools](../packages/core/test/web-tools.test.ts)。

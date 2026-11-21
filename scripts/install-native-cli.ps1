@@ -42,7 +42,8 @@ if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem -or
 $repo = Split-Path -Parent $PSScriptRoot
 $launcher = Join-Path $repo 'apps/cli/launcher/target/release/cooper.exe'
 $payload = Join-Path $repo 'dist/cooper.exe'
-foreach ($file in @($launcher, $payload)) {
+$sandbox = Join-Path $repo 'dist/cooper-shell-sandbox.exe'
+foreach ($file in @($launcher, $payload, $sandbox)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing prebuilt binary: $file" }
 }
 
@@ -56,6 +57,7 @@ if (-not $parent -or $InstallRoot.Contains(';')) { throw 'Choose a user director
 $bin = Join-Path $InstallRoot 'bin'
 $installedLauncher = Join-Path $bin 'cooper.exe'
 $installedPayload = Join-Path $InstallRoot "versions/$version/cooper.exe"
+$installedSandbox = Join-Path $InstallRoot "versions/$version/cooper-shell-sandbox.exe"
 
 if (Test-Path -LiteralPath $InstallRoot) {
     $state = Get-Content -LiteralPath (Join-Path $InstallRoot 'current.json') -Raw | ConvertFrom-Json
@@ -63,7 +65,9 @@ if (Test-Path -LiteralPath $InstallRoot) {
         -not (Test-Path -LiteralPath $installedLauncher -PathType Leaf) -or
         -not (Test-Path -LiteralPath $installedPayload -PathType Leaf) -or
         (Get-FileHash -LiteralPath $installedLauncher).Hash -ne (Get-FileHash -LiteralPath $launcher).Hash -or
-        (Get-FileHash -LiteralPath $installedPayload).Hash -ne (Get-FileHash -LiteralPath $payload).Hash) {
+        (Get-FileHash -LiteralPath $installedPayload).Hash -ne (Get-FileHash -LiteralPath $payload).Hash -or
+        -not (Test-Path -LiteralPath $installedSandbox -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $installedSandbox).Hash -ne (Get-FileHash -LiteralPath $sandbox).Hash) {
         throw "Another Cooper installation already exists at $InstallRoot."
     }
 } else {
@@ -76,6 +80,7 @@ if (Test-Path -LiteralPath $InstallRoot) {
         New-Item -ItemType Directory -Path $stageBin,$stageVersion -Force | Out-Null
         Copy-Item -LiteralPath $launcher -Destination (Join-Path $stageBin 'cooper.exe')
         Copy-Item -LiteralPath $payload -Destination (Join-Path $stageVersion 'cooper.exe')
+        Copy-Item -LiteralPath $sandbox -Destination (Join-Path $stageVersion 'cooper-shell-sandbox.exe')
         $stateJson = @{ active = $version; previous = $null; channel = $channel } | ConvertTo-Json -Compress
         [IO.File]::WriteAllText((Join-Path $stage 'current.json'), $stateJson, [Text.UTF8Encoding]::new($false))
 

@@ -5,3 +5,4 @@ export * from "./provider.js";
 export * from "./mcp.js";
 export * from "./system-prompt.js";
 export * from "./model-transition.js";
+export * from "./shell-sandbox.js";

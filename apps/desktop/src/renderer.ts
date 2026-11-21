@@ -27,6 +27,7 @@ const approvalStopButton = element<HTMLButtonElement>("stop-approval");
 const allowButton = element<HTMLButtonElement>("allow");
 const denyButton = element<HTMLButtonElement>("deny");
 const mode = element<HTMLSelectElement>("mode");
+const autoMode = element<HTMLOptionElement>("mode-auto");
 const sendShortcut = element<HTMLSelectElement>("send-shortcut");
 const composer = element<HTMLFormElement>("composer");
 const sendOptions = element("send-options");
@@ -294,6 +295,7 @@ function displayState(next: DesktopState, resetConversation: boolean): void {
   newWorkspace.setAttribute("aria-label", `Change workspace from ${newWorkspace.textContent}`);
   model.textContent = next.model;
   model.title = next.model;
+  autoMode.hidden = autoMode.disabled = !next.autoAvailable;
   mode.value = next.mode;
   const active = next.sessions.find(({ id }) => id === next.sessionId);
   const title = element("conversation-title");

@@ -14,7 +14,9 @@ const MODE_TEXT: Record<PermissionPreset, string> = {
     "File edits, commands, and web requests require user approval. Do not retry a denied call.",
   auto:
     "Permission mode is now auto. This supersedes earlier runtime notices.\n" +
-    "All tools are auto-approved; choose actions carefully.",
+    "Tool calls skip interactive approval. The built-in shell requires an available Windows PowerShell sandbox. " +
+    "Its workspace is read-only, temporary storage is private to the command, and network access is blocked. " +
+    "Use file tools for workspace edits. Do not retry a denied action through another tool.",
 };
 
 /**

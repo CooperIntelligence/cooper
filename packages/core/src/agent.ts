@@ -232,6 +232,7 @@ export async function* runAgent(
   const toolContext: ToolContext = {
     ...context,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    requireShellSandbox: options.permissions.preset === "auto",
   };
   const maxTurns = options.maxTurns ?? 25;
   const specs = tools.map(toToolSpec);

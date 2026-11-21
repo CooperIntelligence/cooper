@@ -7,7 +7,6 @@ import {
   PermissionPolicy,
   SessionWriter,
   createRunCommandTool,
-  createWebSearchTool,
   contextInputBudget,
   estimateContextTokens,
   listSessions,
@@ -27,6 +26,7 @@ import {
   type Message,
   type ModelTier,
   type Provider,
+  type ShellSandbox,
   type SkillCatalog,
   type Tool,
 } from "@cooper/core";
@@ -51,7 +51,7 @@ import { describeModel, loadConfig, modelRequestError, modelSelectionChanged, re
 import { compactForModel, modelBudget, needsResumeBudgetCheck, transitionMessage } from "@cooper/host";
 import { ConfigEditor, configFieldIndex } from "./config-editor.js";
 import type { McpReport } from "@cooper/host";
-import { createProvider } from "@cooper/host";
+import { configureWebSearchTool, createProvider } from "@cooper/host";
 import { buildResumeView } from "./session-view.js";
 import { CliSessionRun, reloadReadySession, requireReadySession } from "./session-run.js";
 import { formatSkills, resolveSkillPrompt, skillTools } from "./skills.js";
@@ -284,6 +284,7 @@ export function App({
   config: initialConfig,
   root,
   mode,
+  shellSandbox,
   modeSource,
   instructions,
   skills,
@@ -298,6 +299,7 @@ export function App({
   config: Config;
   root: string;
   mode: ApprovalMode;
+  shellSandbox?: ShellSandbox;
   /** Where the startup mode came from (flag/env/session/config/default). */
   modeSource: ModeResolution["source"];
   instructions: LoadedInstructions;
@@ -519,16 +521,10 @@ export function App({
       ? current.provider
       : createProvider(config, { allowLegacyThinking: false });
     const commandTool = createRunCommandTool(config.shell);
-    let tools = current.tools.map((tool) =>
+    const tools = current.tools.map((tool) =>
       tool.name === commandTool.name ? commandTool : tool,
     );
-    if (current.config.webSearchApiKey !== config.webSearchApiKey) {
-      const searchTool = config.webSearchApiKey ? createWebSearchTool(config.webSearchApiKey) : undefined;
-      const hasSearch = tools.some((tool) => tool.name === "web_search");
-      tools = tools.flatMap((tool) => tool.name === "web_search" ? (searchTool ? [searchTool] : []) : [tool]);
-      if (searchTool && !hasSearch) tools.push(searchTool);
-    }
-    return { config, provider, tools };
+    return { config, provider, tools: configureWebSearchTool(tools, config.webSearch) };
   };
 
   const reportConfig = (config: Config, action: string) => {
@@ -1273,7 +1269,7 @@ export function App({
         model: config.model,
         tools,
         messages: history.current,
-        context: { root },
+        context: { root, shellSandbox },
         permissions,
         contextBudget: config.context,
         useProviderEstimate: Boolean(config.modelSelection?.tier),

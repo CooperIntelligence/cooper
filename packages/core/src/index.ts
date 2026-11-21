@@ -17,6 +17,7 @@ export * from "./tools/tool.js";
 export * from "./tools/paths.js";
 export * from "./tools/fs.js";
 export * from "./tools/shell.js";
+export * from "./tools/shell-sandbox.js";
 export * from "./tools/skill.js";
 export * from "./tools/web-fetch.js";
 export * from "./tools/web-search.js";

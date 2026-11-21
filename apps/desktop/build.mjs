@@ -27,3 +27,11 @@ await Promise.all([
   copyFile("src/styles.css", "dist/styles.css"),
   ...images.map((name) => copyFile("src/assets/" + name, "dist/assets/" + name)),
 ]);
+
+if (process.platform === "win32") {
+  const name = "cooper-shell-sandbox.exe";
+  const binary = new URL(`../../packages/shell-sandbox/target/release/${name}`, import.meta.url);
+  await copyFile(binary, `dist/${name}`).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}

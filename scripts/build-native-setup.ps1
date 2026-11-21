@@ -19,6 +19,7 @@ if (-not $cargo) { $cargo = Join-Path ([Environment]::GetFolderPath('UserProfile
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 $launcher = Join-Path $repo 'apps/cli/launcher/target/release/cooper.exe'
 $payload = Join-Path $repo 'dist/cooper.exe'
+$sandbox = Join-Path $repo 'dist/cooper-shell-sandbox.exe'
 $output = Join-Path $repo 'dist/native-setup'
 $savedBuildVersion = $env:COOPER_BUILD_VERSION
 $savedLauncherVersion = $env:COOPER_LAUNCHER_BUILD_VERSION
@@ -31,6 +32,9 @@ try {
     $env:COOPER_BUILD_VERSION = $Version
     & $node scripts/package.mjs
     if ($LASTEXITCODE -ne 0) { throw 'The SEA build failed.' }
+    & $cargo build --manifest-path 'packages/shell-sandbox/Cargo.toml' --locked --release
+    if ($LASTEXITCODE -ne 0) { throw 'The Windows shell sandbox build failed.' }
+    Copy-Item -LiteralPath 'packages/shell-sandbox/target/release/cooper-shell-sandbox.exe' -Destination $sandbox -Force
 
     $launcherVersion = & $launcher --launcher-version
     if ($LASTEXITCODE -ne 0 -or $launcherVersion -cne $Version) { throw 'Built launcher version does not match Setup.' }
@@ -43,7 +47,7 @@ Set-CooperUserPath -Action $env:COOPER_SETUP_PATH_ACTION -Bin $env:COOPER_SETUP_
 '@
     $encodedPathScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($pathScript))
     New-Item -ItemType Directory -Path $output -Force | Out-Null
-    & $InnoCompiler "/DCooperVersion=$Version" "/DLauncherPath=$launcher" "/DPayloadPath=$payload" `
+    & $InnoCompiler "/DCooperVersion=$Version" "/DLauncherPath=$launcher" "/DPayloadPath=$payload" "/DSandboxPath=$sandbox" `
         "/DSetupOutputDir=$output" "/DPathScript=$encodedPathScript" 'scripts/windows/cooper-setup.iss'
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup could not create CooperSetup.' }
     Get-Item -LiteralPath (Join-Path $output "CooperSetup-$Version-windows-x64.exe")

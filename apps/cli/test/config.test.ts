@@ -22,12 +22,12 @@ describe("loadConfig", () => {
     fs.writeFileSync(path.join(home, "config.json"), JSON.stringify(value), "utf8");
   }
 
-  it("registers web search only when user settings and a valid credential enable it", async () => {
+  it("defaults to keyless search and respects explicit search settings", async () => {
     const toolsForConfig = async () => {
       const config = loadConfig({ home });
       const prepared = await prepareTools({
         root: home, home, explicit: [], loadProject: false,
-        webSearchApiKey: config.webSearchApiKey,
+        webSearch: config.webSearch,
       });
       await prepared.close();
       return prepared.tools.map((tool) => tool.name);
@@ -35,13 +35,19 @@ describe("loadConfig", () => {
     vi.stubEnv("TAVILY_API_KEY", "tvly-test");
     writeConfig(connection);
     expect(await toolsForConfig()).toContain("web_fetch");
-    expect(await toolsForConfig()).not.toContain("web_search");
+    expect(await toolsForConfig()).toContain("web_search");
+    expect(loadConfig({ home }).webSearch).toEqual({});
     writeConfig({ ...connection, webSearch: { provider: "tavily" } });
     expect(await toolsForConfig()).toContain("web_search");
+    expect(loadConfig({ home }).webSearch).toEqual({ apiKey: "tvly-test" });
     vi.stubEnv("TAVILY_API_KEY", undefined);
     expect(await toolsForConfig()).not.toContain("web_search");
     expect(loadConfig({ home }).settingsWarnings).toEqual([expect.stringContaining("TAVILY_API_KEY")]);
+    writeConfig({ ...connection, webSearch: false });
+    expect(await toolsForConfig()).not.toContain("web_search");
+    expect(loadConfig({ home }).settingsWarnings).toEqual([]);
     writeConfig({ ...connection, webSearch: { provider: "invalid" } });
+    expect(await toolsForConfig()).not.toContain("web_search");
     expect(loadConfig({ home }).settingsWarnings).toEqual([expect.stringContaining("invalid webSearch")]);
   });
 

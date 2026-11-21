@@ -70,7 +70,7 @@ export class PermissionPolicy {
     name: string;
     capabilities?: readonly ToolCapability[];
   }): PermissionDecision {
-    // auto is an explicit, auditable opt-in to run everything.
+    // AUTO skips approval prompts. Tools still enforce their execution limits.
     if (this.preset === "auto") return "allow";
 
     // Read-only tools never need permission in any preset.

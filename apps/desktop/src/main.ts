@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type IpcMainInvokeEvent } from "electron";
-import { probeEndpoint, userConfigFile } from "@cooper/host";
+import { probeEndpoint, userConfigFile, windowsShellSandbox } from "@cooper/host";
 import { DesktopConnection } from "./connection.js";
 import { DraftStore } from "./drafts.js";
 import type { DesktopEvent } from "./ipc.js";
@@ -46,7 +46,8 @@ function openWindow(): void {
   const drafts = new DraftStore(path.join(app.getPath("userData"), "drafts"), (key, error) => {
     emit({ type: "draft-error", key, message: `Could not save draft: ${String(error)}` });
   });
-  const runtime = new DesktopRuntime(emit, drafts);
+  const shellSandbox = windowsShellSandbox(app.isPackaged ? process.resourcesPath : __dirname, { requireExecutable: true });
+  const runtime = new DesktopRuntime(emit, drafts, undefined, undefined, shellSandbox);
   const connection = new DesktopConnection();
 
   function handle(channel: string, handler: (...args: unknown[]) => unknown): void {
@@ -96,7 +97,7 @@ function openWindow(): void {
     return runtime.newChat(id);
   });
   handle("cooper:mode", (mode) => {
-    if (mode !== "ask" && mode !== "plan") throw new Error("Unsupported permission mode.");
+    if (mode !== "ask" && mode !== "plan" && mode !== "auto") throw new Error("Unsupported permission mode.");
     return runtime.setMode(mode);
   });
   handle("cooper:draft", (key, text) => {

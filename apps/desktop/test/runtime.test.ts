@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { hasSessionLocks, SessionWriter, resumeSession, runCommandTool, sessionsDir, type AssistantMessage, type ChatRequest, type ProviderEvent, type Tool } from "@cooper/core";
+import { createRunCommandTool, hasSessionLocks, SessionWriter, resumeSession, runCommandTool, sessionsDir, type AssistantMessage, type ChatRequest, type ProviderEvent, type ShellSandbox, type Tool } from "@cooper/core";
+import { parseSettings, readSettingsDocument, resolveConfig } from "@cooper/host";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DraftStore } from "../src/drafts.js";
 import { DesktopConnection } from "../src/connection.js";
@@ -28,7 +29,11 @@ vi.mock("@cooper/host", async (importOriginal) => {
     ...host,
     async prepareTools(...args: Parameters<typeof host.prepareTools>) {
       const prepared = await host.prepareTools(...args);
-      if (testTool) prepared.tools.push(testTool);
+      if (testTool) {
+        const builtin = prepared.tools.findIndex(({ name }) => name === testTool?.name);
+        if (builtin === -1) prepared.tools.push(testTool);
+        else prepared.tools[builtin] = testTool;
+      }
       return prepared;
     },
     createProvider: () => ({
@@ -103,6 +108,19 @@ it("applies saved connection settings to the next message without replacing the 
   expect(requests.map(({ model }) => model)).toEqual(["test-model", "new-model"]);
 });
 
+it("uses default web search and applies an explicit opt-out to an open workspace", async () => {
+  replies = [done, done];
+  await runtime.send("First message");
+  expect(requests[0]?.tools.map((tool) => tool.name)).toContain("web_search");
+
+  const document = readSettingsDocument(home);
+  const values = { ...document.raw, webSearch: false };
+  const config = resolveConfig(parseSettings(values, document.file), { home });
+  runtime.saveConnection(config, document, values);
+  await runtime.send("Second message");
+  expect(requests[1]?.tools.map((tool) => tool.name)).not.toContain("web_search");
+});
+
 it.each(hasSessionLocks() ? [1, 2] : [1])("restores the tool results in a v%i conversation", async (version) => {
   if (version === 1) {
     const session = SessionWriter.create({ cwd: root, home, model: "test-model", version: 1 });
@@ -170,6 +188,31 @@ it("shows the shell description with the command before approval", async () => {
     runtime.approve(pending.id, false);
     await sending;
   }
+});
+
+it("offers AUTO only with a sandbox and does not restore AUTO from a session", async () => {
+  expect(runtime.getState()).toMatchObject({ mode: "ask", autoAvailable: false });
+  expect(() => runtime.setMode("auto")).toThrow("AUTO requires the Windows shell sandbox");
+
+  await runtime.dispose();
+  testTool = createRunCommandTool({ kind: "powershell", executable: process.execPath });
+  const sandbox = vi.fn<ShellSandbox>().mockResolvedValue({ kind: "exited", code: 0, stdout: "isolated output", stderr: "" });
+  runtime = new DesktopRuntime((event) => events.push(event), new DraftStore(draftDirectory), home, undefined, sandbox);
+  await expect(runtime.openWorkspace(root)).resolves.toMatchObject({ mode: "ask", autoAvailable: true });
+  expect(runtime.setMode("auto").mode).toBe("auto");
+
+  replies = [{ content: "", toolCalls: [{ id: "command", name: "shell",
+    arguments: '{"command":"Write-Output \'hello\'","description":"Print a marker"}' }] }, done];
+  const state = await runtime.send("Print a marker");
+  const canonicalRoot = await realpath(root);
+  expect(sandbox).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ root: canonicalRoot, cwd: canonicalRoot }),
+    expect.any(AbortSignal));
+  expect(events.some(({ type }) => type === "approval")).toBe(false);
+  expect(requests[1]?.messages).toContainEqual(expect.objectContaining({
+    role: "tool", toolCallId: "command", content: expect.stringContaining("isolated output"),
+  }));
+  expect(state.mode).toBe("auto");
+  expect(runtime.newChat(state.sessionId!).mode).toBe("ask");
 });
 
 it("exposes a running approved tool until its matching result is written", async () => {

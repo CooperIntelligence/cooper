@@ -36,6 +36,8 @@ const connectionFields = ["protocol", "model", "baseURL", "apiKey"] as const;
 type ConnectionField = (typeof connectionFields)[number];
 type ConnectionSettings = Pick<Settings, ConnectionField>;
 
+export type WebSearchConfig = false | { apiKey?: string };
+
 type ModelTierEntry = {
   selection: ModelSelection;
   displayName?: string;
@@ -51,7 +53,7 @@ export type Config = Required<ConnectionSettings> & {
   showReasoning: boolean;
   defaultMode: Settings["mode"];
   shell: CommandShell;
-  webSearchApiKey?: string;
+  webSearch: WebSearchConfig;
   sources: Partial<Record<ConfigKey, ConfigSource>>;
   settingsWarnings: string[];
   settingsFile: string | null;
@@ -186,11 +188,14 @@ export function resolveConfig(
     : { window: configuredWindow, assumed: false };
   const source = (value: unknown): ConfigSource =>
     value === undefined ? "default" : "config";
-  const webSearch = settings?.webSearch;
-  const key = webSearch ? process.env[webSearch.apiKeyEnv]?.trim() : undefined;
+  const searchSettings = settings?.webSearch;
+  const key = searchSettings ? process.env[searchSettings.apiKeyEnv]?.trim() : undefined;
   const webSearchApiKey = key && /^[\x21-\x7e]+$/.test(key) ? key : undefined;
-  const settingsWarnings = webSearch && !webSearchApiKey
-    ? [...warnings, `Web search is disabled. Set a valid Tavily API key in ${webSearch.apiKeyEnv}.`]
+  const webSearch: WebSearchConfig = searchSettings === undefined
+    ? {}
+    : webSearchApiKey ? { apiKey: webSearchApiKey } : false;
+  const settingsWarnings = searchSettings && !webSearchApiKey
+    ? [...warnings, `Web search is disabled. Set a valid Tavily API key in ${searchSettings.apiKeyEnv}.`]
     : warnings;
 
   const fallbackOutput = settings?.maxOutputTokens ?? (protocol === "anthropic-messages" ? DEFAULT_MAX_OUTPUT_TOKENS : undefined);
@@ -238,7 +243,7 @@ export function resolveConfig(
     showReasoning: options.showReasoning || (settings?.showReasoning ?? false),
     defaultMode: settings?.mode,
     shell: resolveCommandShell(settings?.shell),
-    webSearchApiKey,
+    webSearch,
     sources: {
       protocol: "config",
       model: "config",

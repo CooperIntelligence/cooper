@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import {
   type LoadedInstructions,
   type Provider,
   type ProviderEvent,
+  type ShellSandbox,
 } from "@cooper/core";
 import type { Config } from "@cooper/host";
 import { runHeadless } from "../src/headless.js";
@@ -32,6 +33,7 @@ const config: Config = {
   showReasoning: false,
   defaultMode: undefined,
   shell: resolveCommandShell(),
+  webSearch: {},
   sources: {},
   settingsWarnings: [],
   settingsFile: null,
@@ -311,6 +313,41 @@ describe("runHeadless", () => {
     expect(err.text).toContain("→ write");
     expect(err.text).toContain("✓");
     expect(out.text).toBe("Done.\n");
+  });
+
+  it.each(["available", "missing", "failed"] as const)("uses the AUTO shell sandbox when it is %s", async (state) => {
+    const root = await realpath(await makeWorkspace());
+    const cwd = path.join(root, "nested");
+    await mkdir(cwd);
+    const sandbox = vi.fn<ShellSandbox>().mockResolvedValue({ kind: "exited", code: 0, stdout: "from sandbox", stderr: "" });
+    if (state === "failed") sandbox.mockRejectedValue(new Error("Sandbox startup failed"));
+    const requests: ChatRequest[] = [];
+    const provider: Provider = {
+      async *stream(request) {
+        requests.push({ ...request, messages: [...request.messages] });
+        yield { type: "done", finishReason: null, message: requests.length === 1 ? {
+          content: "", toolCalls: [{ id: "command", name: "run_command",
+            arguments: JSON.stringify({ command: "Write-Output 'hello'", description: "Print a marker", cwd: "nested" }) }],
+        } : { content: "Done.", toolCalls: [] } };
+      },
+    };
+    const code = await runHeadless({
+      config: { ...config, shell: { kind: "powershell", executable: process.execPath } }, root,
+      mode: "auto", shellSandbox: state === "missing" ? undefined : sandbox, provider,
+      prompt: "Print a marker", instructions: noInstructions, showReasoning: false, out: collector(), err: collector(),
+    });
+
+    expect(code).toBe(0);
+    if (state !== "missing") {
+      expect(sandbox).toHaveBeenCalledExactlyOnceWith({
+        root, cwd, executable: process.execPath, timeoutMs: 120_000,
+        args: expect.arrayContaining(["-NoProfile", "-Command"]),
+      }, undefined);
+    }
+    const expected = { available: "from sandbox", missing: "No command was started", failed: "Sandbox startup failed" }[state];
+    expect(requests[1]?.messages).toContainEqual(expect.objectContaining({
+      role: "tool", toolCallId: "command", content: expect.stringContaining(expected),
+    }));
   });
 
   it("denies approval-gated tools in ask mode and keeps going", async () => {

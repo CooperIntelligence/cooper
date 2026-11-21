@@ -30,11 +30,28 @@ npm run dev -- --sessions                           # 列出当前工作区的�
 npm run dev -- --resume <id>                        # 继续已有会话
 ```
 
+### Windows Desktop 安装
+
+运行 `CooperDesktopSetup-<版本>-windows-x64.exe`，安装完成后从开始菜单打开 **Cooper Desktop**。安装包包含 Electron 和 PowerShell 沙箱助手。首次打开时按界面提示连接模型，再选择工作区。可在 Windows 的“已安装的应用”中卸载。
+
+在 Windows x64 上准备仓库依赖、MSVC Rust 工具链和 Inno Setup 7 后，可以从仓库根目录构建安装包。产物位于 `dist/desktop-setup/`。
+
+```powershell
+./scripts/build-desktop-setup.ps1 -Version '0.1.0-alpha.1'
+```
+
 ### Desktop 开发预览
 
 在仓库根目录运行 `npm run dev:desktop`。首次启动会下载 Electron 运行时。Desktop 与 CLI 共用 `~/.cooper/config.json`，缺少模型配置时会在打开工作区前提供引导。之后可从侧栏的 **Model settings** 修改连接。
 
-在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。桌面端提供 `ask` 和 `plan` 两种权限模式。
+在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。桌面端提供 `ask` 和 `plan`。Windows 构建带有原生沙箱助手时，可在空闲状态下通过 **Auto · Sandboxed shell** 开启 AUTO。该模式跳过审批提示，内置 shell 由沙箱执行，恢复会话时需要重新开启 AUTO。
+
+在 Windows 上调试 AUTO 时，先在仓库根目录构建助手，再启动 Desktop。桌面构建会把助手复制到应用输出目录。
+
+```powershell
+cargo build --locked --release --manifest-path packages/shell-sandbox/Cargo.toml
+npm run dev:desktop
+```
 
 输入框默认用 Enter 发送，Shift+Enter 换行。可在 **Send with** 中改为 Ctrl/⌘+Enter 或 Shift+Enter 发送，单按 Enter 即换行。此偏好会在重启后保留。
 

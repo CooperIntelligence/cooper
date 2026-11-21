@@ -8,6 +8,7 @@ import {
   type Message,
   type Provider,
   type SessionWriter,
+  type ShellSandbox,
   type SkillCatalog,
   type Tool,
 } from "@cooper/core";
@@ -27,6 +28,7 @@ export type HeadlessOptions = {
   config: Config;
   root: string;
   mode: ApprovalMode;
+  shellSandbox?: ShellSandbox;
   prompt: string;
   provider: Provider;
   instructions: LoadedInstructions;
@@ -268,7 +270,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       model: config.model,
       tools,
       messages,
-      context: { root },
+      context: { root, shellSandbox: options.shellSandbox },
       permissions,
       contextBudget: config.context,
       useProviderEstimate: Boolean(config.modelSelection?.tier),

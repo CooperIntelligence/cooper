@@ -1,12 +1,15 @@
 import { z } from "zod";
 import type { ToolCapability } from "../permissions.js";
 import type { ToolSpec } from "../types.js";
+import type { ShellSandbox } from "./shell-sandbox.js";
 
 export type ToolContext = {
   /** Absolute path of the workspace the tools are allowed to touch. */
   root: string;
   /** Aborts in-flight work when the user interrupts or the host shuts down. */
   signal?: AbortSignal;
+  shellSandbox?: ShellSandbox;
+  requireShellSandbox?: boolean;
 };
 
 export type ToolResult = {

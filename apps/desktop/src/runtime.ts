@@ -3,14 +3,14 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
-  PermissionPolicy, SessionWriter, createRunCommandTool, createSkillTool, createWebSearchTool, diffText, discoverSkills,
+  PermissionPolicy, SessionWriter, createRunCommandTool, createSkillTool, diffText, discoverSkills,
   hasSessionLocks, isRuntimeNotice, latestRuntimeNotice, listSessions, loadProjectInstructions, loadSession, newSessionId, permissionModeNotice,
   resumeSession, runAgent, sessionWriterBusy, sessionsDir, workspaceKey,
   type ApprovalOutcome, type ApprovalRequest, type LoadedSession, type Message,
-  type PermissionPreset, type Provider, type RunPhase, type SkillCatalog, type StopCause, type Tool, type ToolCall,
+  type PermissionPreset, type Provider, type RunPhase, type ShellSandbox, type SkillCatalog, type StopCause, type Tool, type ToolCall,
 } from "@cooper/core";
 import {
-  buildSystemPrompt, createProvider, loadConfig, modelBudget, needsResumeBudgetCheck,
+  buildSystemPrompt, configureWebSearchTool, createProvider, loadConfig, modelBudget, needsResumeBudgetCheck,
   prepareTools, selectModelTier, transitionMessage, type Config, type PreparedTools,
   writeSettingsDocument, type SettingsDocument,
 } from "@cooper/host";
@@ -97,6 +97,7 @@ export class DesktopRuntime {
     private readonly drafts: DraftStore,
     private readonly home?: string,
     private readonly useV2 = hasSessionLocks(),
+    private readonly shellSandbox?: ShellSandbox,
   ) {}
 
   getState(): DesktopState | null {
@@ -126,10 +127,7 @@ export class DesktopRuntime {
       const command = createRunCommandTool(config.shell);
       tools = tools.map((tool) => tool.name === command.name ? command : tool);
     }
-    if (config.webSearchApiKey !== workspace.config.webSearchApiKey) {
-      tools = tools.filter((tool) => tool.name !== "web_search");
-      if (config.webSearchApiKey) tools.push(createWebSearchTool(config.webSearchApiKey));
-    }
+    tools = configureWebSearchTool(tools, config.webSearch);
     const previous = chat.config;
     const budgetChanged = (selected.modelSelection?.inputLimit ?? 0) < (previous.modelSelection?.inputLimit ?? 0);
     const checkBudget = budgetChanged || (Boolean(selected.modelSelection?.tier) &&
@@ -174,7 +172,7 @@ export class DesktopRuntime {
     ]);
     const prepared = await prepareTools({
       root, home: this.home, explicit: [], loadProject: false,
-      shell: config.shell, webSearchApiKey: config.webSearchApiKey,
+      shell: config.shell, webSearch: config.webSearch,
     });
     const tools = skills.skills.size ? [...prepared.tools, createSkillTool(skills)] : prepared.tools;
     const workspace = { root, config, instructions: instructions.text, skills, prepared, tools };
@@ -260,6 +258,7 @@ export class DesktopRuntime {
   setMode(mode: DesktopMode): DesktopState {
     this.requireIdle();
     const { workspace, chat } = this.current();
+    if (mode === "auto" && !this.shellSandbox) throw new Error("AUTO requires the Windows shell sandbox.");
     if (mode !== chat.permissions.preset) {
       const notice = permissionModeNotice(mode);
       if (chat.writer || chat.saved) {
@@ -442,7 +441,7 @@ export class DesktopRuntime {
       }
       for await (const event of runAgent({
         provider: chat.provider, model: chat.config.model, tools: workspace.tools,
-        messages: chat.messages, context: { root: workspace.root }, permissions: chat.permissions,
+        messages: chat.messages, context: { root: workspace.root, shellSandbox: this.shellSandbox }, permissions: chat.permissions,
         contextBudget: chat.config.context, signal,
         useProviderEstimate: Boolean(chat.config.modelSelection?.tier),
         preserveFittingInitialHistory: chat.preserveFittingHistory,
@@ -649,7 +648,8 @@ export class DesktopRuntime {
       root: workspace.root,
       model: chat.config.model,
       expandReasoning: chat.config.showReasoning,
-      mode: chat.permissions.preset === "plan" ? "plan" : "ask",
+      mode: chat.permissions.preset,
+      autoAvailable: this.shellSandbox !== undefined,
       sessionId: chat.sessionId,
       draft: this.readDraft(workspace, chat),
       run,

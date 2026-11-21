@@ -127,6 +127,22 @@ function truncateOutput(text: string): string {
   return `${text.slice(0, half)}\n\n[… output truncated …]\n\n${text.slice(-half)}`;
 }
 
+function commandResult(
+  code: number | null,
+  stdout: string,
+  stderr: string,
+  status?: string,
+  signal?: NodeJS.Signals | null,
+): ToolResult {
+  const sections: string[] = [];
+  if (status) sections.push(status);
+  sections.push(`exit code: ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`);
+  if (stdout.trim()) sections.push(stdout.trimEnd());
+  if (stderr.trim()) sections.push(`[stderr]\n${stderr.trimEnd()}`);
+  if (!stdout.trim() && !stderr.trim()) sections.push("(no output)");
+  return { content: truncateOutput(sections.join("\n\n")), isError: status !== undefined || code !== 0 };
+}
+
 function killProcessTree(pid: number): void {
   if (process.platform === "win32") {
     try {
@@ -222,25 +238,9 @@ function runProcess(
       if (finished) return;
       finish();
 
-      const sections: string[] = [];
-      if (stopped === "timeout") {
-        sections.push(`Command timed out after ${timeoutMs}ms and was killed.`);
-      } else if (stopped === "abort") {
-        sections.push("Command cancelled.");
-      }
-      sections.push(
-        `exit code: ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`,
-      );
-      if (stdout.trim().length > 0) sections.push(stdout.trimEnd());
-      if (stderr.trim().length > 0) sections.push(`[stderr]\n${stderr.trimEnd()}`);
-      if (stdout.trim().length === 0 && stderr.trim().length === 0) {
-        sections.push("(no output)");
-      }
-
-      resolvePromise({
-        content: truncateOutput(sections.join("\n\n")),
-        isError: stopped !== undefined || code !== 0,
-      });
+      const status = stopped === "timeout" ? `Command timed out after ${timeoutMs}ms and was killed.`
+        : stopped === "abort" ? "Command cancelled." : undefined;
+      resolvePromise(commandResult(code, stdout, stderr, status, signal));
     });
     abortSignal?.addEventListener("abort", abort, { once: true });
     if (abortSignal?.aborted) abort();
@@ -310,7 +310,23 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
         throw new Error("Command working directory changed after approval.");
       }
       ctx.signal?.throwIfAborted();
-      return runProcess(shell, input.command, cwd, input.timeout_ms ?? 120_000, ctx.signal);
+      const timeoutMs = input.timeout_ms ?? 120_000;
+      if (ctx.requireShellSandbox) {
+        if (!ctx.shellSandbox || (shell.kind !== "powershell" && shell.kind !== "pwsh")) {
+          return { content: "AUTO shell requires the Windows PowerShell sandbox. No command was started.", isError: true };
+        }
+        const root = await fs.realpath(ctx.root);
+        const result = await ctx.shellSandbox({
+          root, cwd, executable: shell.executable, args: shellArgs(shell.kind, input.command), timeoutMs,
+        }, ctx.signal);
+        switch (result.kind) {
+          case "exited": return commandResult(result.code, result.stdout, result.stderr);
+          case "timed-out": return commandResult(null, result.stdout, result.stderr,
+            `Command timed out after ${timeoutMs}ms and was killed.`);
+          case "cancelled": return commandResult(null, "", "", "Command cancelled.");
+        }
+      }
+      return runProcess(shell, input.command, cwd, timeoutMs, ctx.signal);
     },
   };
 }
