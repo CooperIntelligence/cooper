@@ -25,7 +25,8 @@
     "cooper": "./dist/cooper.mjs"
   },
   "files": [
-    "dist/cooper.mjs"
+    "dist/cooper.mjs",
+    "dist/sandbox/linux-*/cooper-shell-sandbox"
   ],
   "engines": {
     "node": ">=22.12.0"

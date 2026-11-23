@@ -14,6 +14,22 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 enum Channel {
     Latest,
     Alpha,
+    Internal,
+}
+
+fn internal_launcher() -> bool {
+    option_env!("COOPER_LAUNCHER_BUILD_CHANNEL") == Some("internal")
+}
+
+fn internal_version(version: &Version) -> bool {
+    version.build.as_str().split('.').next() == Some("internal")
+}
+
+fn check_version_channel(version: &Version, internal: bool) -> Result<()> {
+    if internal_version(version) != internal {
+        return Err("The installed version must belong to the launcher's build channel.".into());
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -45,11 +61,22 @@ fn run() -> Result<i32> {
     }
 
     let executable = std::env::current_exe()?;
+    let expected_name = if internal_launcher() {
+        "cooper-internal.exe"
+    } else {
+        "cooper.exe"
+    };
+    if !executable
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(expected_name))
+    {
+        return Err(format!("Install the launcher as bin/{expected_name}.").into());
+    }
     let bin = executable.parent().ok_or("missing launcher directory")?;
     let root = bin
         .parent()
         .filter(|_| bin.file_name().is_some_and(|name| name == "bin"))
-        .ok_or("install the launcher as bin/cooper.exe")?;
+        .ok_or("missing installation root above the bin directory")?;
     match args.as_slice() {
         [command, options @ ..] if command == "update" => {
             if !options.is_empty() && !matches!(options, [flag] if flag == "--check") {
@@ -65,7 +92,7 @@ fn run() -> Result<i32> {
         [command, ..] if command == "rollback" => Err("Usage: cooper rollback".into()),
         [command, version] if command == "--launcher-setup" => {
             let version = version.to_str().ok_or("expected a UTF-8 release version")?;
-            setup_version(root, Version::parse(version)?)?;
+            setup_version(root, Version::parse(version)?, internal_launcher())?;
             Ok(0)
         }
         [command, version] if command == "--launcher-activate" => {
@@ -85,6 +112,10 @@ fn run() -> Result<i32> {
         _ => {
             let _running = hold_launch_lock(root)?;
             let state = read_state(root)?;
+            if matches!(state.channel, Channel::Internal) != internal_launcher() {
+                return Err("This installation belongs to a different build channel.".into());
+            }
+            check_version_channel(&state.active, internal_launcher())?;
             let program = installed_executable(root, &state.active)?;
             keep_launcher_alive_on_interrupt();
             let status = Command::new(&program)
@@ -129,7 +160,8 @@ fn hold_launch_lock(root: &Path) -> Result<fs::File> {
         .map_err(|error| format!("could not open Cooper's launch lock: {error}").into())
 }
 
-fn setup_version(root: &Path, version: Version) -> Result<()> {
+fn setup_version(root: &Path, version: Version, internal: bool) -> Result<()> {
+    check_version_channel(&version, internal)?;
     let lock = open_lock(root, "install.lock")?;
     lock.lock()?;
     installed_executable(root, &version)?;
@@ -139,10 +171,14 @@ fn setup_version(root: &Path, version: Version) -> Result<()> {
             .into_iter()
             .flatten()
             .find(|candidate| {
-                *candidate != version && installed_executable(root, candidate).is_ok()
+                *candidate != version
+                    && internal_version(candidate) == internal
+                    && installed_executable(root, candidate).is_ok()
             })
     });
-    let channel = if version.pre.as_str().starts_with("alpha.") {
+    let channel = if internal {
+        Channel::Internal
+    } else if version.pre.as_str().starts_with("alpha.") {
         Channel::Alpha
     } else {
         Channel::Latest
@@ -161,9 +197,12 @@ fn change_version(root: &Path, requested: Option<Version>) -> Result<()> {
     let lock = open_lock(root, "install.lock")?;
     lock.lock()?;
     let mut state = read_state(root)?;
+    let internal = matches!(state.channel, Channel::Internal);
+    check_version_channel(&state.active, internal)?;
     let selected = requested
         .or_else(|| state.previous.clone())
         .ok_or("there is no previous Cooper version to roll back to")?;
+    check_version_channel(&selected, internal)?;
     installed_executable(root, &selected)?;
     if selected == state.active {
         return Ok(());
@@ -267,6 +306,32 @@ mod tests {
         let state = read_state(root)?;
         assert_eq!(state.active, first);
         assert!(matches!(state.channel, Channel::Alpha));
+        Ok(())
+    }
+
+    #[test]
+    fn internal_setup_keeps_rollback_inside_the_internal_channel() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        let public = Version::parse("0.2.0-alpha.2")?;
+        let first = Version::parse("0.2.0-alpha.2+internal.20261122.1")?;
+        let second = Version::parse("0.2.0-alpha.2+internal.20261122.2")?;
+        for version in [&public, &first, &second] {
+            let directory = root.join("versions").join(version.to_string());
+            fs::create_dir_all(&directory)?;
+            fs::write(directory.join("cooper.exe"), b"stub")?;
+        }
+        assert!(setup_version(root, public.clone(), true).is_err());
+        assert!(setup_version(root, first.clone(), false).is_err());
+        setup_version(root, first.clone(), true)?;
+        setup_version(root, second.clone(), true)?;
+        let state = read_state(root)?;
+        assert!(matches!(state.channel, Channel::Internal));
+        assert_eq!(state.active, second);
+        assert_eq!(state.previous, Some(first.clone()));
+        assert!(change_version(root, Some(public)).is_err());
+        change_version(root, None)?;
+        assert_eq!(read_state(root)?.active, first);
         Ok(())
     }
 }

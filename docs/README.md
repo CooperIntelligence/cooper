@@ -9,7 +9,7 @@
 | 文档 | 负责的实现 |
 | --- | --- |
 | [架构总览](architecture.md) | 包边界、启动流程、Agent 循环与事件契约、系统提示与项目指令 |
-| [CLI 与配置](cli.md) | 参数解析与入口分流、无头输出契约、流式渲染、配置加载与热更新 |
+| [CLI、配置与打包](cli.md) | 参数解析、无头输出、Windows 安装包、流式渲染与配置加载 |
 | [模型协议与档位](providers.md) | Provider 接口、三个协议适配器、协议续传的身份与前缀校验、档位切换 |
 | [工具与权限](tools-and-permissions.md) | 工具契约、权限决策、审批与预览、文件与命令的工作区边界 |
 | [上下文与会话](context-and-sessions.md) | token 估算、预算数学、压缩分组、JSONL 持久化与恢复修复 |
@@ -40,7 +40,8 @@ packages/core/            内核：不依赖 Ink/React，不直接读写终端
   src/mcp/                MCP 配置、客户端、工具与资源适配
   src/session.ts          会话持久化与恢复
   src/instructions.ts     COOPER.md / AGENTS.md 加载
-scripts/                  构建与打包（build.mjs、package.mjs）
+packages/shell-sandbox/   Windows MXC 执行助手
+scripts/                  CLI 打包、Windows 原生与内部安装包构建
 docs/                     本组文档
 ```
 

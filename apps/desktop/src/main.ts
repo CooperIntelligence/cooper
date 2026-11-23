@@ -1,12 +1,23 @@
 import path from "node:path";
+import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type IpcMainInvokeEvent } from "electron";
-import { probeEndpoint, userConfigFile, windowsShellSandbox } from "@cooper/host";
+import { cooperBuildChannel } from "@cooper/core";
+import { probeEndpoint, userConfigFile, windowsAgentShell, localShellSandbox, shellSandboxPlatform } from "@cooper/host";
 import { DesktopConnection } from "./connection.js";
 import { DraftStore } from "./drafts.js";
 import type { DesktopEvent } from "./ipc.js";
 import { webLink } from "./links.js";
 import { DesktopRuntime } from "./runtime.js";
+
+const internal = cooperBuildChannel === "internal";
+if (internal) {
+  app.setName("Cooper Desktop Internal");
+  const userData = path.join(app.getPath("appData"), "Cooper Desktop Internal");
+  mkdirSync(userData, { recursive: true });
+  app.setPath("userData", userData);
+  if (process.platform === "win32") app.setAppUserModelId("Cooper.Desktop.Internal");
+}
 
 function openWindow(): void {
   const page = path.join(__dirname, "index.html");
@@ -15,7 +26,8 @@ function openWindow(): void {
   const windows = process.platform === "win32";
   app.dock?.setIcon(icon);
   const window = new BrowserWindow({
-    title: "Cooper Desktop", width: 1150, height: 790, minWidth: 690, minHeight: 510,
+    title: internal ? `Cooper Desktop Internal · ${app.getVersion()}` : "Cooper Desktop",
+    width: 1150, height: 790, minWidth: 690, minHeight: 510,
     icon,
     show: false,
     backgroundColor: "#edf3fa",
@@ -46,9 +58,11 @@ function openWindow(): void {
   const drafts = new DraftStore(path.join(app.getPath("userData"), "drafts"), (key, error) => {
     emit({ type: "draft-error", key, message: `Could not save draft: ${String(error)}` });
   });
-  const shellSandbox = windowsShellSandbox(app.isPackaged ? process.resourcesPath : __dirname, { requireExecutable: true });
-  const runtime = new DesktopRuntime(emit, drafts, undefined, undefined, shellSandbox);
-  const connection = new DesktopConnection();
+  const runtimeDirectory = app.isPackaged ? process.resourcesPath : (windows ? process.env.COOPER_WINDOWS_RUNTIME_DIR : process.env.COOPER_LINUX_RUNTIME_DIR) ?? __dirname;
+  const windowsShell = windowsAgentShell(runtimeDirectory);
+  const shellSandbox = localShellSandbox(runtimeDirectory);
+  const runtime = new DesktopRuntime(emit, drafts, undefined, undefined, shellSandbox, windowsShell, shellSandboxPlatform);
+  const connection = new DesktopConnection(undefined, windowsShell);
 
   function handle(channel: string, handler: (...args: unknown[]) => unknown): void {
     ipcMain.handle(channel, (event: IpcMainInvokeEvent, ...args: unknown[]) => {
@@ -133,6 +147,7 @@ function openWindow(): void {
   });
 
   window.webContents.on("will-navigate", (event) => event.preventDefault());
+  if (internal) window.on("page-title-updated", (event) => event.preventDefault());
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, respond) => respond(false));
   window.once("ready-to-show", () => window.show());

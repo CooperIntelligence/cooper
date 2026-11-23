@@ -3,6 +3,9 @@ import type { Message, ProviderData, ToolCall } from "./types.js";
 import type { Provider, TokenUsage } from "./provider/types.js";
 import type { Continuation } from "./provider/continuation.js";
 import { providerRetryDelay } from "./provider/retry.js";
+import path from "node:path";
+import { reviewShellCommand } from "./shell-review.js";
+import { resolveInRoot, resolveSandboxProjectRoot } from "./tools/paths.js";
 import {
   DEFAULT_CONTEXT_CONFIG,
   estimateContextTokens,
@@ -48,6 +51,8 @@ export type ApprovalRequest = {
   preview?: ToolPreview;
   /** A new request for the same call after its file preview changed. */
   previewChanged?: boolean;
+  allowProcessGrant?: boolean;
+  reviewReason?: string;
 };
 
 export type AgentEvent =
@@ -200,7 +205,8 @@ async function requestToolApproval(
       return { error: "The approval request could not be completed.", denied: true };
     }
     if (outcome !== "allow" && outcome !== "allow-session") return { outcome: "deny" };
-    if (outcome === "allow-session" && !supportsProcessGrant(tool.capabilities)) {
+    if (outcome === "allow-session" &&
+        (request.allowProcessGrant === false || !supportsProcessGrant(tool.capabilities))) {
       return { outcome: "deny" };
     }
     context.signal?.throwIfAborted();
@@ -214,6 +220,14 @@ async function requestToolApproval(
     context.signal?.throwIfAborted();
     previewChanged = true;
   }
+}
+
+async function ordinaryWorkspaceEdit(request: ApprovalRequest, root: string, platform: NonNullable<PermissionPolicy["sandboxPlatform"]>): Promise<boolean> {
+  if (request.preview?.kind !== "diff") return false;
+  const protectedPath = (file: string) => /(?:^|[/\\])(?:\.git|\.cooper|\.ssh|\.env(?:\.[^/\\]*)?|agents\.md|cooper\.md)(?:$|[/\\])/i.test(file);
+  const realRoot = await resolveSandboxProjectRoot(root, platform);
+  const absolute = await resolveInRoot(realRoot, request.preview.path);
+  return !protectedPath(request.preview.path) && !protectedPath(path.relative(realRoot, absolute));
 }
 
 /**
@@ -232,7 +246,7 @@ export async function* runAgent(
   const toolContext: ToolContext = {
     ...context,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    requireShellSandbox: options.permissions.preset === "auto",
+    requireShellSandbox: Boolean(options.permissions.sandboxPlatform) || options.permissions.preset === "auto",
   };
   const maxTurns = options.maxTurns ?? 25;
   const specs = tools.map(toToolSpec);
@@ -451,6 +465,7 @@ export async function* runAgent(
         };
       } else {
         const decision = options.permissions.decide(tool);
+        const needsDecision = decision === "prompt" || decision === "review-shell" || decision === "check-edit";
 
         if (options.recoveryReadOnly && needsApproval(tool.capabilities)) {
           denied = true;
@@ -461,9 +476,35 @@ export async function* runAgent(
             content: policyDeniedMessage(options.permissions),
             isError: true,
           };
-        } else if (decision === "prompt" && options.approve) {
-          const response = await requestToolApproval(options.approve, tool, {
+        } else if (tool.name === "shell" && toolContext.requireShellSandbox && !toolContext.shellSandbox) {
+          denied = true;
+          result = { content: "The shell sandbox is unavailable. No command was started.", isError: true };
+        } else if (needsDecision && (decision !== "prompt" || options.approve)) {
+          let denialReason: string | undefined;
+          const decideCall = async (request: ApprovalRequest): Promise<ApprovalOutcome> => {
+            const platform = options.permissions.sandboxPlatform;
+            if (decision === "check-edit" && platform && await ordinaryWorkspaceEdit(request, toolContext.root, platform)) return "allow";
+            if (decision === "review-shell" && platform) {
+              const verdict = await reviewShellCommand(provider, model, request, messages, {
+                platform,
+                workspace: toolContext.root,
+                network: toolContext.shellNetwork === true,
+              }, toolContext.signal);
+              if (verdict.decision === "allow") return "allow";
+              denialReason = verdict.reason;
+              if (verdict.decision === "deny") return "deny";
+              request = { ...request, reviewReason: verdict.reason };
+            }
+            if (options.approve) {
+              denialReason = undefined;
+              return options.approve(request);
+            }
+            denialReason ??= "This action requires interactive approval.";
+            return "deny";
+          };
+          const response = await requestToolApproval(decideCall, tool, {
             call, toolName: tool.name, summary, input, capabilities: tool.capabilities,
+            allowProcessGrant: options.permissions.preset === "ask",
           }, toolContext);
           if (options.beforeTool) toolContext.signal?.throwIfAborted();
           if ("error" in response) {
@@ -474,8 +515,9 @@ export async function* runAgent(
             approvedPreview = response.preview;
             if (outcome === "deny") {
               denied = true;
-              approval = "user-denied";
-              result = { content: USER_DENIED_MESSAGE, isError: true };
+              approval = denialReason === undefined ? "user-denied" : undefined;
+              result = { content: denialReason === undefined ? USER_DENIED_MESSAGE :
+                `Permission denied. ${denialReason} ${NO_RETRY}`, isError: true };
             } else if (outcome === "allow-session") {
               options.permissions.grantSession(tool.name);
             }
@@ -491,6 +533,16 @@ export async function* runAgent(
           approval = "process-grant";
         }
 
+        if (result === undefined) {
+          if (options.permissions.sandboxPlatform && (tool.name === "write" || tool.name === "edit")) {
+            try {
+              await resolveSandboxProjectRoot(toolContext.root, options.permissions.sandboxPlatform);
+            } catch (error) {
+              denied = true;
+              result = { content: error instanceof Error ? error.message : String(error), isError: true };
+            }
+          }
+        }
         if (result === undefined) {
           yield { type: "tool-start", call, summary };
           toolContext.signal?.throwIfAborted();

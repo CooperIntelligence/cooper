@@ -27,6 +27,7 @@ const result = await build({
   outfile,
   define: {
     COOPER_BUILD_VERSION: JSON.stringify(process.env.COOPER_BUILD_VERSION) ?? "undefined",
+    COOPER_BUILD_CHANNEL: JSON.stringify(process.env.COOPER_BUILD_CHANNEL ?? "public"),
   },
   alias: {
     "react-devtools-core": "./scripts/stub-react-devtools.mjs",

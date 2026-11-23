@@ -28,7 +28,9 @@ import {
   IncompleteConfigError,
   loadConfig,
   selectModelTier,
-  windowsShellSandbox,
+  localShellSandbox,
+  shellSandboxPlatform,
+  windowsAgentShell,
   writeOnboardingConfig,
   type ApprovalMode,
   type Config,
@@ -69,11 +71,12 @@ Options:
 
 Modes:
   ask    ask before file writes, commands, and web requests
-  auto   skip approval prompts; the built-in shell requires the Windows sandbox
+  auto   apply automatic approval rules; shell requires a supported sandbox
   plan   read-only: inspect files, deny writes, commands, and web requests
 
   With -p nobody can answer an approval prompt, so ask denies writes,
-  commands, and web requests. Pass --mode auto to skip prompts.
+  commands, and web requests. On Windows and Linux, auto checks routine edits and
+  reviews shell commands separately. Calls needing user approval are denied with -p.
   Startup precedence: --mode > saved plan/ask > config.json mode > ask.
   Config defaults accept plan and ask. In the TUI, /plan, /ask and /auto
   switch the mode while idle.
@@ -138,6 +141,14 @@ function printSessions(root: string): void {
 }
 
 async function main(): Promise<void> {
+  const native = isSea();
+  const entry = native ? process.execPath : fileURLToPath(import.meta.url);
+  const linuxSourceRuntime = entry.endsWith(".tsx") ? path.resolve(path.dirname(entry), "../dist") : path.dirname(entry);
+  const appDirectory = native ? path.dirname(process.execPath)
+    : process.platform === "linux"
+      ? process.env.COOPER_LINUX_RUNTIME_DIR ?? linuxSourceRuntime
+      : process.env.COOPER_WINDOWS_RUNTIME_DIR ?? path.dirname(entry);
+  const windowsShell = windowsAgentShell(appDirectory);
   let args: ParsedArgs;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -189,7 +200,7 @@ async function main(): Promise<void> {
     // TUI is the one entry point into onboarding; headless and every other
     // config error fail closed as before.
     try {
-      config = loadConfig({ showReasoning: args.showReasoning });
+      config = loadConfig({ showReasoning: args.showReasoning, windowsShell });
     } catch (error) {
       if (!(error instanceof IncompleteConfigError)) throw error;
       if (args.prompt !== null || !process.stdin.isTTY || !process.stdout.isTTY) {
@@ -206,7 +217,7 @@ async function main(): Promise<void> {
         );
       }
       writeOnboardingConfig(undefined, result);
-      config = loadConfig({ showReasoning: args.showReasoning });
+      config = loadConfig({ showReasoning: args.showReasoning, windowsShell });
     }
 
     for (const warning of config.settingsWarnings) {
@@ -235,8 +246,8 @@ async function main(): Promise<void> {
       modeNotice =
         `Saved session was in auto mode; not restored (now ${mode}). ` +
         (args.prompt === null
-          ? "Pass --mode auto or run /auto to enable auto-approve."
-          : "Pass --mode auto to enable auto-approve.");
+          ? "Pass --mode auto or run /auto to enable Auto mode."
+          : "Pass --mode auto to enable Auto mode.");
     } else if (resolution.source === "session") {
       modeNotice = `Restored from session: ${mode}.`;
     }
@@ -254,8 +265,11 @@ async function main(): Promise<void> {
   const provider = createProvider(config);
 
   const skills = await discoverSkills(root);
-  const appDirectory = isSea() ? path.dirname(process.execPath) : path.dirname(fileURLToPath(import.meta.url));
-  const shellSandbox = windowsShellSandbox(appDirectory);
+  const shellSandbox = localShellSandbox(appDirectory);
+  if (shellSandboxPlatform && mode === "auto" && !shellSandbox) {
+    session?.close();
+    fail(new Error("Auto requires the Cooper shell sandbox. Install or build the sandbox runtime for this platform."));
+  }
   let prepared: PreparedTools;
   try {
     prepared = await prepareTools({
@@ -286,6 +300,7 @@ async function main(): Promise<void> {
         root,
         mode,
         shellSandbox,
+        sandboxPlatform: shellSandboxPlatform,
         prompt,
         provider,
         instructions,
@@ -315,6 +330,8 @@ async function main(): Promise<void> {
         root={root}
         mode={mode}
         shellSandbox={shellSandbox}
+        sandboxPlatform={shellSandboxPlatform}
+        windowsShell={windowsShell}
         modeSource={modeSource}
         instructions={instructions}
         skills={skills}

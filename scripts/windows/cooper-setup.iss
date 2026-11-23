@@ -1,9 +1,25 @@
+#if CooperInternal == "1"
+  #define CooperAppId "Cooper.CLI.Internal"
+  #define CooperAppName "Cooper CLI Internal"
+  #define CooperLauncherName "cooper-internal.exe"
+  #define CooperDefaultDir "{localappdata}\Cooper Internal"
+  #define OtherAppId "Cooper.CLI.Native"
+  #define OtherDefaultDir "{localappdata}\Cooper"
+#else
+  #define CooperAppId "Cooper.CLI.Native"
+  #define CooperAppName "Cooper CLI"
+  #define CooperLauncherName "cooper.exe"
+  #define CooperDefaultDir "{localappdata}\Cooper"
+  #define OtherAppId "Cooper.CLI.Internal"
+  #define OtherDefaultDir "{localappdata}\Cooper Internal"
+#endif
+
 [Setup]
-AppId=Cooper.CLI.Native
-AppName=Cooper CLI
+AppId={#CooperAppId}
+AppName={#CooperAppName}
 AppVersion={#CooperVersion}
 AppPublisher=Cooper Intelligence
-DefaultDirName={localappdata}\Cooper
+DefaultDirName={#CooperDefaultDir}
 OutputDir={#SetupOutputDir}
 OutputBaseFilename=CooperSetup-{#CooperVersion}-windows-x64
 PrivilegesRequired=lowest
@@ -16,16 +32,17 @@ WizardStyle=modern
 Compression=lzma2/fast
 SolidCompression=yes
 ChangesEnvironment=yes
-SetupMutex=Cooper.CLI.Native.Setup
+SetupMutex={#CooperAppId}.Setup
 CloseApplications=yes
 RestartApplications=no
 SetupIconFile=cooper.ico
 UninstallDisplayIcon={app}\cooper.ico
 
 [Files]
-Source: "{#LauncherPath}"; DestDir: "{app}\bin"; DestName: "cooper.exe"; Flags: ignoreversion
+Source: "{#LauncherPath}"; DestDir: "{app}\bin"; DestName: "{#CooperLauncherName}"; Flags: ignoreversion
 Source: "{#PayloadPath}"; DestDir: "{app}\versions\{#CooperVersion}"; DestName: "cooper.exe"; Flags: ignoreversion
 Source: "{#SandboxPath}"; DestDir: "{app}\versions\{#CooperVersion}"; DestName: "cooper-shell-sandbox.exe"; Flags: ignoreversion
+Source: "{#PowerShellDir}\*"; DestDir: "{app}\versions\{#CooperVersion}\powershell"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "cooper.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]
@@ -37,11 +54,13 @@ Type: dirifempty; Name: "{app}\bin"
 
 [Code]
 const
-  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Cooper.CLI.Native_is1';
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#CooperAppId}_is1';
 
 var
   LaunchLock: TFileStream;
   ManagedBin: String;
+
+#include "setup-install-root.iss"
 
 function SetChildVariable(Name, Value: String): Integer;
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
@@ -111,8 +130,9 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   RegisteredRoot, Target: String;
 begin
-  Result := '';
   Target := ExpandConstant('{app}');
+  Result := OtherChannelInstallError(Target);
+  if Result <> '' then Exit;
   ManagedBin := AddBackslash(Target) + 'bin';
   if RegQueryStringValue(HKCU, UninstallKey, 'InstallLocation', RegisteredRoot) then
   begin
@@ -120,7 +140,7 @@ begin
       Result := 'Cooper CLI is already installed at ' + RegisteredRoot + '.';
   end
   else if not DirectoryIsEmpty(Target) and not (FileExists(Target + '\current.json') and
-    FileExists(Target + '\bin\cooper.exe') and DirExists(Target + '\versions')) then
+    FileExists(Target + '\bin\{#CooperLauncherName}') and DirExists(Target + '\versions')) then
     Result := 'The selected directory already contains files from another installation.';
 
   if Result = '' then
@@ -134,7 +154,7 @@ var
 begin
   if Step = ssPostInstall then
   begin
-    if not Exec(ExpandConstant('{app}\bin\cooper.exe'), '--launcher-setup {#CooperVersion}', '',
+    if not Exec(ExpandConstant('{app}\bin\{#CooperLauncherName}'), '--launcher-setup {#CooperVersion}', '',
         SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
       RaiseException('Setup could not activate the installed Cooper version. Run Setup again to repair it.');
     if not EditUserPath('add') then

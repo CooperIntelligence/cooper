@@ -43,6 +43,8 @@ export type DesktopState = {
   expandReasoning: boolean;
   mode: DesktopMode;
   autoAvailable: boolean;
+  windowsShellStatus?: "available" | "unavailable";
+  linuxShellStatus?: "available" | "unavailable";
   sessionId: string | null;
   sessions: { id: string; title: string }[];
   messages: (ChatMessage | ToolDisplay)[];

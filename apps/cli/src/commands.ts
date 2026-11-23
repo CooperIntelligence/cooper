@@ -57,7 +57,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     name: "auto",
     aliases: [],
     usage: "/auto",
-    description: "skip approval prompts, require the Windows sandbox for shell",
+    description: "use automatic approval rules and require a sandbox for shell",
   },
   {
     name: "clear",

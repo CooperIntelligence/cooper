@@ -21,6 +21,19 @@ npm run dev -- <参数>       # 带参数运行
 npm run build              # 打包到 apps/cli/dist/cooper.mjs（bin 名 cooper）
 ```
 
+### Linux 沙箱
+
+Linux 的 Ask 和 Auto 通过 MXC Bubblewrap 执行命令。源码构建需要 Rust、OpenSSL 开发库和发行版的 `bubblewrap`。运行 `npm run build:linux-sandbox` 后，CLI 和 Desktop 开发入口会使用构建出的助手。
+助手必须位于可写的工作区之外。从 Cooper 源码启动时，可选择另一个项目作为工作区，例如 `npm run dev -- --cwd /home/alice/projects/example`。
+
+默认 shell 禁止出站。可以在用户配置中为一个工作区的真实绝对路径开启出站。条目只匹配该工作区，子工作区需各自配置。
+
+```json
+{ "linuxNetworkWorkspaces": ["/home/alice/projects/example"] }
+```
+
+联网执行仍受同一文件边界约束。联网后端需要 TUN、slirp4netns、iproute2、util-linux 和 iptables 等主机依赖。助手或运行条件缺失时，shell 返回启动错误。 [MXC Bubblewrap 要求](https://github.com/microsoft/mxc/blob/v1.1.0/docs/backends/bwrap/bubblewrap-backend.md#prerequisites)
+
 ## 命令行参数
 
 | 参数 | 行为 |
@@ -59,7 +72,7 @@ echo "列出行数最多的文件" | npm run dev -- -p
 
 - stdout 只写模型的回答，可直接重定向；工具进度、会话状态、模式提示、MCP 状态、诊断和推理输出走 stderr。
 - 退出码：成功 `0`，错误或达到轮次上限 `1`，被中断 `130`。
-- 无头模式没有交互审批，`ask` 和 `plan` 都会拒绝写文件、执行命令和网络请求。`--mode auto` 跳过审批提示，内置 `shell` 仍要求 Windows 沙箱。
+- 无头模式下，`ask` 和 `plan` 都会拒绝写文件、执行命令和网络请求。Windows 和 Linux `--mode auto` 会校验普通文件改动并单独审核 `shell`，其他需要人工审批的调用会被拒绝。
 - 配置缺少必填字段时无头启动直接报错，不进入首次引导。
 - 提示里写 `/skill <name> [请求]` 可以在本次请求中启用一个 Skill。
 
@@ -92,14 +105,16 @@ echo "列出行数最多的文件" | npm run dev -- -p
 | 模式 | 读取类工具 | 写文件 / 执行命令 / 网络请求 |
 | --- | --- | --- |
 | `plan` | 允许 | 直接拒绝 |
-| `ask`（交互） | 允许 | 每次询问，或沿用进程内授权 |
+| `ask`（交互） | 允许 | 每次询问。CLI 可以在确认时授权整个工具到进程退出 |
 | `ask`（无头 `-p`） | 允许 | 直接拒绝 |
-| `auto` | 允许 | 跳过交互审批，内置 `shell` 必须在 Windows 沙箱内运行 |
+| `auto`（Windows / Linux） | 允许 | 普通工作区编辑通过校验后执行。`shell` 单独审核。敏感编辑和其他受管控工具在交互界面转人工，无头运行拒绝 |
 
 - 网络工具在 `ask` 下逐次确认，不能被进程内授权覆盖。
-- 其他受管控工具可以按工具名授权到进程退出，只保存在内存，不写入会话；切换到 `plan` 后先应用只读限制，此前的授权不会变成可写。
+- CLI 对其他受管控工具提供按工具名授权到进程退出的选项。授权只保存在内存，切换到 `plan` 后仍执行只读限制。Desktop 当前只支持批准本次调用。
 - 恢复会话只会带回 `plan` 或 `ask`；保存过 `auto` 的会话在新进程里不会自动恢复为 `auto`，需要 `--mode auto` 或 TUI 里 `/auto`。
-- AUTO 的内置 `shell` 目前支持 Windows 上的 PowerShell。命令可以读取工作区和写入单次调用的临时目录，网络访问被阻止。工作区文件修改使用 `edit` 和 `write`。助手缺失、系统不支持或沙箱启动失败时，Cooper 会返回错误。
+- Windows 下 `Ask` 与 `Auto` 共用 MXC。项目目录和单次调用的临时目录可写，shell 网络访问被拒绝。系统盘根、用户目录及其上级不能用作可写工作区。助手缺失、系统不支持或沙箱启动失败时，Cooper 会返回错误。
+- Windows Auto 的审核复用会话的模型端点，发起一次独立请求。审核看实际命令、用户授权和执行边界。审核无法给出有效结论时转人工，无头运行拒绝。
+- Linux 的 Ask 和 Auto 共用 MXC Bubblewrap。macOS 的交互 Ask 经用户批准使用宿主 shell，CLI Auto 下内置 shell 因缺少沙箱而停止。Desktop 检测到沙箱助手后才开放 `auto`。
 
 ## 配置文件
 
@@ -125,22 +140,22 @@ echo "列出行数最多的文件" | npm run dev -- -p
 | `context.reserveOutputTokens` | 16,384 |
 | `context.compact` | `true` |
 | `context.summaryModel` | 使用主模型 |
-| `shell` | Windows 为 PowerShell，Linux 为 Bash，macOS 为 zsh |
+| `shell` | Windows 固定使用安装包自带的 PowerShell 7，Linux 默认 Bash，macOS 默认 zsh |
 | `webSearch` | 默认使用 Tavily 免费免 Key 搜索，设为 `false` 可关闭 |
 
 - 首次在交互界面启动且缺少必填字段时进入引导：选择协议、模型 ID（必填）、可选的上下文窗口、服务地址与密钥，再用该配置请求一次模型列表（10 秒超时）验证连接；验证失败可重试、修改或跳过，放弃则退出并提示手工写入。无头或重定向启动不会进入引导，直接报错。
-- 编辑器可改 12 个字段：四个连接字段、`maxOutputTokens`、`showReasoning`、`mode`、`shell` 和四个 `context.*`。`webSearch`、`defaultTier`、`modelTiers` 只能手改文件后用 `/reload` 应用。
+- 编辑器可改四个连接字段、`maxOutputTokens`、`showReasoning`、`mode` 和四个 `context.*`。在 Linux 和 macOS 上也可编辑 `shell`。`webSearch`、`defaultTier`、`modelTiers` 只能手改文件后用 `/reload` 应用。
 - 未知字段、疑似密钥的其他字段、旧的 `env` 对象、`mode: "auto"` 都只是警告并忽略；JSON 语法错误或类型不匹配是硬错误，不会静默改变行为。
 - `/config` 保存时先写同目录临时文件（POSIX 上权限 `0600`）再替换，并检查保存期间是否被外部修改；`/reload` 应用外部编辑，校验失败时继续使用已生效的配置。
 - 旧配置可以把 `env` 中的 `COOPER_BASE_URL`、`COOPER_API_KEY` 移到顶层 `baseURL`、`apiKey`，然后删除 `env`。
 
-命令 shell 可用 `shell` 覆盖：
+在 Linux 和 macOS 上，命令解释器可以通过 `shell` 设置覆盖。
 
 ```json
 { "shell": { "kind": "pwsh" } }
 ```
 
-`kind` 支持 `powershell`、`pwsh`、`cmd`、`sh`、`bash`、`zsh`、`git-bash`；`powershell`/`cmd`/`git-bash` 仅限 Windows，`shell.executable` 需要绝对路径，Windows 上选 `bash` 必须显式给出可执行文件。
+可选解释器为 `pwsh`、`sh`、`bash` 或 `zsh`。`shell.executable` 接受绝对路径。Windows 会提示并忽略旧的 `shell` 配置。Windows npm 包使用同样的权限策略，内置 shell 需要原生安装包提供的运行时。
 
 ## 模型档位（实验性）
 
@@ -182,7 +197,7 @@ echo "列出行数最多的文件" | npm run dev -- -p
 | MCP 服务器暴露的工具（`mcp__<server>__<tool>`） | `execute` |
 | `web_fetch`、`web_search` | `network` |
 
-`/tools` 可以随时查看当前生效的工具与能力。文件与命令都被限制在工作区内。
+`/tools` 可以随时查看当前生效的工具与能力。文件工具校验工作区边界。命令从工作区内启动，Windows 原生版还通过 MXC 限制 shell 的访问范围。受信任的 MCP 服务器使用其自身的进程或远端环境执行。
 
 `shell` 的每次调用都需要 `description`。模型用一句话说明命令的目的和主要影响，复合命令应概括重要步骤。审批面板同时显示这句说明和实际命令。
 
@@ -224,7 +239,7 @@ export TAVILY_API_KEY=...        # 可用 webSearch.apiKeyEnv 改用其他变量
 ```
 
 - 显式配置密钥模式后，密钥缺失或格式不合法会禁用搜索并给出警告。设置 `"webSearch": false` 可关闭搜索。编辑配置后在 TUI 用 `/reload` 应用。
-- 两个工具都声明 `network`：交互 `ask` 每次确认出站请求参数，`plan` 与无头 `ask` 拒绝，`auto` 自动批准。
+- 两个工具都声明 `network`。交互 `ask` 和 Windows / Linux 交互 `auto` 每次确认出站请求参数，`plan`、无头 `ask` 和 Windows / Linux 无头 `auto` 拒绝。 [权限模式](#权限模式)
 
 ## 相关文档
 

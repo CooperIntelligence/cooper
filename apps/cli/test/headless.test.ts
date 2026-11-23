@@ -340,7 +340,7 @@ describe("runHeadless", () => {
     expect(code).toBe(0);
     if (state !== "missing") {
       expect(sandbox).toHaveBeenCalledExactlyOnceWith({
-        root, cwd, executable: process.execPath, timeoutMs: 120_000,
+        root, cwd, kind: "powershell", executable: process.execPath, timeoutMs: 120_000,
         args: expect.arrayContaining(["-NoProfile", "-Command"]),
       }, undefined);
     }
@@ -375,6 +375,42 @@ describe("runHeadless", () => {
     expect(err.text).toContain("⊘");
     expect(out.text).toBe("I could not write the file.\n");
     await expect(readFile(path.join(root, "hello.txt"), "utf8")).rejects.toThrow();
+  });
+
+  it.each([
+    ['{"decision":"allow","reason":"Local build"}', true],
+    ['{"decision":"deny","reason":"Outside scope"}', false],
+    ["not JSON", false],
+  ] as const)("reviews a Windows Auto shell separately before dispatch: %s", async (verdict, executes) => {
+    const root = await realpath(await makeWorkspace());
+    const sandbox = vi.fn<ShellSandbox>().mockResolvedValue({ kind: "exited", code: 0, stdout: "confined", stderr: "" });
+    const requests: ChatRequest[] = [];
+    const provider: Provider = {
+      async *stream(request) {
+        requests.push({ ...request, messages: [...request.messages] });
+        if (requests.length === 2) {
+          expect(request.tools).toEqual([]);
+          expect(request.messages).toHaveLength(2);
+          expect(request.messages[1]?.content).toContain("Print a marker");
+          yield { type: "done", finishReason: "stop", message: { content: verdict, toolCalls: [] } };
+          return;
+        }
+        yield { type: "done", finishReason: "stop", message: requests.length === 1 ? {
+          content: "", toolCalls: [{ id: "command", name: "run_command",
+            arguments: JSON.stringify({ command: "Write-Output 'hello'", description: "Print a marker" }) }],
+        } : { content: "Done.", toolCalls: [] } };
+      },
+    };
+    await runHeadless({
+      config: { ...config, shell: { kind: "pwsh", executable: process.execPath } }, root,
+      mode: "auto", sandboxPlatform: "windows", shellSandbox: sandbox, provider,
+      prompt: "Print a marker", instructions: noInstructions, showReasoning: false, out: collector(), err: collector(),
+    });
+    expect(requests).toHaveLength(3);
+    expect(sandbox).toHaveBeenCalledTimes(executes ? 1 : 0);
+    expect(requests[2]?.messages).toContainEqual(expect.objectContaining({
+      role: "tool", toolCallId: "command", content: expect.stringContaining(executes ? "confined" : "Permission denied"),
+    }));
   });
 
   it("denies approval-gated tools in plan mode", async () => {

@@ -1,4 +1,5 @@
 import type { PermissionPreset } from "./permissions.js";
+import type { ShellSandboxPlatform } from "./tools/shell-sandbox.js";
 import type { Message, RuntimeNoticeKind } from "./types.js";
 
 /** Marker for the permission-mode runtime notice. */
@@ -25,12 +26,22 @@ const MODE_TEXT: Record<PermissionPreset, string> = {
  * marker keeps hosts from rendering it as user input. The text is fixed so
  * appending it does not perturb the cached prefix.
  */
-export function permissionModeNotice(preset: PermissionPreset): Message {
+export function permissionModeNotice(preset: PermissionPreset, platform?: ShellSandboxPlatform): Message {
+  const content = platform && preset !== "plan"
+    ? `Permission mode is now ${preset}. This supersedes earlier runtime notices.\n` +
+      (preset === "ask" ? "Gated calls require user approval. " :
+        "Routine workspace edits can proceed; shell requires separate review. Sensitive edits and other gated tools require the user. ") +
+      (platform === "windows"
+        ? "The bundled PowerShell 7 always runs in MXC. Shell network access is blocked. Do not assign PowerShell automatic variables such as $HOME. "
+        : "Shell commands run in MXC Bubblewrap. Outbound access requires a workspace grant from the user's configuration. ") +
+      "The project and private per-call temp are writable. Check computed paths before deletes. " +
+      "Do not retry a denied action through another tool."
+    : MODE_TEXT[preset];
   return {
     role: "user",
     content:
       `<cooper-runtime mode="${preset}">\n` +
-      `${MODE_TEXT[preset]}\n` +
+      `${content}\n` +
       "</cooper-runtime>",
     runtime: PERMISSION_MODE_RUNTIME,
   };

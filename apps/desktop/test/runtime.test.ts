@@ -192,7 +192,7 @@ it("shows the shell description with the command before approval", async () => {
 
 it("offers AUTO only with a sandbox and does not restore AUTO from a session", async () => {
   expect(runtime.getState()).toMatchObject({ mode: "ask", autoAvailable: false });
-  expect(() => runtime.setMode("auto")).toThrow("AUTO requires the Windows shell sandbox");
+  expect(() => runtime.setMode("auto")).toThrow("Auto requires the Cooper shell sandbox");
 
   await runtime.dispose();
   testTool = createRunCommandTool({ kind: "powershell", executable: process.execPath });

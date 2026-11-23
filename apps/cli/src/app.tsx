@@ -21,6 +21,7 @@ import {
   toToolSpec,
   type ApprovalOutcome,
   type ApprovalRequest,
+  type CommandShell,
   type LoadedInstructions,
   type LoadedSession,
   type Message,
@@ -47,7 +48,7 @@ import { ApprovalPanel } from "./approval.js";
 import { visiblePreviewText } from "./preview.js";
 import { createMarkdownFormatter, type MarkdownLine } from "./markdown.js";
 import type { ModeResolution } from "./args.js";
-import { describeModel, loadConfig, modelRequestError, modelSelectionChanged, resolveConfig, selectModelTier, type ApprovalMode, type Config } from "@cooper/host";
+import { linuxWorkspaceNetwork, describeModel, loadConfig, modelRequestError, modelSelectionChanged, resolveConfig, selectModelTier, type ApprovalMode, type Config } from "@cooper/host";
 import { compactForModel, modelBudget, needsResumeBudgetCheck, transitionMessage } from "@cooper/host";
 import { ConfigEditor, configFieldIndex } from "./config-editor.js";
 import type { McpReport } from "@cooper/host";
@@ -176,7 +177,7 @@ function StartupHeader({ item }: { item: Extract<UiItem, { kind: "header" }> }) 
           <Text dimColor wrap="truncate-end">{`  ${item.model}`}</Text>
         </Box>
         <Text dimColor wrap="truncate-middle">{item.root}</Text>
-        {item.autoApprove && <Text color="yellow">Auto mode approves all tool calls.</Text>}
+        {item.autoMode && <Text color="yellow">Auto mode is active.</Text>}
         {item.resume && <Text dimColor>{item.resume}</Text>}
       </Box>
     </Box>
@@ -285,6 +286,8 @@ export function App({
   root,
   mode,
   shellSandbox,
+  sandboxPlatform,
+  windowsShell,
   modeSource,
   instructions,
   skills,
@@ -300,6 +303,8 @@ export function App({
   root: string;
   mode: ApprovalMode;
   shellSandbox?: ShellSandbox;
+  sandboxPlatform?: PermissionPolicy["sandboxPlatform"];
+  windowsShell?: CommandShell;
   /** Where the startup mode came from (flag/env/session/config/default). */
   modeSource: ModeResolution["source"];
   instructions: LoadedInstructions;
@@ -329,7 +334,7 @@ export function App({
   // the permission decisions. Its preset changes at runtime, but the system
   // prompt deliberately stays mode-neutral.
   const [permissions] = useState(
-    () => new PermissionPolicy({ preset: mode, interactive: true }),
+    () => new PermissionPolicy({ preset: mode, interactive: true, sandboxPlatform }),
   );
   const [modeState, setModeState] = useState<ApprovalMode>(mode);
   // Tracked separately so /status can say where the current mode came from;
@@ -353,7 +358,7 @@ export function App({
       }),
     },
     ...(resumed?.messages ?? []),
-    permissionModeNotice(mode),
+    permissionModeNotice(mode, permissions.sandboxPlatform),
   ]);
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -376,7 +381,7 @@ export function App({
     kind: "header",
     model: visiblePreviewText(describeModel(active.current.config)),
     root,
-    autoApprove: permissions.preset === "auto",
+    autoMode: permissions.preset === "auto",
     resume: loaded === null ? undefined : `Resumed session ${loaded.header.id}` +
       (loaded.repaired > 0 ? ` · repaired ${loaded.repaired} invalid row(s)` : ""),
   });
@@ -485,10 +490,15 @@ export function App({
       return;
     }
 
+    if (next === "auto" && sandboxPlatform && !shellSandbox) {
+      pushCommitted({ id: nextId.current++, kind: "notice", tone: "error",
+        text: "Auto requires the Cooper shell sandbox." });
+      return;
+    }
     permissions.setPreset(next);
     setModeState(next);
     setModeSourceState("command");
-    const notice = permissionModeNotice(next);
+    const notice = permissionModeNotice(next, permissions.sandboxPlatform);
     history.current.push(notice);
     warnSession(sessionWriter?.appendPolicy(next) ?? null);
     warnSession(sessionWriter?.appendMessage(notice) ?? null);
@@ -636,7 +646,7 @@ export function App({
 
   const reloadConfig = async () => {
     try {
-      const config = selectModelTier(loadConfig({ showReasoning: showReasoningFlag }),
+      const config = selectModelTier(loadConfig({ showReasoning: showReasoningFlag, windowsShell }),
         active.current.config.modelSelection?.tier);
       if (await applyModelConfig(prepareConfig(config))) reportConfig(config, "reloaded");
     } catch (error) {
@@ -646,7 +656,7 @@ export function App({
   };
 
   const openConfig = (name: string) => {
-    const field = configFieldIndex(name);
+    const field = configFieldIndex(name, !windowsShell);
     if (field < 0) {
       notice("Unknown setting. Run /config to browse editable settings.", "error");
       return;
@@ -665,7 +675,7 @@ export function App({
     const { document } = configEdit;
     try {
       const settings = parseSettings(values, document.file);
-      const config = selectModelTier(resolveConfig(settings, { showReasoning: showReasoningFlag }),
+      const config = selectModelTier(resolveConfig(settings, { showReasoning: showReasoningFlag, windowsShell }),
         active.current.config.modelSelection?.tier);
       const next = prepareConfig(config);
       if (await applyModelConfig(next, () => writeSettingsDocument(document, values))) {
@@ -698,7 +708,7 @@ export function App({
         return;
       }
       warnSession(writer.appendPolicy(modeState));
-      warnSession(writer.appendMessage(permissionModeNotice(modeState)));
+      warnSession(writer.appendMessage(permissionModeNotice(modeState, permissions.sandboxPlatform)));
     }
     // A fresh chat has its own startup model choice.
     activateConfig(next);
@@ -715,7 +725,7 @@ export function App({
           skills,
         }),
       },
-      permissionModeNotice(modeState),
+      permissionModeNotice(modeState, permissions.sandboxPlatform),
     ];
 
     // Ink cannot erase rows that already scrolled into history; wipe the
@@ -772,7 +782,7 @@ export function App({
     let next: ReturnType<typeof prepareConfig>;
     let changed: boolean;
     let compacted: boolean;
-    const modeMessage = permissionModeNotice(modeState);
+    const modeMessage = permissionModeNotice(modeState, permissions.sandboxPlatform);
     try {
       if (loaded.header.version === 2) {
         writer = SessionWriter.from(loaded, { writeV2: true });
@@ -998,7 +1008,7 @@ export function App({
         if (resumed) preserveFittingHistory.current = needsResumeBudgetCheck(config, resumed.modelSelection);
         if (sessionWriter) {
           warnSession(sessionWriter.appendPolicy(mode));
-          if (effective === original) warnSession(sessionWriter.appendMessage(permissionModeNotice(mode)));
+          if (effective === original) warnSession(sessionWriter.appendMessage(permissionModeNotice(mode, permissions.sandboxPlatform)));
         }
         if (resumed && effective !== original) {
           if (process.stdout.isTTY) process.stdout.write("\u001B[2J\u001B[H\u001B[3J");
@@ -1269,7 +1279,7 @@ export function App({
         model: config.model,
         tools,
         messages: history.current,
-        context: { root, shellSandbox },
+        context: { root, shellSandbox, shellNetwork: linuxWorkspaceNetwork(root, config.linuxNetworkWorkspaces) },
         permissions,
         contextBudget: config.context,
         useProviderEstimate: Boolean(config.modelSelection?.tier),
@@ -1468,6 +1478,7 @@ export function App({
           <ModelConfirmationPanel confirmation={modelConfirmation} />
         ) : configEdit !== null && !busy ? (
           <ConfigEditor
+            allowShell={!windowsShell}
             initial={configEdit.document.raw}
             initialIndex={configEdit.field}
             onSave={saveConfig}

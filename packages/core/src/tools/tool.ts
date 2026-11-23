@@ -10,6 +10,7 @@ export type ToolContext = {
   signal?: AbortSignal;
   shellSandbox?: ShellSandbox;
   requireShellSandbox?: boolean;
+  shellNetwork?: boolean;
 };
 
 export type ToolResult = {
@@ -39,6 +40,7 @@ export type ToolPreview =
       cwd: string;
       command: string;
       description: string;
+      outbound?: boolean;
       /** Checks that the working directory still resolves to the previewed path. */
       revalidate?: () => Promise<boolean>;
     }

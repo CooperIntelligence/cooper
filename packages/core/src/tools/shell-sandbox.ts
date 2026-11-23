@@ -1,9 +1,15 @@
+import type { CommandShell } from "./shell.js";
+
+export type ShellSandboxPlatform = "windows" | "linux";
+
 export type ShellSandboxRequest = {
   root: string;
   cwd: string;
+  kind: CommandShell["kind"];
   executable: string;
   args: readonly string[];
   timeoutMs: number;
+  network?: boolean;
 };
 
 export type ShellSandboxResult =

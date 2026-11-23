@@ -26,8 +26,12 @@ const FIELDS: readonly Field[] = [
   { name: "context.summaryModel" },
 ];
 
-export function configFieldIndex(name: string): number {
-  return name === "" ? 0 : FIELDS.findIndex((field) => field.name.toLowerCase() === name.toLowerCase());
+function editableFields(allowShell: boolean): readonly Field[] {
+  return allowShell ? FIELDS : FIELDS.filter((field) => field.kind !== "shell");
+}
+
+export function configFieldIndex(name: string, allowShell = true): number {
+  return name === "" ? 0 : editableFields(allowShell).findIndex((field) => field.name.toLowerCase() === name.toLowerCase());
 }
 
 function section(values: Values, name: string): Values {
@@ -74,17 +78,19 @@ function editField(values: Values, field: Field, input: string): Values {
   return next;
 }
 
-export function ConfigEditor({ initial, initialIndex, onSave, onCancel }: {
+export function ConfigEditor({ initial, initialIndex, onSave, onCancel, allowShell = true }: {
   initial: Values;
   initialIndex: number;
   onSave: (values: Values) => void;
   onCancel: () => void;
+  allowShell?: boolean;
 }) {
   const [draft, setDraft] = useState(initial);
   const [index, setIndex] = useState(initialIndex);
   const [editing, setEditing] = useState(false);
   const [input, setInput] = useState("");
-  const field = FIELDS[index]!;
+  const fields = editableFields(allowShell);
+  const field = fields[index]!;
 
   useInput((char, key) => {
     if (key.ctrl && char === "c") {
@@ -101,8 +107,8 @@ export function ConfigEditor({ initial, initialIndex, onSave, onCancel }: {
       return;
     }
     if (editing) return;
-    if (key.upArrow) setIndex((current) => (current + FIELDS.length - 1) % FIELDS.length);
-    else if (key.downArrow) setIndex((current) => (current + 1) % FIELDS.length);
+    if (key.upArrow) setIndex((current) => (current + fields.length - 1) % fields.length);
+    else if (key.downArrow) setIndex((current) => (current + 1) % fields.length);
     else if (key.return) {
       setInput("");
       setEditing(true);

@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { cooperHomeName } from "./home.js";
+import { resolveInRoot } from "./tools/paths.js"
 
 /**
  * Instructions are user preferences plus repository conventions. They are
@@ -9,7 +11,6 @@ import path from "node:path";
  */
 export const MAX_INSTRUCTION_CHARS = 32_000;
 
-const GLOBAL_DIR = ".cooper";
 const PROJECT_FILES = ["COOPER.md", "AGENTS.md"] as const;
 
 export type InstructionSource = {
@@ -44,8 +45,8 @@ async function readTextFile(file: string): Promise<string | null> {
 /** COOPER.md wins over AGENTS.md; exactly one file is used per directory. */
 async function findInstructionFile(dir: string): Promise<string | null> {
   for (const name of PROJECT_FILES) {
-    const file = path.join(dir, name);
-    if (await isFile(file)) return file;
+    const file = await resolveInRoot(dir, name).catch(() => null);
+    if (file !== null && await isFile(file)) return file;
   }
   return null;
 }
@@ -67,7 +68,7 @@ export async function loadProjectInstructions(
   const maxChars = options.maxChars ?? MAX_INSTRUCTION_CHARS;
 
   const files: string[] = [];
-  const globalFile = await findInstructionFile(path.join(home, GLOBAL_DIR));
+  const globalFile = await findInstructionFile(path.join(home, cooperHomeName));
   if (globalFile !== null) files.push(globalFile);
   const projectFile = await findInstructionFile(root);
   if (projectFile !== null && projectFile !== globalFile) {

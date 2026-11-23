@@ -36,6 +36,7 @@ const settingsSchema = z.object({
   maxOutputTokens: z.number().int().positive().optional(),
   showReasoning: z.boolean().optional(),
   mode: z.enum(["plan", "ask"]).optional(),
+  linuxNetworkWorkspaces: z.array(z.string().startsWith("/")).optional(),
   shell: z.object({
     kind: z.enum(commandShellKinds),
     executable: z.string().trim().min(1).optional(),
@@ -61,6 +62,7 @@ const KNOWN_SHAPE: Record<string, string[] | true> = {
   maxOutputTokens: true,
   showReasoning: true,
   mode: true,
+  linuxNetworkWorkspaces: true,
   shell: ["kind", "executable"],
   context: ["window", "reserveOutputTokens", "compact", "summaryModel"],
   webSearch: ["provider", "apiKeyEnv"],

@@ -9,6 +9,7 @@ await Promise.all([
     format: "cjs",
     target: "node24",
     external: ["electron"],
+    define: { COOPER_BUILD_CHANNEL: JSON.stringify(process.env.COOPER_BUILD_CHANNEL ?? "public") },
     outdir: "dist",
     outExtension: { ".js": ".cjs" },
   }),
@@ -28,8 +29,8 @@ await Promise.all([
   ...images.map((name) => copyFile("src/assets/" + name, "dist/assets/" + name)),
 ]);
 
-if (process.platform === "win32") {
-  const name = "cooper-shell-sandbox.exe";
+if (process.platform === "win32" || process.platform === "linux") {
+  const name = process.platform === "win32" ? "cooper-shell-sandbox.exe" : "cooper-shell-sandbox";
   const binary = new URL(`../../packages/shell-sandbox/target/release/${name}`, import.meta.url);
   await copyFile(binary, `dist/${name}`).catch((error) => {
     if (error.code !== "ENOENT") throw error;
