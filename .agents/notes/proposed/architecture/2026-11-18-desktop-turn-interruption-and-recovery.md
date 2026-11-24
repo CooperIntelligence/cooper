@@ -107,4 +107,4 @@ Desktop 已接入 v2 接收确认、运行终态、Stop 和宿主退出原因、
 ## Related
 
 - [Electron Desktop Host](../../implemented/architecture/2026-11-17-electron-desktop-host.md)
-- [Workspace and Conversation Rewind](../feature/2026-11-12-workspace-and-conversation-rewind.md)
+- [Workspace and Conversation Rewind](../../rejected/feature/2026-11-12-workspace-and-conversation-rewind.md)

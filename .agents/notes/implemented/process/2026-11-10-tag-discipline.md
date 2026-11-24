@@ -14,6 +14,7 @@ Status: implemented
 
 本 Note 只管标签纪律；包名、发布形态、演进路线与首发时机见
 [npm Release Strategy](2026-11-10-release-strategy.md)。
+Windows 内部安装包的编号和安装身份另见 [Windows 内部构建](2026-11-22-internal-windows-builds.md)，沿用此处的公开产品版本语法。
 
 ### 版本语法（两侧共同的连接键）
 
@@ -57,7 +58,7 @@ alpha  → 最新 alpha 版本     实验线，仅显式 @alpha 获得
 
 ### 纪律规则
 
-- **R1** 版本唯一事实源：`apps/cli/package.json` 的 `version`；bump
+- **R1** 公开版本唯一事实源：`apps/cli/package.json` 的 `version`；bump
   独立 commit。
 - **R2** 每个发布版本一个 `v{version}` git tag，与 npm 版本一一对应
   （含每个 alpha/rc）。

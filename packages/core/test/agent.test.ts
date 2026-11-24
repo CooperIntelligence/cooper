@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   runAgent,
@@ -12,7 +12,8 @@ import type {
 } from "../src/provider/types.js";
 import { PermissionPolicy } from "../src/permissions.js";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
-import { runCommandTool } from "../src/tools/shell.js";
+import { createRunCommandTool, runCommandTool } from "../src/tools/shell.js";
+import type { ShellSandbox } from "../src/tools/shell-sandbox.js";
 import type { Tool } from "../src/tools/tool.js";
 import type { Message } from "../src/types.js";
 
@@ -62,6 +63,33 @@ class ScriptedProvider implements Provider {
 }
 
 describe("runAgent", () => {
+  it.each([
+    { platform: "windows", available: true },
+    { platform: "windows", available: false },
+    { platform: "linux", available: true },
+    { platform: "linux", available: false },
+  ] as const)("keeps $platform Ask shell commands sandboxed after approval (sandbox available: $available)", async ({ platform, available }) => {
+    const command = createRunCommandTool({ kind: platform === "windows" ? "pwsh" : "bash", executable: process.execPath });
+    const provider: Provider = {
+      async *stream(request) {
+        const finished = request.messages.some(({ role }) => role === "tool");
+        yield { type: "done", finishReason: "stop", message: { content: "", toolCalls: finished ? [] : [{
+          id: "shell-test", name: "shell", arguments: JSON.stringify({ command: "echo fixture", description: "Print a fixture" }),
+        }] } };
+      },
+    };
+    const sandbox = vi.fn<ShellSandbox>().mockResolvedValue({ kind: "exited", code: 0, stdout: "sandbox", stderr: "" });
+    const approve = vi.fn(() => "allow" as const);
+    const messages: Message[] = [{ role: "user", content: "Print a fixture" }];
+    for await (const _event of runAgent({
+      provider, model: "test-model", tools: [command], messages, approve,
+      context: { root: process.cwd(), shellSandbox: available ? sandbox : undefined },
+      permissions: new PermissionPolicy({ preset: "ask", interactive: true, sandboxPlatform: platform }),
+    })) { /* Drain the tool request. */ }
+    expect(sandbox).toHaveBeenCalledTimes(available ? 1 : 0);
+    expect(approve).toHaveBeenCalledTimes(available ? 1 : 0);
+    expect(messages.find(({ role }) => role === "tool")?.content).toContain(available ? "sandbox" : "No command was started");
+  });
   it("does not record an assistant message when the provider never completes", async () => {
     const messages: Message[] = [{ role: "user", content: "go" }];
     const provider: Provider = {
@@ -138,7 +166,7 @@ describe("runAgent", () => {
       { id: "r", name: "read_file", arguments: '{"path":"package.json","limit":1}' },
       { id: "e", name: "edit_file", arguments: '{"path":"package.json","old_string":"a","new_string":"b"}' },
       { id: "w", name: "write_file", arguments: '{"path":"unused.txt","content":"blocked"}' },
-      { id: "s", name: "run_command", arguments: '{"command":"echo unused"}' },
+      { id: "s", name: "run_command", arguments: '{"command":"echo unused","description":"Check shell output."}' },
     ];
     const messages: Message[] = [
       { role: "user", content: "Inspect the workspace" },

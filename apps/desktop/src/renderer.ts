@@ -27,6 +27,8 @@ const approvalStopButton = element<HTMLButtonElement>("stop-approval");
 const allowButton = element<HTMLButtonElement>("allow");
 const denyButton = element<HTMLButtonElement>("deny");
 const mode = element<HTMLSelectElement>("mode");
+const autoMode = element<HTMLOptionElement>("mode-auto");
+const askMode = element<HTMLOptionElement>("mode-ask");
 const sendShortcut = element<HTMLSelectElement>("send-shortcut");
 const composer = element<HTMLFormElement>("composer");
 const sendOptions = element("send-options");
@@ -294,6 +296,10 @@ function displayState(next: DesktopState, resetConversation: boolean): void {
   newWorkspace.setAttribute("aria-label", `Change workspace from ${newWorkspace.textContent}`);
   model.textContent = next.model;
   model.title = next.model;
+  autoMode.hidden = autoMode.disabled = !next.autoAvailable;
+  askMode.textContent = next.windowsShellStatus === "available" ? "Ask · Sandboxed PowerShell 7"
+    : next.linuxShellStatus === "available" ? "Ask · Sandboxed shell"
+    : next.windowsShellStatus === "unavailable" || next.linuxShellStatus === "unavailable" ? "Ask · Shell unavailable" : "Ask";
   mode.value = next.mode;
   const active = next.sessions.find(({ id }) => id === next.sessionId);
   const title = element("conversation-title");

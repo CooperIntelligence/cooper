@@ -152,7 +152,7 @@ it("discards an outdated approval and its pending process grant", async () => {
 
 it("asks again when a command's working directory changes during approval", async () => {
   const fixtureApp = fixture(() => [
-    call("call_command", "shell", { command: "echo approved > marker.txt", cwd: "linked" }),
+    call("call_command", "shell", { command: "echo approved > marker.txt", description: "Write an approval marker.", cwd: "linked" }),
   ]);
   const { root, press, submit, history } = fixtureApp;
   const first = path.join(root, "first");
@@ -187,7 +187,9 @@ it("asks again when a command's working directory changes during approval", asyn
 it("retains tool grants on reload and revokes only the command grant when the shell changes", async () => {
   const fixtureApp = fixture((prompt) => [prompt.startsWith("write")
     ? call(prompt, "write", { path: `${prompt}.txt`, content: "written\n" })
-    : call(prompt, prompt === "command-second" ? "shell" : "run_command", { command: "echo cooper-approval" })]);
+    : call(prompt, prompt === "command-second" ? "shell" : "run_command", {
+      command: "echo cooper-approval", description: "Check shell output after approval.",
+    })]);
   const { root, press, submit, writeConfig } = fixtureApp;
   try {
     await submit("write-first", "Waiting for approval · Create file");
@@ -214,10 +216,12 @@ it("retains tool grants on reload and revokes only the command grant when the sh
 
 it("shows a long command through its redirection at the end", async () => {
   const command = Array.from({ length: 36 }, (_, index) => `echo part-${index}`).join("\n") + "\necho tail | more > result.txt";
-  const fixtureApp = fixture(() => [call("call_long", "shell", { command })]);
+  const description = "Print the command output and write the final line to result.txt.";
+  const fixtureApp = fixture(() => [call("call_long", "shell", { command, description })]);
   try {
     await fixtureApp.submit("Long command", "Page 1/3");
     expect(fixtureApp.history()).toContain("cwd:");
+    expect(fixtureApp.history()).toContain(`Purpose: ${description}`);
     await fixtureApp.press("\x1b[C", "Page 2/3");
     await fixtureApp.press("\x1b[C", "echo tail | more > result.txt");
     await fixtureApp.press("a", "Confirm tool permission");

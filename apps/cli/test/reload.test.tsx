@@ -7,7 +7,7 @@ import { createBuiltinTools, discoverSkills } from "@cooper/core";
 import { render } from "ink";
 import { expect, it, vi } from "vitest";
 import { App } from "../src/app.js";
-import { loadConfig } from "@cooper/host";
+import { configureWebSearchTool, loadConfig } from "@cooper/host";
 import { createProvider } from "@cooper/host";
 
 it("edits and reloads settings in a running TUI without losing the conversation", async () => {
@@ -36,6 +36,7 @@ it("edits and reloads settings in a running TUI without losing the conversation"
     showReasoning: false,
     shell: { kind: process.platform === "win32" ? "cmd" : "sh" },
     context: { window: 40_000 },
+    webSearch: false,
   };
   let replies = 0;
   const fetch = vi.fn(async (_url: string, _request: RequestInit) => {
@@ -79,7 +80,7 @@ it("edits and reloads settings in a running TUI without losing the conversation"
         skills={await discoverSkills(root, path.join(root, "user-home"))}
         showReasoningFlag={true}
         provider={createProvider(config)}
-        tools={createBuiltinTools(config.shell)}
+        tools={configureWebSearchTool(createBuiltinTools(config.shell), config.webSearch)}
         mcp={{ sources: [], statuses: [], warnings: [] }}
         session={null}
         resumed={null}
@@ -97,6 +98,8 @@ it("edits and reloads settings in a running TUI without losing the conversation"
     expect(fetch).not.toHaveBeenCalled();
     await enter("/skill review first prompt", "reply 1");
     const firstRequest = JSON.parse(String(fetch.mock.calls[0]?.[1].body));
+    expect(firstRequest.tools.map((tool: { function: { name: string } }) => tool.function.name))
+      .toContain("web_search");
     expect(firstRequest.messages.at(-2).content).toContain("Check branch conditions.");
     expect(firstRequest.messages.at(-1).content).toBe("/skill review first prompt");
 
@@ -153,6 +156,8 @@ it("edits and reloads settings in a running TUI without losing the conversation"
     expect(JSON.parse(String(edited?.body))).toMatchObject({ model: "edited-model" });
     const request = fetch.mock.calls[3]?.[1];
     expect(new Headers(request?.headers).get("authorization")).toBe("Bearer new-key");
+    expect(JSON.parse(String(request?.body)).tools.map((tool: { function: { name: string } }) => tool.function.name))
+      .not.toContain("web_search");
     expect(JSON.parse(String(request?.body))).toMatchObject({
       model: "new-model",
       messages: expect.arrayContaining([

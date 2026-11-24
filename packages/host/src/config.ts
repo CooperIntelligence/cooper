@@ -36,6 +36,8 @@ const connectionFields = ["protocol", "model", "baseURL", "apiKey"] as const;
 type ConnectionField = (typeof connectionFields)[number];
 type ConnectionSettings = Pick<Settings, ConnectionField>;
 
+export type WebSearchConfig = false | { apiKey?: string };
+
 type ModelTierEntry = {
   selection: ModelSelection;
   displayName?: string;
@@ -51,7 +53,8 @@ export type Config = Required<ConnectionSettings> & {
   showReasoning: boolean;
   defaultMode: Settings["mode"];
   shell: CommandShell;
-  webSearchApiKey?: string;
+  linuxNetworkWorkspaces?: readonly string[];
+  webSearch: WebSearchConfig;
   sources: Partial<Record<ConfigKey, ConfigSource>>;
   settingsWarnings: string[];
   settingsFile: string | null;
@@ -158,13 +161,15 @@ export class IncompleteConfigError extends Error {
 }
 
 /** Resolve Cooper settings from the user configuration file. */
-export function loadConfig(options: { home?: string; showReasoning?: boolean } = {}): Config {
+type ConfigOptions = { home?: string; showReasoning?: boolean; windowsShell?: CommandShell };
+
+export function loadConfig(options: ConfigOptions = {}): Config {
   return resolveConfig(loadSettings(options), options);
 }
 
 export function resolveConfig(
   { settings, file, warnings }: LoadedSettings,
-  options: { home?: string; showReasoning?: boolean } = {},
+  options: ConfigOptions = {},
 ): Config {
   const { protocol, model, baseURL, apiKey } = settings ?? {};
   if (protocol === undefined || model === undefined ||
@@ -186,12 +191,18 @@ export function resolveConfig(
     : { window: configuredWindow, assumed: false };
   const source = (value: unknown): ConfigSource =>
     value === undefined ? "default" : "config";
-  const webSearch = settings?.webSearch;
-  const key = webSearch ? process.env[webSearch.apiKeyEnv]?.trim() : undefined;
+  const searchSettings = settings?.webSearch;
+  const key = searchSettings ? process.env[searchSettings.apiKeyEnv]?.trim() : undefined;
   const webSearchApiKey = key && /^[\x21-\x7e]+$/.test(key) ? key : undefined;
-  const settingsWarnings = webSearch && !webSearchApiKey
-    ? [...warnings, `Web search is disabled. Set a valid Tavily API key in ${webSearch.apiKeyEnv}.`]
+  const webSearch: WebSearchConfig = searchSettings === undefined
+    ? {}
+    : webSearchApiKey ? { apiKey: webSearchApiKey } : false;
+  const searchWarnings = searchSettings && !webSearchApiKey
+    ? [...warnings, `Web search is disabled. Set a valid Tavily API key in ${searchSettings.apiKeyEnv}.`]
     : warnings;
+  const settingsWarnings = options.windowsShell && settings?.shell
+    ? [...searchWarnings, "Windows uses the bundled PowerShell 7; the configured shell is ignored."]
+    : searchWarnings;
 
   const fallbackOutput = settings?.maxOutputTokens ?? (protocol === "anthropic-messages" ? DEFAULT_MAX_OUTPUT_TOKENS : undefined);
   const makeSelection = (
@@ -237,8 +248,9 @@ export function resolveConfig(
     contextWindowAssumed: assumed,
     showReasoning: options.showReasoning || (settings?.showReasoning ?? false),
     defaultMode: settings?.mode,
-    shell: resolveCommandShell(settings?.shell),
-    webSearchApiKey,
+    shell: options.windowsShell ?? resolveCommandShell(settings?.shell),
+    linuxNetworkWorkspaces: settings?.linuxNetworkWorkspaces,
+    webSearch,
     sources: {
       protocol: "config",
       model: "config",
@@ -246,7 +258,7 @@ export function resolveConfig(
       apiKey: "config",
       maxOutputTokens: source(settings?.maxOutputTokens),
       showReasoning: options.showReasoning ? "flag" : source(settings?.showReasoning),
-      shell: source(settings?.shell),
+      shell: source(options.windowsShell ? undefined : settings?.shell),
       "context.window": source(configuredWindow),
       "context.reserveOutputTokens": source(context?.reserveOutputTokens),
       "context.compact": source(context?.compact),

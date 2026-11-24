@@ -10,6 +10,7 @@ import {
   type McpServerStatus,
   type Tool,
 } from "@cooper/core";
+import type { WebSearchConfig } from "./config.js";
 
 /** What the surfaces show about MCP startup. */
 export type McpReport = {
@@ -24,6 +25,15 @@ export type PreparedTools = {
   close(): Promise<void>;
 };
 
+export function configureWebSearchTool(tools: Tool[], config: WebSearchConfig = {}): Tool[] {
+  const index = tools.findIndex((tool) => tool.name === "web_search");
+  if (config === false) {
+    return index === -1 ? tools : tools.filter((_, position) => position !== index);
+  }
+  const search = createWebSearchTool(config.apiKey);
+  return index === -1 ? [...tools, search] : tools.map((tool, position) => position === index ? search : tool);
+}
+
 /**
  * Loads trusted MCP config, connects servers, and returns built-in + MCP
  * tools. A bad server is reported and skipped; only config errors are fatal.
@@ -34,13 +44,12 @@ export async function prepareTools(options: {
   explicit: string[];
   loadProject: boolean;
   shell?: CommandShell;
-  webSearchApiKey?: string;
+  webSearch?: WebSearchConfig;
   /** Overrides the `cooperHome()` anchor; tests only. */
   home?: string;
 }): Promise<PreparedTools> {
   const config = loadMcpConfig(options);
-  const builtins = [...(options.shell ? createBuiltinTools(options.shell) : allTools)];
-  if (options.webSearchApiKey) builtins.push(createWebSearchTool(options.webSearchApiKey));
+  const builtins = configureWebSearchTool(options.shell ? createBuiltinTools(options.shell) : [...allTools], options.webSearch);
   const base: McpReport = {
     sources: config.sources,
     statuses: [],

@@ -68,7 +68,7 @@ describe("tier wire parameters", () => {
     ["anthropic-messages", { output_config: { effort: "low" }, max_tokens: 16_000 }, { max_tokens: 64_000 }],
   ] as const)("sends model settings on %s and isolates a different summary model", async (protocol, expected, summary) => {
     const config = parse({ ...settings, protocol, showReasoning: true });
-    const fetch = vi.fn(async (_url: string, request: RequestInit) =>
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
       new Response(JSON.stringify({ error: { message: "Unsupported request parameter", param: "test" } }), {
         status: 400, headers: { "Content-Type": "application/json" },
       }));
@@ -81,7 +81,7 @@ describe("tier wire parameters", () => {
         }
       }).rejects.toThrow("Unsupported request parameter");
     }
-    const body = (index: number) => JSON.parse(String(fetch.mock.calls[index]?.[1].body));
+    const body = (index: number) => JSON.parse(String(fetch.mock.calls[index]?.[1]?.body));
     expect(body(0)).toMatchObject({ model: "small", ...expected });
     expect(body(1)).toMatchObject({ model: "summary-model", ...summary });
     expect(body(1).reasoning?.effort).toBeUndefined();

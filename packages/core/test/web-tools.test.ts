@@ -184,6 +184,38 @@ describe("public web connections", () => {
 });
 
 describe("web_search", () => {
+  it("sends a keyless Tavily request and names the destination before execution", async () => {
+    const request = vi.fn<WebRequest>(async () => response(JSON.stringify({ results: [
+      { title: "Docs", url: "https://example.com/", content: "Search result" },
+    ] })));
+    const tool = createWebSearchTool(undefined, request);
+    const input = tool.inputSchema.parse({ query: "Node.js release notes" });
+    expect(await tool.preview?.(input, context)).toMatchObject({
+      text: expect.stringContaining("Tavily (free)\nEndpoint: https://api.tavily.com/search"),
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(JSON.parse((await tool.execute(input, context)).content)).toEqual({
+      results: [{ title: "Docs", url: "https://example.com/", snippet: "Search result" }],
+    });
+    const [url, options] = request.mock.calls[0]!;
+    expect(url.href).toBe("https://api.tavily.com/search");
+    expect(options.headers).toMatchObject({ "x-tavily-access-mode": "keyless" });
+    expect(options.headers).not.toHaveProperty("authorization");
+    expect(JSON.parse(options.body!)).toMatchObject({ query: input.query, max_results: 5, include_answer: false });
+  });
+
+  it("reports the keyless rate limit and retry time without retrying", async () => {
+    const request = vi.fn<WebRequest>(async () => response(
+      '{"error":{"code":"daily_cap_reached"}}', { "retry-after": "590" }, 429,
+    ));
+    const tool = createWebSearchTool(undefined, request);
+    const input = tool.inputSchema.parse({ query: "docs" });
+    await expect(tool.execute(input, context)).rejects.toThrow(
+      "Tavily rate-limited free search. Try again in 590 seconds or configure a Tavily API key.",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("sends credentials only to Tavily and bounds results without echoing credentials", async () => {
     const key = "tvly-test-credential";
     const request = vi.fn<WebRequest>(async () => response(JSON.stringify({ results: [
@@ -203,6 +235,7 @@ describe("web_search", () => {
     const [url, options] = request.mock.calls[0]!;
     expect(url.href).toBe("https://api.tavily.com/search");
     expect(options.headers?.authorization).toBe(`Bearer ${key}`);
+    expect(options.headers).not.toHaveProperty("x-tavily-access-mode");
     expect(JSON.parse(options.body!)).toMatchObject({ query: input.query, max_results: 1, include_raw_content: false });
     expect(options.body).not.toContain(key);
   });

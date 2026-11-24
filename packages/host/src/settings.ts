@@ -13,10 +13,10 @@ const contextSchema = z.object({
   summaryModel: z.string().min(1).optional(),
 });
 
-const webSearchSchema = z.object({
+const webSearchSchema = z.union([z.literal(false), z.object({
   provider: z.literal("tavily"),
   apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).default("TAVILY_API_KEY"),
-});
+})]);
 
 const modelTier = z.strictObject({
   model: z.string().trim().min(1),
@@ -36,6 +36,7 @@ const settingsSchema = z.object({
   maxOutputTokens: z.number().int().positive().optional(),
   showReasoning: z.boolean().optional(),
   mode: z.enum(["plan", "ask"]).optional(),
+  linuxNetworkWorkspaces: z.array(z.string().startsWith("/")).optional(),
   shell: z.object({
     kind: z.enum(commandShellKinds),
     executable: z.string().trim().min(1).optional(),
@@ -61,6 +62,7 @@ const KNOWN_SHAPE: Record<string, string[] | true> = {
   maxOutputTokens: true,
   showReasoning: true,
   mode: true,
+  linuxNetworkWorkspaces: true,
   shell: ["kind", "executable"],
   context: ["window", "reserveOutputTokens", "compact", "summaryModel"],
   webSearch: ["provider", "apiKeyEnv"],
@@ -190,8 +192,8 @@ export function parseSettings(values: Record<string, unknown>, file: string): Lo
   }
 
   if (raw.webSearch !== undefined && !webSearchSchema.safeParse(raw.webSearch).success) {
-    warnings.push(`${file}: invalid webSearch configuration (ignored). Expected provider "tavily" and an optional apiKeyEnv variable name.`);
-    delete raw.webSearch;
+    warnings.push(`${file}: invalid webSearch configuration (search disabled). Expected false or provider "tavily" with an optional apiKeyEnv variable name.`);
+    raw.webSearch = false;
   }
 
   const parsed = settingsSchema.safeParse(raw);

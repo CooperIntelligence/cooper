@@ -1,6 +1,6 @@
 # Agent Note: Workspace and conversation rewind
 
-Status: proposed
+Status: rejected — rewind不存在实际意义和切实可行的方案。
 
 ## Problem
 
@@ -122,7 +122,7 @@ splice——所以 `messageIndex` 只在"自目标回合以来没有发生长度
 不区分 action，天然从该点重建；旧版本 Cooper 读到这条记录也不报错（记录类型是
 既有的），向后兼容免费获得。
 
-若回退 v2 会话，对话回退的 checkpoint 需附带撤下的回合范围，并遵守 v2 写入互斥。只恢复文件时，对话提交状态继续有效。 [桌面提交对账](2026-11-18-desktop-draft-and-submit-idempotency.md) · [会话写入互斥](../architecture/2026-11-18-session-writer-exclusion.md)
+若回退 v2 会话，对话回退的 checkpoint 需附带撤下的回合范围，并遵守 v2 写入互斥。只恢复文件时，对话提交状态继续有效。 [桌面提交对账](../../proposed/feature/2026-11-18-desktop-draft-and-submit-idempotency.md) · [会话写入互斥](../../proposed/architecture/2026-11-18-session-writer-exclusion.md)
 
 ### Rewind 规划与执行（原型）
 

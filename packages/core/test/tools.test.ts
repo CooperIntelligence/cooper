@@ -10,6 +10,7 @@ import {
   writeFileTool,
 } from "../src/tools/fs.js";
 import { createRunCommandTool, resolveCommandShell, runCommandTool } from "../src/tools/shell.js";
+import { toToolSpec } from "../src/tools/tool.js";
 
 let root: string;
 
@@ -309,8 +310,24 @@ describe("edit_file", () => {
 });
 
 describe("run_command", () => {
+  it("requires a nonblank description and carries it into the command preview", async () => {
+    const command = "echo hello";
+    expect(toToolSpec(runCommandTool).parameters).toMatchObject({
+      required: ["command", "description"],
+    });
+    expect(runCommandTool.inputSchema.safeParse({ command }).success).toBe(false);
+    expect(runCommandTool.inputSchema.safeParse({ command, description: " \n " }).success).toBe(false);
+
+    const description = "Print a greeting to check shell output.";
+    const input = runCommandTool.inputSchema.parse({ command, description: `  ${description}  ` });
+    expect(runCommandTool.summarize?.(input)).toContain(description);
+    await expect(runCommandTool.preview?.(input, { root })).resolves.toMatchObject({
+      kind: "command", command, description,
+    });
+  });
+
   it.skipIf(process.platform !== "win32")("uses Windows PowerShell by default and preserves Unicode", async () => {
-    const input = { command: "Write-Output '中文 shell'" };
+    const input = { command: "Write-Output '中文 shell'", description: "Check Unicode output." };
     expect(runCommandTool.description).toContain("Windows PowerShell 5.1");
     expect(runCommandTool.summarize?.(input)).toContain("Windows PowerShell 5.1");
     const result = await runCommandTool.execute(input, { root });
@@ -321,12 +338,15 @@ describe("run_command", () => {
   it.skipIf(process.platform !== "win32")("omits PowerShell progress and keeps errors in plain text", async () => {
     const success = await runCommandTool.execute({
       command: "Get-ChildItem -Force | Select-Object -First 1 Name; Write-Progress -Activity 'fixture progress'; Write-Output 'ready'",
+      description: "Inspect the first directory entry and check that progress output is suppressed.",
     }, { root });
     expect(success.isError).toBe(false);
     expect(success.content).toContain("ready");
     expect(success.content).not.toMatch(/CLIXML|\[stderr\]|fixture progress/);
 
-    const failure = await runCommandTool.execute({ command: "Write-Error '中文诊断'" }, { root });
+    const failure = await runCommandTool.execute({
+      command: "Write-Error '中文诊断'", description: "Check that Unicode errors stay readable.",
+    }, { root });
     expect(failure.isError).toBe(true);
     expect(failure.content).toMatch(/exit code: 1/);
     expect(failure.content).toContain("中文诊断");
@@ -336,7 +356,10 @@ describe("run_command", () => {
   it("uses the configured shell in execution and tool metadata", async () => {
     const kind = process.platform === "win32" ? "cmd" : "sh";
     const tool = createRunCommandTool(resolveCommandShell({ kind }));
-    const input = { command: kind === "cmd" ? "echo %COMSPEC%" : "printf '%s' shell-fixture" };
+    const input = {
+      command: kind === "cmd" ? "echo %COMSPEC%" : "printf '%s' shell-fixture",
+      description: "Check that the configured shell runs the command.",
+    };
     expect(tool.description).toContain(`using ${kind}`);
     expect(tool.summarize?.(input)).toContain(`[${kind} · cwd: .]`);
     const result = await tool.execute(input, { root });
@@ -353,7 +376,7 @@ describe("run_command", () => {
 
   it("returns output and the exit code", async () => {
     const result = await runCommandTool.execute(
-      { command: "echo hello", timeout_ms: 10_000 },
+      { command: "echo hello", description: "Check shell output.", timeout_ms: 10_000 },
       { root },
     );
     expect(result.content).toContain("hello");
@@ -363,7 +386,7 @@ describe("run_command", () => {
 
   it("marks non-zero exits as errors", async () => {
     const result = await runCommandTool.execute(
-      { command: 'node -e "process.exit(3)"', timeout_ms: 10_000 },
+      { command: 'node -e "process.exit(3)"', description: "Check that the exit code is reported.", timeout_ms: 10_000 },
       { root },
     );
     expect(result.isError).toBe(true);
@@ -375,6 +398,7 @@ describe("run_command", () => {
     const marker = path.join(root, "running.txt");
     const running = runCommandTool.execute({
       command: "node -e \"require('node:fs').writeFileSync('running.txt','running');setTimeout(()=>{},60000)\"",
+      description: "Write a marker and keep the process alive until it is cancelled.",
       timeout_ms: 60_000,
     }, { root, signal: controller.signal });
 
@@ -391,7 +415,7 @@ describe("run_command", () => {
 
   it("rejects working directories outside the workspace", async () => {
     await expect(
-      runCommandTool.execute({ command: "echo x", cwd: ".." }, { root }),
+      runCommandTool.execute({ command: "echo x", description: "Check the parent directory restriction.", cwd: ".." }, { root }),
     ).rejects.toThrow(/outside the workspace/);
   });
 });
@@ -407,7 +431,7 @@ describe("workspace path containment", () => {
     await fs.mkdir(second);
     await fs.symlink(first, linked, linkType);
 
-    const input = { command: "echo approved > marker.txt", cwd: "linked" };
+    const input = { command: "echo approved > marker.txt", description: "Write an approval marker.", cwd: "linked" };
     const ctx = { root };
     const preview = await runCommandTool.preview?.(input, ctx);
     if (preview?.kind !== "command" || !preview.revalidate) throw new Error("Missing command validation");
@@ -448,7 +472,7 @@ describe("workspace path containment", () => {
     await expect(editFileTool.execute(edit, ctx)).rejects.toThrow(/outside the workspace/);
     await expect(writeFileTool.execute({ path: "escape/new/file.txt", content: "new" }, ctx))
       .rejects.toThrow(/outside the workspace/);
-    await expect(runCommandTool.execute({ cwd: "escape", command: "echo x" }, ctx))
+    await expect(runCommandTool.execute({ cwd: "escape", command: "echo x", description: "Check the linked directory restriction." }, ctx))
       .rejects.toThrow(/outside the workspace/);
     expect(await fs.readdir(outside)).toEqual(["secret.txt"]);
     expect(await fs.readFile(path.join(outside, "secret.txt"), "utf8")).toBe("outside fixture");

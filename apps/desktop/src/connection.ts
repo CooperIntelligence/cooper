@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { CommandShell } from "@cooper/core";
 import {
   IncompleteConfigError, mergeOnboardingConfig, parseSettings, providerProtocols,
   readSettingsDocument, resolveConfig, selectModelTier, userConfigFile,
@@ -9,7 +10,7 @@ import type { ConnectionStatus } from "./ipc.js";
 export class DesktopConnection {
   private edit?: { revision: string; document: SettingsDocument; settings: Settings };
 
-  constructor(private readonly home?: string) {}
+  constructor(private readonly home?: string, private readonly windowsShell?: CommandShell) {}
 
   read(): ConnectionStatus {
     this.edit = undefined;
@@ -18,7 +19,7 @@ export class DesktopConnection {
       const loaded = parseSettings(document.raw, document.file);
       let kind: "ready" | "incomplete" = "ready";
       try {
-        selectModelTier(resolveConfig(loaded, { home: this.home }));
+        selectModelTier(resolveConfig(loaded, { home: this.home, windowsShell: this.windowsShell }));
       } catch (error) {
         if (!(error instanceof IncompleteConfigError)) throw error;
         kind = "incomplete";
@@ -55,7 +56,7 @@ export class DesktopConnection {
       throw new Error(settings.apiKey ? "Enter an API key for this protocol and address." : "Enter an API key.");
     }
     const values = mergeOnboardingConfig(document.raw, { protocol, model, baseURL, apiKey });
-    const config = resolveConfig(parseSettings(values, document.file), { home: this.home });
+    const config = resolveConfig(parseSettings(values, document.file), { home: this.home, windowsShell: this.windowsShell });
     selectModelTier(config);
     return { document, values, config };
   }

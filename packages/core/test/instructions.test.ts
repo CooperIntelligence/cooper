@@ -49,6 +49,18 @@ describe("loadProjectInstructions", () => {
     expect(loaded.text).not.toContain("generic");
   });
 
+  it("falls back to AGENTS.md when COOPER.md points outside the workspace", async () => {
+    const outside = path.join(base, "outside-instructions.md");
+    await fs.writeFile(outside, "outside fixture", "utf8");
+    await fs.symlink(outside, path.join(root, "COOPER.md"), "file");
+    await fs.writeFile(path.join(root, "AGENTS.md"), "project fallback", "utf8");
+
+    const loaded = await loadProjectInstructions(root, { home });
+
+    expect(loaded.text).not.toContain("outside fixture");
+    expect(loaded.text).toContain("project fallback");
+  });
+
   it("puts user preferences before and project rules after", async () => {
     await fs.mkdir(path.join(home, ".cooper"));
     await fs.writeFile(

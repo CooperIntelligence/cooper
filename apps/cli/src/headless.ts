@@ -8,10 +8,11 @@ import {
   type Message,
   type Provider,
   type SessionWriter,
+  type ShellSandbox,
   type SkillCatalog,
   type Tool,
 } from "@cooper/core";
-import { describeModel, modelRequestError, modelSelectionChanged, type ApprovalMode, type Config } from "@cooper/host";
+import { linuxWorkspaceNetwork, describeModel, modelRequestError, modelSelectionChanged, type ApprovalMode, type Config } from "@cooper/host";
 import { modelBudget, needsResumeBudgetCheck, transitionMessage } from "@cooper/host";
 import type { McpReport } from "@cooper/host";
 import { resolveSkillPrompt, skillTools } from "./skills.js";
@@ -27,6 +28,8 @@ export type HeadlessOptions = {
   config: Config;
   root: string;
   mode: ApprovalMode;
+  shellSandbox?: ShellSandbox;
+  sandboxPlatform?: PermissionPolicy["sandboxPlatform"];
   prompt: string;
   provider: Provider;
   instructions: LoadedInstructions;
@@ -65,7 +68,7 @@ function formatTokens(tokens: number): string {
  * Runs one prompt without the TUI and returns a process exit code.
  *
  * There is no one to answer an approval prompt here, so fail closed: only
- * `auto` allows approval-gated tools; `ask` and `plan` deny them.
+ * `auto` applies the platform policy; `ask` and `plan` deny gated tools.
  */
 export async function runHeadless(options: HeadlessOptions): Promise<number> {
   const {
@@ -136,6 +139,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
   // Nobody can answer an approval prompt here. The non-interactive policy
   // turns ask into a denial instead of relying on a dummy approve callback.
   const permissions = new PermissionPolicy({
+    sandboxPlatform: options.sandboxPlatform,
     preset: mode,
     interactive: false,
   });
@@ -165,7 +169,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
   // carried by a runtime notice appended after the resumed history so the
   // provider's cached prefix stays intact.
   const userMessages = resolved.activation ? [resolved.activation, resolved.user] : [resolved.user];
-  const modeMessage = permissionModeNotice(mode);
+  const modeMessage = permissionModeNotice(mode, permissions.sandboxPlatform);
 
   const messages: Message[] = [
     {
@@ -268,7 +272,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<number> {
       model: config.model,
       tools,
       messages,
-      context: { root },
+      context: { root, shellSandbox: options.shellSandbox, shellNetwork: linuxWorkspaceNetwork(root, config.linuxNetworkWorkspaces) },
       permissions,
       contextBudget: config.context,
       useProviderEstimate: Boolean(config.modelSelection?.tier),

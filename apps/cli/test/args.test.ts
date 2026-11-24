@@ -37,8 +37,20 @@ describe("parseArgs", () => {
     expect(parseArgs(["--cwd=../app"]).cwd).toBe("../app");
   });
 
-  it("treats a bare argument as the prompt", () => {
-    expect(parseArgs(["fix it"]).prompt).toBe("fix it");
+  it("rejects bare text and unknown commands with a prompt migration hint", () => {
+    expect(() => parseArgs(["fix it"])).toThrow(/Unknown command: fix it\. Use -p/);
+    expect(() => parseArgs(["udpate"])).toThrow(/Unknown command: udpate\. Use -p/);
+    expect(() => parseArgs(["--mode", "ask", "update"])).toThrow(/Unknown command: update/);
+  });
+
+  it("separates maintenance commands from explicit prompts", () => {
+    expect(parseArgs(["update"])).toMatchObject({ maintenance: "update", prompt: null });
+    expect(parseArgs(["update", "--check"])).toMatchObject({ maintenance: "check-update", prompt: null });
+    expect(parseArgs(["rollback"])).toMatchObject({ maintenance: "rollback", prompt: null });
+    expect(parseArgs(["-p", "update"]).prompt).toBe("update");
+    expect(parseArgs(["--print=rollback"]).prompt).toBe("rollback");
+    expect(() => parseArgs(["update", "-p", "request"])).toThrow(/Usage: cooper update/);
+    expect(() => parseArgs(["rollback", "--check"])).toThrow(/Usage: cooper rollback/);
   });
 
   it("reads the prompt after -p/--print", () => {
@@ -80,6 +92,12 @@ describe("parseArgs", () => {
     expect(parseArgs(["-h"]).help).toBe(true);
   });
 
+  it("parses version as a standalone command", () => {
+    expect(parseArgs(["--version"]).version).toBe(true);
+    expect(() => parseArgs(["--version", "-p", "request"])).toThrow(/Usage: cooper --version/);
+    expect(parseArgs(["--print=--version"]).prompt).toBe("--version");
+  });
+
   it("reads --resume and -r", () => {
     expect(parseArgs(["--resume", "abc123"]).resume).toBe("abc123");
     expect(parseArgs(["--resume=abc123"]).resume).toBe("abc123");
@@ -96,7 +114,7 @@ describe("parseArgs", () => {
 
   it("disables persistence with --no-session", () => {
     expect(parseArgs(["--no-session"]).session).toBe(false);
-    expect(parseArgs(["hi"]).session).toBe(true);
+    expect(parseArgs(["-p", "hi"]).session).toBe(true);
     expect(() => parseArgs(["--resume", "abc", "--no-session"])).toThrow(
       /cannot be combined/,
     );

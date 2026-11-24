@@ -1,5 +1,5 @@
 import { spawn, type SpawnOptions } from "node:child_process";
-import { accessSync, constants, promises as fs, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, promises as fs, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { resolveInRoot } from "./paths.js";
@@ -22,6 +22,16 @@ const windowsDirectory = process.env.SystemRoot || "C:\\Windows";
 const system32 = path.join(windowsDirectory, "System32");
 const systemPowerShell = path.join(system32, "WindowsPowerShell", "v1.0", "powershell.exe");
 const systemCmd = path.join(system32, "cmd.exe");
+
+export function isWindowsStorePowerShellAlias(executable: string): boolean {
+  const localData = process.env.LOCALAPPDATA;
+  if (!windows || !localData || !path.isAbsolute(localData)) return false;
+  const aliasDirectory = path.join(localData, "Microsoft", "WindowsApps");
+  return [
+    path.join(aliasDirectory, "pwsh.exe"),
+    path.join(aliasDirectory, "Microsoft.PowerShell_8wekyb3d8bbwe", "pwsh.exe"),
+  ].some((candidate) => path.relative(candidate, executable) === "");
+}
 
 export function resolveCommandShell(settings?: {
   kind: CommandShell["kind"];
@@ -72,9 +82,13 @@ export function resolveCommandShell(settings?: {
       .map((directory) => directory.replace(/^"(.*)"$/, "$1"))
       .filter((directory) => path.isAbsolute(directory))
       .map((directory) => path.join(directory, name));
+    if (windows && kind === "pwsh" && process.env.ProgramFiles && path.isAbsolute(process.env.ProgramFiles)) {
+      candidates.push(path.join(process.env.ProgramFiles, "PowerShell", "7", name));
+    }
   }
 
   for (const candidate of candidates) {
+    if (kind === "pwsh" && isWindowsStorePowerShellAlias(candidate)) continue;
     try {
       if (!statSync(candidate).isFile()) continue;
       accessSync(candidate, constants.X_OK);
@@ -83,15 +97,35 @@ export function resolveCommandShell(settings?: {
       // Continue to the next trusted installation or PATH entry.
     }
   }
-  throw new Error(`Command shell "${kind}" was not found${executable ? ` at "${executable}"` : ""}. Check shell in config.json.`);
+  if (kind === "pwsh") {
+    const alias = candidates.find((candidate) => {
+      if (!isWindowsStorePowerShellAlias(candidate)) return false;
+      try {
+        // App execution aliases are reparse points. stat() tries to follow
+        // them and can fail even though Windows can launch the alias.
+        const entry = lstatSync(candidate);
+        if (entry.isDirectory()) return false;
+        accessSync(candidate, constants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (alias) return { kind, executable: alias };
+  }
+  const hint = windows && kind === "pwsh"
+    ? "Set shell.executable to your PowerShell 7 executable in config.json."
+    : "Check shell in config.json.";
+  throw new Error(`Command shell "${kind}" was not found${executable ? ` at "${executable}"` : ""}. ${hint}`);
 }
 
-function shellArgs(kind: CommandShell["kind"], command: string): string[] {
+function shellArgs(kind: CommandShell["kind"], command: string, stopOnError = false): string[] {
   if (kind === "powershell" || kind === "pwsh") {
     const script = [
       "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
       "$OutputEncoding = [Console]::OutputEncoding",
       "$ProgressPreference = 'SilentlyContinue'",
+      ...(stopOnError ? ["$ErrorActionPreference = 'Stop'"] : []),
       command,
       "if ($?) { exit 0 }",
       "if ($LASTEXITCODE) { exit $LASTEXITCODE }",
@@ -125,6 +159,22 @@ function truncateOutput(text: string): string {
   if (text.length <= MAX_OUTPUT_CHARS) return text;
   const half = Math.floor(MAX_OUTPUT_CHARS / 2);
   return `${text.slice(0, half)}\n\n[… output truncated …]\n\n${text.slice(-half)}`;
+}
+
+function commandResult(
+  code: number | null,
+  stdout: string,
+  stderr: string,
+  status?: string,
+  signal?: NodeJS.Signals | null,
+): ToolResult {
+  const sections: string[] = [];
+  if (status) sections.push(status);
+  sections.push(`exit code: ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`);
+  if (stdout.trim()) sections.push(stdout.trimEnd());
+  if (stderr.trim()) sections.push(`[stderr]\n${stderr.trimEnd()}`);
+  if (!stdout.trim() && !stderr.trim()) sections.push("(no output)");
+  return { content: truncateOutput(sections.join("\n\n")), isError: status !== undefined || code !== 0 };
 }
 
 function killProcessTree(pid: number): void {
@@ -222,25 +272,9 @@ function runProcess(
       if (finished) return;
       finish();
 
-      const sections: string[] = [];
-      if (stopped === "timeout") {
-        sections.push(`Command timed out after ${timeoutMs}ms and was killed.`);
-      } else if (stopped === "abort") {
-        sections.push("Command cancelled.");
-      }
-      sections.push(
-        `exit code: ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`,
-      );
-      if (stdout.trim().length > 0) sections.push(stdout.trimEnd());
-      if (stderr.trim().length > 0) sections.push(`[stderr]\n${stderr.trimEnd()}`);
-      if (stdout.trim().length === 0 && stderr.trim().length === 0) {
-        sections.push("(no output)");
-      }
-
-      resolvePromise({
-        content: truncateOutput(sections.join("\n\n")),
-        isError: stopped !== undefined || code !== 0,
-      });
+      const status = stopped === "timeout" ? `Command timed out after ${timeoutMs}ms and was killed.`
+        : stopped === "abort" ? "Command cancelled." : undefined;
+      resolvePromise(commandResult(code, stdout, stderr, status, signal));
     });
     abortSignal?.addEventListener("abort", abort, { once: true });
     if (abortSignal?.aborted) abort();
@@ -249,6 +283,12 @@ function runProcess(
 
 const runCommandSchema = z.object({
   command: z.string().describe("Shell command to execute."),
+  description: z
+    .string()
+    .trim()
+    .min(1, "Explain the command's purpose and main effects for the user.")
+    .overwrite((description) => description.replace(/\s+/g, " "))
+    .describe("Briefly explain to the user why this command is needed and what it will do. Cover each significant step and side effect of a compound command."),
   cwd: z
     .string()
     .optional()
@@ -280,7 +320,7 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
     inputSchema: runCommandSchema,
     capabilities: ["execute"],
     summarize(input) {
-      return `[${shellName} · cwd: ${input.cwd ?? "."}]\n$ ${input.command}`;
+      return `${input.description} · [${shellName} · cwd: ${input.cwd ?? "."}]\n$ ${input.command}`;
     },
     async preview(input, ctx) {
       try {
@@ -288,7 +328,8 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
         const cwd = await resolveCwd(ctx.root, relativeCwd);
         return {
           kind: "command", shell: shellName, executable: shell.executable,
-          cwd, command: input.command,
+          cwd, command: input.command, description: input.description,
+          ...(ctx.shellNetwork ? { outbound: true } : {}),
           async revalidate() {
             const current = await resolveCwd(ctx.root, relativeCwd).catch(() => null);
             return current === cwd;
@@ -304,7 +345,24 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
         throw new Error("Command working directory changed after approval.");
       }
       ctx.signal?.throwIfAborted();
-      return runProcess(shell, input.command, cwd, input.timeout_ms ?? 120_000, ctx.signal);
+      const timeoutMs = input.timeout_ms ?? 120_000;
+      if (ctx.requireShellSandbox) {
+        if (!ctx.shellSandbox) {
+          return { content: "The shell sandbox is unavailable. No command was started.", isError: true };
+        }
+        const root = await fs.realpath(ctx.root);
+        const result = await ctx.shellSandbox({
+          root, cwd, kind: shell.kind, executable: shell.executable, args: shellArgs(shell.kind, input.command, true), timeoutMs,
+          ...(ctx.shellNetwork ? { network: true } : {}),
+        }, ctx.signal);
+        switch (result.kind) {
+          case "exited": return commandResult(result.code, result.stdout, result.stderr);
+          case "timed-out": return commandResult(null, result.stdout, result.stderr,
+            `Command timed out after ${timeoutMs}ms and was killed.`);
+          case "cancelled": return commandResult(null, "", "", "Command cancelled.");
+        }
+      }
+      return runProcess(shell, input.command, cwd, timeoutMs, ctx.signal);
     },
   };
 }

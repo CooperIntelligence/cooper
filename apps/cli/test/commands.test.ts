@@ -110,7 +110,7 @@ describe("command registry", () => {
 
   it("describes modes and renders help for every registered command", () => {
     expect(modeDescription("plan")).toBe("plan (read-only)");
-    expect(modeDescription("auto")).toBe("auto (auto-approve ALL tools)");
+    expect(modeDescription("auto")).toBe("auto (sandbox required for shell)");
     expect(modeDescription("ask")).toBe("ask (approve writes, commands, and web requests)");
 
     const help = commandHelp("plan");
@@ -271,6 +271,7 @@ describe("formatStatus", () => {
     showReasoning: false,
     defaultMode: undefined,
     shell: { kind: "sh", executable: "/bin/sh" },
+    webSearch: {},
     sources: {
       protocol: "config",
       model: "config",

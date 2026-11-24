@@ -22,7 +22,7 @@ cooper --sessions                   # find a saved conversation
 cooper --help
 ```
 
-Interactive `ask` mode lets you review file diffs, commands, and web requests before approving them. Headless `ask` denies those actions. Start a headless run with `--mode auto` to authorize tool calls automatically.
+Interactive `ask` mode lets you review file diffs, commands, and web requests before approving them. Headless `ask` denies those actions. On Windows, use the native installer for shell execution in both `ask` and `auto`. It includes PowerShell 7 and the MXC sandbox helper. Windows `auto` reviews shell commands separately before running them inside MXC. This npm package contains the CLI bundle.
 
 Use `/help` in the interactive UI to see available commands.
 

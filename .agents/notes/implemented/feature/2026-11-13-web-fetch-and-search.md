@@ -8,7 +8,7 @@ Cooper 能检查工作区，但依赖升级、外部 API 参数或已知报错�
 
 ## Decision
 
-Cooper 内置 `web_fetch`，通过用户配置启用 Tavily `web_search`。抓取读取已知公开 URL，搜索从索引发现候选来源。客户端工具与模型供应商解耦，沿用 TUI 和 headless 共用的 `Tool`、`PermissionPolicy`、上下文和会话路径。
+Cooper 内置 `web_fetch` 和 `web_search`，搜索默认使用 Tavily 的免费免 Key 接口。抓取读取已知公开 URL，搜索从索引发现候选来源。客户端工具与模型供应商解耦，沿用 CLI 和桌面端共用的 `Tool`、`PermissionPolicy`、上下文和会话路径。
 
 ### 逐次审批外发参数
 
@@ -22,7 +22,9 @@ Cooper 内置 `web_fetch`，通过用户配置启用 Tavily `web_search`。抓�
 
 ### 搜索后端与会话记录
 
-选择 Tavily，依托现有网页索引和搜索 API。Tavily 允许保留摘要和元数据，符合 Cooper 将工具结果写入会话并在恢复时重放的行为。Cooper 只发查询和结果数等搜索参数，只返回标题、URL 和摘要。凭证由用户配置指定的环境变量提供，只随请求发给固定 Tavily 地址。无有效配置或凭证时仅省略搜索工具。空闲 TUI 的 `/reload` 会重新应用搜索配置。 [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search) · [Tavily 结果保留说明](https://help.tavily.com/articles/1612400809-storing-caching-retaining-output) · [会话记录实现](../../../../packages/core/src/session.ts)
+选择 Tavily，依托现有网页索引和搜索 API。免 Key 接口让用户可以直接查询公开资料，服务商和当前额度类型在工具摘要和审批中可见。两种额度使用同一接口和结果格式。Cooper 只发查询和结果数等搜索参数，只返回标题、URL 和摘要。Tavily 允许保留摘要和元数据，符合 Cooper 将工具结果写入会话并在恢复时重放的行为。 [Tavily 免 Key 接口](https://docs.tavily.com/documentation/keyless) · [Tavily 结果保留说明](https://help.tavily.com/articles/1612400809-storing-caching-retaining-output) · [会话记录实现](../../../../packages/core/src/session.ts)
+
+用户显式选用 Tavily 密钥额度时，从配置指定的环境变量读取 Key，并且只发给固定的 Tavily 地址。密钥不可用或搜索配置无效时停用搜索，避免在用户选择的额度不可用时转用免费额度。`webSearch: false` 也会停用搜索。空闲 TUI 的 `/reload` 会重新应用搜索配置。
 
 ## Alternatives considered
 
@@ -32,12 +34,16 @@ Cooper 内置 `web_fetch`，通过用户配置启用 Tavily `web_search`。抓�
 
 **使用模型供应商托管的网页工具。** 供应商可提供内置索引或引用，但请求在供应商的模型调用期间执行，本地 `PermissionPolicy` 无法逐次核对出站参数，工具可用性也取决于模型和协议。 [OpenAI Web Search](https://developers.openai.com/api/docs/guides/tools-web-search) · [Anthropic Web Fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)
 
+**要求用户先注册搜索账号。** Tavily 免 Key 接口可以处理初次查询，密钥额度留给需要更多用量的用户。
+
 ## Consequences
 
 搜索后逐个阅读来源会多次询问。显式 `auto` 适合用户已授权的无人值守调用。静态抓取覆盖公开 HTML、Markdown 和纯文本，登录页面、PDF、依赖浏览器渲染的内容以及仅能通过代理访问的环境需要不同的实现。
 
 查询会发给 Tavily，抓取目标会收到 URL 和请求来源。返回正文和摘要进入模型上下文与本地会话。搜索结果提供候选来源，具体版本和参数可以进一步打开原文核对。
 
+免费搜索受 Tavily 的额度限制，直连可用性取决于用户网络和上游服务。达到额度时返回限流提示，供用户决定何时重试或配置自己的额度。
+
 ## Verification
 
-回归测试覆盖模式矩阵、拒绝进程授权、TUI 预览、搜索配置、DNS 固定、内网地址和重定向拦截、取消、解压上限以及 Tavily 请求和错误处理。真实 HTTPS 抓取验证了 Example Domain 和 RFC 9110。Tavily 使用模拟响应验证。
+回归测试覆盖模式矩阵、拒绝进程授权、TUI 预览、默认搜索、配置关闭与重载、DNS 固定、内网地址和重定向拦截、取消和解压上限。Tavily 的免 Key、密钥请求和限流处理使用模拟响应验证。真实 HTTPS 抓取验证了 Example Domain 和 RFC 9110。

@@ -44,7 +44,7 @@ describe("prepareTools", () => {
     });
     try {
       expect(prepared.tools.map((tool) => tool.name)).toEqual([
-        "list_dir", "read", "grep", "write", "edit", "shell", "web_fetch",
+        "list_dir", "read", "grep", "write", "edit", "shell", "web_fetch", "web_search",
       ]);
       expect(prepared.mcp.statuses).toEqual([]);
       expect(prepared.mcp.warnings).toEqual([]);

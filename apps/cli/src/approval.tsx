@@ -18,8 +18,10 @@ function describePreview(request: ApprovalRequest) {
   if (preview?.kind === "command") {
     return {
       title: "Run command",
-      target: `${preview.shell} · cwd: ${preview.cwd}`,
+      target: `${preview.shell} · cwd: ${preview.cwd}${preview.outbound ? " · outbound network enabled" : ""}`,
       rows: [
+        { text: `Purpose: ${preview.description}`, tone: "context" },
+        ...(request.reviewReason ? [{ text: `Review: ${request.reviewReason}`, tone: "context" as const }] : []),
         { text: `Shell executable: ${preview.executable}`, tone: "context" },
         { text: preview.command, tone: "hunk" },
       ] satisfies PreviewRow[],
@@ -53,7 +55,7 @@ export function ApprovalPanel({ request, onDecision, onInterrupt }: {
   const [page, setPage] = useState(0);
   const [confirming, setConfirming] = useState(false);
   const [confirmPage, setConfirmPage] = useState(0);
-  const canGrantProcess = supportsProcessGrant(request.capabilities);
+  const canGrantProcess = request.allowProcessGrant !== false && supportsProcessGrant(request.capabilities);
   const preview = useMemo(() => describePreview(request), [request]);
   const fullTarget = useMemo(() => wrapPreviewText(preview.target, width), [preview.target, width]);
 

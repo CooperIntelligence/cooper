@@ -3,14 +3,14 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
-  PermissionPolicy, SessionWriter, createRunCommandTool, createSkillTool, createWebSearchTool, diffText, discoverSkills,
+  PermissionPolicy, SessionWriter, createRunCommandTool, createSkillTool, diffText, discoverSkills,
   hasSessionLocks, isRuntimeNotice, latestRuntimeNotice, listSessions, loadProjectInstructions, loadSession, newSessionId, permissionModeNotice,
   resumeSession, runAgent, sessionWriterBusy, sessionsDir, workspaceKey,
-  type ApprovalOutcome, type ApprovalRequest, type LoadedSession, type Message,
-  type PermissionPreset, type Provider, type RunPhase, type SkillCatalog, type StopCause, type Tool, type ToolCall,
+  type ApprovalOutcome, type ApprovalRequest, type CommandShell, type LoadedSession, type Message,
+  type PermissionPreset, type Provider, type RunPhase, type ShellSandbox, type SkillCatalog, type StopCause, type Tool, type ToolCall,
 } from "@cooper/core";
 import {
-  buildSystemPrompt, createProvider, loadConfig, modelBudget, needsResumeBudgetCheck,
+  buildSystemPrompt, configureWebSearchTool, createProvider, linuxWorkspaceNetwork, loadConfig, modelBudget, needsResumeBudgetCheck,
   prepareTools, selectModelTier, transitionMessage, type Config, type PreparedTools,
   writeSettingsDocument, type SettingsDocument,
 } from "@cooper/host";
@@ -56,7 +56,7 @@ function projectRun(session: LoadedSession | undefined): RunDisplay | undefined 
     needsReview: Boolean(run?.reviewOnly) || (status !== "completed" && session.needsReview), reviewed };
 }
 
-function describeApproval({ preview, summary }: ApprovalRequest): { title: string; preview: string } {
+function describeApproval({ preview, summary, reviewReason }: ApprovalRequest): { title: string; preview: string } {
   if (preview?.kind === "diff") {
     const diff = diffText(preview.before, preview.after, { preserveLineEndings: true });
     const lines = diff.hunks.flatMap((hunk) => [
@@ -69,7 +69,11 @@ function describeApproval({ preview, summary }: ApprovalRequest): { title: strin
     return { title: preview.path, preview: lines.join("\n") || (preview.createsFile ? "Create an empty file." : "No changes.") };
   }
   if (preview?.kind === "command") {
-    return { title: "Run command", preview: `${preview.shell} · ${preview.cwd}\n\n${preview.command}` };
+    return {
+      title: "Run command",
+      preview: [`Purpose: ${preview.description}`, ...(reviewReason ? [`Review: ${reviewReason}`] : []),
+        `${preview.shell} · ${preview.cwd}${preview.outbound ? " · outbound network enabled" : ""}`, preview.command].join("\n\n"),
+    };
   }
   if (preview?.kind === "text") return { title: preview.title, preview: preview.text };
   return {
@@ -94,6 +98,9 @@ export class DesktopRuntime {
     private readonly drafts: DraftStore,
     private readonly home?: string,
     private readonly useV2 = hasSessionLocks(),
+    private readonly shellSandbox?: ShellSandbox,
+    private readonly windowsShell?: CommandShell,
+    private readonly sandboxPlatform: PermissionPolicy["sandboxPlatform"] = windowsShell ? "windows" : undefined,
   ) {}
 
   getState(): DesktopState | null {
@@ -123,10 +130,7 @@ export class DesktopRuntime {
       const command = createRunCommandTool(config.shell);
       tools = tools.map((tool) => tool.name === command.name ? command : tool);
     }
-    if (config.webSearchApiKey !== workspace.config.webSearchApiKey) {
-      tools = tools.filter((tool) => tool.name !== "web_search");
-      if (config.webSearchApiKey) tools.push(createWebSearchTool(config.webSearchApiKey));
-    }
+    tools = configureWebSearchTool(tools, config.webSearch);
     const previous = chat.config;
     const budgetChanged = (selected.modelSelection?.inputLimit ?? 0) < (previous.modelSelection?.inputLimit ?? 0);
     const checkBudget = budgetChanged || (Boolean(selected.modelSelection?.tier) &&
@@ -163,7 +167,7 @@ export class DesktopRuntime {
   private async prepareWorkspace(directory: string): Promise<DesktopState> {
     const root = resolve(directory);
     if (!(await stat(root)).isDirectory()) throw new Error(`Not a directory: ${root}`);
-    const config = loadConfig({ home: this.home });
+    const config = loadConfig({ home: this.home, windowsShell: this.windowsShell });
     const userHome = this.home === undefined ? undefined : dirname(this.home);
     const [instructions, skills] = await Promise.all([
       loadProjectInstructions(root, { home: userHome }),
@@ -171,7 +175,7 @@ export class DesktopRuntime {
     ]);
     const prepared = await prepareTools({
       root, home: this.home, explicit: [], loadProject: false,
-      shell: config.shell, webSearchApiKey: config.webSearchApiKey,
+      shell: config.shell, webSearch: config.webSearch,
     });
     const tools = skills.skills.size ? [...prepared.tools, createSkillTool(skills)] : prepared.tools;
     const workspace = { root, config, instructions: instructions.text, skills, prepared, tools };
@@ -201,11 +205,11 @@ export class DesktopRuntime {
   private createChat(workspace: Workspace, saved?: LoadedSession): Chat {
     const config = selectModelTier(workspace.config, saved?.modelSelection?.tier);
     const mode = saved?.preset === "plan" || saved?.preset === "ask" ? saved.preset : config.defaultMode ?? "ask";
-    const permissions = new PermissionPolicy({ interactive: true, preset: mode });
+    const permissions = new PermissionPolicy({ interactive: true, preset: mode, sandboxPlatform: this.sandboxPlatform });
     const system = buildSystemPrompt({
       root: workspace.root, desktop: true, permissions, instructions: workspace.instructions, skills: workspace.skills,
     });
-    const notice = permissionModeNotice(mode);
+    const notice = permissionModeNotice(mode, permissions.sandboxPlatform);
     const messages: Message[] = [{ role: "system", content: system }, ...(saved?.messages ?? [])];
     if (saved?.header.version !== 2 || latestRuntimeNotice(messages)?.content !== notice.content) messages.push(notice);
     const provider = createProvider(config);
@@ -257,8 +261,9 @@ export class DesktopRuntime {
   setMode(mode: DesktopMode): DesktopState {
     this.requireIdle();
     const { workspace, chat } = this.current();
+    if (mode === "auto" && !this.shellSandbox) throw new Error("Auto requires the Cooper shell sandbox.");
     if (mode !== chat.permissions.preset) {
-      const notice = permissionModeNotice(mode);
+      const notice = permissionModeNotice(mode, chat.permissions.sandboxPlatform);
       if (chat.writer || chat.saved) {
         const writer = chat.writer ?? SessionWriter.from(chat.saved!, { writeV2: true });
         try {
@@ -439,7 +444,8 @@ export class DesktopRuntime {
       }
       for await (const event of runAgent({
         provider: chat.provider, model: chat.config.model, tools: workspace.tools,
-        messages: chat.messages, context: { root: workspace.root }, permissions: chat.permissions,
+        messages: chat.messages, context: { root: workspace.root, shellSandbox: this.shellSandbox,
+          shellNetwork: linuxWorkspaceNetwork(workspace.root, chat.config.linuxNetworkWorkspaces) }, permissions: chat.permissions,
         contextBudget: chat.config.context, signal,
         useProviderEstimate: Boolean(chat.config.modelSelection?.tier),
         preserveFittingInitialHistory: chat.preserveFittingHistory,
@@ -646,7 +652,10 @@ export class DesktopRuntime {
       root: workspace.root,
       model: chat.config.model,
       expandReasoning: chat.config.showReasoning,
-      mode: chat.permissions.preset === "plan" ? "plan" : "ask",
+      mode: chat.permissions.preset,
+      autoAvailable: this.shellSandbox !== undefined,
+      ...(this.windowsShell ? { windowsShellStatus: this.shellSandbox ? "available" : "unavailable" } : {}),
+      ...(this.sandboxPlatform === "linux" ? { linuxShellStatus: this.shellSandbox ? "available" : "unavailable" } : {}),
       sessionId: chat.sessionId,
       draft: this.readDraft(workspace, chat),
       run,

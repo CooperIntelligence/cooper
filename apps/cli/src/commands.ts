@@ -57,7 +57,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     name: "auto",
     aliases: [],
     usage: "/auto",
-    description: "auto-approve ALL tools",
+    description: "use automatic approval rules and require a sandbox for shell",
   },
   {
     name: "clear",
@@ -201,7 +201,7 @@ export function isModeCommand(name: CommandName): name is ApprovalMode {
 
 export function modeDescription(mode: ApprovalMode): string {
   if (mode === "plan") return "plan (read-only)";
-  if (mode === "auto") return "auto (auto-approve ALL tools)";
+  if (mode === "auto") return "auto (sandbox required for shell)";
   return "ask (approve writes, commands, and web requests)";
 }
 

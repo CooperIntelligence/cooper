@@ -69,8 +69,9 @@
           <div class="composer-actions">
             <label class="composer-label">Approvals
               <select id="mode">
-                <option value="ask">Ask</option>
+                <option id="mode-ask" value="ask">Ask</option>
                 <option value="plan">Plan · Read only</option>
+                <option id="mode-auto" value="auto" hidden disabled>Auto · Sandboxed PowerShell 7</option>
               </select>
             </label>
             <button id="composer-settings" type="button" popovertarget="send-options" aria-label="Send shortcut" title="Send shortcut">

@@ -1,3 +1,4 @@
+import type { PermissionPreset } from "@cooper/core";
 import type { OnboardingResult } from "@cooper/host";
 
 export type ConnectionInput = Omit<OnboardingResult, "apiKey" | "contextWindow"> & { apiKey?: string };
@@ -11,7 +12,7 @@ export type ConnectionStatus =
   };
 export type ConnectionTest = { ok: true } | { ok: false; error: string };
 
-export type DesktopMode = "ask" | "plan";
+export type DesktopMode = PermissionPreset;
 export type ChatMessage = { role: "user" | "assistant"; text: string };
 export type ToolDisplay = {
   role: "tool";
@@ -41,6 +42,9 @@ export type DesktopState = {
   model: string;
   expandReasoning: boolean;
   mode: DesktopMode;
+  autoAvailable: boolean;
+  windowsShellStatus?: "available" | "unavailable";
+  linuxShellStatus?: "available" | "unavailable";
   sessionId: string | null;
   sessions: { id: string; title: string }[];
   messages: (ChatMessage | ToolDisplay)[];

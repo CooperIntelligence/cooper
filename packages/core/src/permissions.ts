@@ -1,3 +1,5 @@
+import type { ShellSandboxPlatform } from "./tools/shell-sandbox.js";
+
 /**
  * Permission decisions, independent of any UI.
  *
@@ -15,7 +17,7 @@ export type ToolCapability = "read" | "write" | "execute" | "network";
 
 export type PermissionPreset = "plan" | "ask" | "auto";
 
-export type PermissionDecision = "allow" | "prompt" | "deny";
+export type PermissionDecision = "allow" | "prompt" | "deny" | "review-shell" | "check-edit";
 
 export type ApprovalOutcome = "allow" | "allow-session" | "deny";
 
@@ -23,6 +25,8 @@ export type PermissionPolicyOptions = {
   preset: PermissionPreset;
   /** True only when the surface has a human who can answer an approval. */
   interactive: boolean;
+  /** Ask and Auto require a sandbox on this platform. */
+  sandboxPlatform?: ShellSandboxPlatform;
 };
 
 /**
@@ -45,6 +49,7 @@ export function supportsProcessGrant(capabilities: readonly ToolCapability[] | u
 export class PermissionPolicy {
   private currentPreset: PermissionPreset;
   readonly interactive: boolean;
+  readonly sandboxPlatform: ShellSandboxPlatform | undefined;
 
   /** Tools the user allowed for the rest of this process (never persisted). */
   private readonly sessionAllowed = new Set<string>();
@@ -52,6 +57,7 @@ export class PermissionPolicy {
   constructor(options: PermissionPolicyOptions) {
     this.currentPreset = options.preset;
     this.interactive = options.interactive;
+    this.sandboxPlatform = options.sandboxPlatform;
   }
 
   get preset(): PermissionPreset {
@@ -70,15 +76,19 @@ export class PermissionPolicy {
     name: string;
     capabilities?: readonly ToolCapability[];
   }): PermissionDecision {
-    // auto is an explicit, auditable opt-in to run everything.
-    if (this.preset === "auto") return "allow";
-
     // Read-only tools never need permission in any preset.
     if (!needsApproval(tool.capabilities)) return "allow";
 
     // Plan is read-only. Check it before session grants so switching presets
     // can never turn a previous "always allow" into a mutation.
     if (this.preset === "plan") return "deny";
+
+    if (this.preset === "auto") {
+      if (!this.sandboxPlatform) return "allow";
+      if (tool.name === "shell") return "review-shell";
+      if (tool.name === "write" || tool.name === "edit") return "check-edit";
+      return this.interactive ? "prompt" : "deny";
+    }
 
     if (!this.interactive) return "deny";
     if (supportsProcessGrant(tool.capabilities) && this.sessionAllowed.has(tool.name)) return "allow";

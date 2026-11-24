@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { isSea } from "node:sea";
+import { fileURLToPath } from "node:url";
 import React from "react";
 import { render } from "ink";
+import cliPackage from "../package.json" with { type: "json" };
 import {
   SessionWriter,
   discoverSkills,
@@ -25,6 +28,9 @@ import {
   IncompleteConfigError,
   loadConfig,
   selectModelTier,
+  localShellSandbox,
+  shellSandboxPlatform,
+  windowsAgentShell,
   writeOnboardingConfig,
   type ApprovalMode,
   type Config,
@@ -35,12 +41,18 @@ import { runOnboarding } from "./onboarding.js";
 import { createProvider } from "@cooper/host";
 import { userConfigFile } from "@cooper/host";
 
+declare const COOPER_BUILD_VERSION: string | undefined;
+const cliVersion = typeof COOPER_BUILD_VERSION === "string" ? COOPER_BUILD_VERSION : cliPackage.version;
+
 const HELP = `Cooper — a terminal coding agent
 
 Usage:
   cooper                          start the interactive TUI
-  cooper "fix the failing test"   one-shot; prints the answer to stdout
+  cooper --version                print the CLI version
+  cooper -p "fix the failing test"  one-shot; prints the answer to stdout
   cooper -p - < prompt.txt        read the prompt from stdin
+  cooper update [--check]         online update command (updater pending)
+  cooper rollback                 activate the previous native CLI version
 
 Options:
   -m, --mode <mode>   override the startup mode: ask | auto | plan
@@ -59,11 +71,12 @@ Options:
 
 Modes:
   ask    ask before file writes, commands, and web requests
-  auto   approve every tool call without asking (use with care)
+  auto   apply automatic approval rules; shell requires a supported sandbox
   plan   read-only: inspect files, deny writes, commands, and web requests
 
   With -p nobody can answer an approval prompt, so ask denies writes,
-  commands, and web requests. Pass --mode auto to allow them.
+  commands, and web requests. On Windows and Linux, auto checks routine edits and
+  reviews shell commands separately. Calls needing user approval are denied with -p.
   Startup precedence: --mode > saved plan/ask > config.json mode > ask.
   Config defaults accept plan and ask. In the TUI, /plan, /ask and /auto
   switch the mode while idle.
@@ -128,11 +141,31 @@ function printSessions(root: string): void {
 }
 
 async function main(): Promise<void> {
+  const native = isSea();
+  const entry = native ? process.execPath : fileURLToPath(import.meta.url);
+  const linuxSourceRuntime = entry.endsWith(".tsx") ? path.resolve(path.dirname(entry), "../dist") : path.dirname(entry);
+  const appDirectory = native ? path.dirname(process.execPath)
+    : process.platform === "linux"
+      ? process.env.COOPER_LINUX_RUNTIME_DIR ?? linuxSourceRuntime
+      : process.env.COOPER_WINDOWS_RUNTIME_DIR ?? path.dirname(entry);
+  const windowsShell = windowsAgentShell(appDirectory);
   let args: ParsedArgs;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
     fail(error);
+  }
+
+  if (args.version) {
+    console.log(cliVersion);
+    return;
+  }
+
+  if (args.maintenance === "rollback") {
+    fail("Rollback requires Cooper's native launcher. Run cooper rollback from the native installation.");
+  }
+  if (args.maintenance !== undefined) {
+    fail("Online updates are unavailable in this build. For an npm installation, use npm to update Cooper.");
   }
 
   if (args.help) {
@@ -167,7 +200,7 @@ async function main(): Promise<void> {
     // TUI is the one entry point into onboarding; headless and every other
     // config error fail closed as before.
     try {
-      config = loadConfig({ showReasoning: args.showReasoning });
+      config = loadConfig({ showReasoning: args.showReasoning, windowsShell });
     } catch (error) {
       if (!(error instanceof IncompleteConfigError)) throw error;
       if (args.prompt !== null || !process.stdin.isTTY || !process.stdout.isTTY) {
@@ -184,7 +217,7 @@ async function main(): Promise<void> {
         );
       }
       writeOnboardingConfig(undefined, result);
-      config = loadConfig({ showReasoning: args.showReasoning });
+      config = loadConfig({ showReasoning: args.showReasoning, windowsShell });
     }
 
     for (const warning of config.settingsWarnings) {
@@ -213,8 +246,8 @@ async function main(): Promise<void> {
       modeNotice =
         `Saved session was in auto mode; not restored (now ${mode}). ` +
         (args.prompt === null
-          ? "Pass --mode auto or run /auto to enable auto-approve."
-          : "Pass --mode auto to enable auto-approve.");
+          ? "Pass --mode auto or run /auto to enable Auto mode."
+          : "Pass --mode auto to enable Auto mode.");
     } else if (resolution.source === "session") {
       modeNotice = `Restored from session: ${mode}.`;
     }
@@ -232,6 +265,11 @@ async function main(): Promise<void> {
   const provider = createProvider(config);
 
   const skills = await discoverSkills(root);
+  const shellSandbox = localShellSandbox(appDirectory);
+  if (shellSandboxPlatform && mode === "auto" && !shellSandbox) {
+    session?.close();
+    fail(new Error("Auto requires the Cooper shell sandbox. Install or build the sandbox runtime for this platform."));
+  }
   let prepared: PreparedTools;
   try {
     prepared = await prepareTools({
@@ -239,7 +277,7 @@ async function main(): Promise<void> {
       explicit: args.mcpConfig,
       loadProject: args.mcpProject,
       shell: config.shell,
-      webSearchApiKey: config.webSearchApiKey,
+      webSearch: config.webSearch,
     });
   } catch (error) {
     fail(error);
@@ -261,6 +299,8 @@ async function main(): Promise<void> {
         config,
         root,
         mode,
+        shellSandbox,
+        sandboxPlatform: shellSandboxPlatform,
         prompt,
         provider,
         instructions,
@@ -289,6 +329,9 @@ async function main(): Promise<void> {
         config={config}
         root={root}
         mode={mode}
+        shellSandbox={shellSandbox}
+        sandboxPlatform={shellSandboxPlatform}
+        windowsShell={windowsShell}
         modeSource={modeSource}
         instructions={instructions}
         skills={skills}

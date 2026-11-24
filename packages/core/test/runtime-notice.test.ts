@@ -30,7 +30,8 @@ describe("permissionModeNotice", () => {
     expect(plan.content).toContain("read-only");
     expect(plan.content).toContain("wait for the user");
     expect(ask.content).toContain("require user approval");
-    expect(auto.content).toContain("auto-approved");
+    expect(auto.content).toContain("skip interactive approval");
+    expect(auto.content).toContain("requires an available Windows PowerShell sandbox");
   });
 });
 

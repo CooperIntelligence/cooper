@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
+import { cooperHomeName } from "./home.js";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { z } from "zod";
@@ -73,7 +74,8 @@ export async function discoverSkills(root: string, home = os.homedir()): Promise
   const scopes = [{ anchor: root, scope: "project" }, { anchor: home, scope: "user" }] as const;
 
   for (const { anchor, scope } of scopes) {
-    for (const parent of [".cooper/skills", ".agents/skills"]) {
+    const cooperDirectory = scope === "user" ? cooperHomeName : ".cooper";
+    for (const parent of [path.join(cooperDirectory, "skills"), ".agents/skills"]) {
       let skillsRoot: string;
       let entries: string[];
       try {

@@ -1,8 +1,36 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { cooperHome } from "../home.js";
+import type { ShellSandboxPlatform } from "./shell-sandbox.js";
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function contains(root: string, file: string): boolean {
+  const relative = path.relative(root, file);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+export async function resolveSandboxProjectRoot(root: string, platform: ShellSandboxPlatform): Promise<string> {
+  const [resolved, profile] = await Promise.all([fs.realpath(root), fs.realpath(os.homedir())]);
+  if ((platform === "windows" && !/^[a-z]:[\\/]/i.test(resolved)) || path.parse(resolved).root === resolved || contains(resolved, profile)) {
+    throw new Error("Choose a project directory instead of a user profile or drive root as a writable workspace.");
+  }
+  if (platform === "linux") {
+    const state = cooperHome();
+    const configuration = path.join(state, "config.json");
+    const resolveState = (entry: string) => fs.realpath(entry).catch((error) => {
+      if (isMissing(error)) return entry;
+      throw error;
+    });
+    const [statePath, configPath] = await Promise.all([resolveState(state), resolveState(configuration)]);
+    if (contains(statePath, resolved) || contains(resolved, statePath) || contains(resolved, configPath)) {
+      throw new Error("Choose a project directory separate from Cooper's configuration and sessions.");
+    }
+  }
+  return resolved;
 }
 
 /**
