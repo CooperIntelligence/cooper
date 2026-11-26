@@ -7,6 +7,9 @@ import type { Tool, ToolResult } from "./tool.js";
 
 const MAX_STREAM_CHARS = 60_000;
 const MAX_OUTPUT_CHARS = 30_000;
+// Match the variable in raw command text, including braced and PowerShell-scoped forms.
+const HOME_VARIABLE = /\$(?:\{[#!]?)?(?:(?:env|global|local|private|script|using|variable):)?home(?![\p{L}\p{N}_])/iu;
+const HOME_VARIABLE_BLOCKED = "Shell commands containing the $HOME variable are blocked. No command was started.";
 
 export const commandShellKinds = [
   "powershell", "pwsh", "cmd", "sh", "bash", "zsh", "git-bash",
@@ -282,7 +285,9 @@ function runProcess(
 }
 
 const runCommandSchema = z.object({
-  command: z.string().describe("Shell command to execute."),
+  command: z.string()
+    .refine((command) => !HOME_VARIABLE.test(command), HOME_VARIABLE_BLOCKED)
+    .describe("Shell command to execute. References to $HOME are blocked."),
   description: z
     .string()
     .trim()
@@ -323,6 +328,7 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
       return `${input.description} · [${shellName} · cwd: ${input.cwd ?? "."}]\n$ ${input.command}`;
     },
     async preview(input, ctx) {
+      if (HOME_VARIABLE.test(input.command)) return { kind: "invalid", reason: HOME_VARIABLE_BLOCKED };
       try {
         const relativeCwd = input.cwd ?? ".";
         const cwd = await resolveCwd(ctx.root, relativeCwd);
@@ -340,6 +346,7 @@ export function createRunCommandTool(shell: CommandShell): Tool<typeof runComman
       }
     },
     async execute(input, ctx, approvedPreview) {
+      if (HOME_VARIABLE.test(input.command)) return { content: HOME_VARIABLE_BLOCKED, isError: true };
       const cwd = await resolveCwd(ctx.root, input.cwd ?? ".");
       if (approvedPreview?.kind === "command" && cwd !== approvedPreview.cwd) {
         throw new Error("Command working directory changed after approval.");

@@ -17,8 +17,6 @@ if (-not $InnoCompiler) {
     if (-not $InnoCompiler) { $InnoCompiler = Join-Path $repo 'dist/tools/inno-7/ISCC.exe' }
 }
 $InnoCompiler = (Resolve-Path -LiteralPath $InnoCompiler).Path
-$cargo = (Get-Command cargo.exe -ErrorAction SilentlyContinue).Source
-if (-not $cargo) { $cargo = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cargo/bin/cargo.exe' }
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 $platform = & $node -p "process.platform + '-' + process.arch"
 if ($LASTEXITCODE -ne 0 -or $platform -cne 'win32-x64') { throw 'Desktop Setup requires a Windows x64 build environment.' }
@@ -29,7 +27,6 @@ $output = (Resolve-Path -LiteralPath $output).Path
 $outputFile = Join-Path $output "CooperDesktopSetup-$Version-windows-x64.exe"
 $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
 $desktop = Join-Path $repo 'apps/desktop'
-$sandbox = Join-Path $repo 'packages/shell-sandbox/target/release/cooper-shell-sandbox.exe'
 $savedBuildChannel = $env:COOPER_BUILD_CHANNEL
 
 $buildLock = Open-CooperSetupBuildLock -Repo $repo -Product 'desktop-setup'
@@ -37,9 +34,6 @@ Push-Location -LiteralPath $repo
 try {
     if ($InternalBuild -and (Test-Path -LiteralPath $outputFile)) { throw "Build already exists: $outputFile" }
     $env:COOPER_BUILD_CHANNEL = $identity.Channel
-    & $cargo build --manifest-path 'packages/shell-sandbox/Cargo.toml' --locked --release
-    if ($LASTEXITCODE -ne 0) { throw 'The Windows shell sandbox build failed.' }
-
     Push-Location -LiteralPath $desktop
     try {
         $electron = & $node -p "require('electron')"
@@ -75,7 +69,6 @@ try {
     foreach ($bundle in $bundles) {
         Copy-Item -LiteralPath (Join-Path $desktop "dist/$bundle") -Destination $appDist -Recurse
     }
-    Copy-Item -LiteralPath $sandbox -Destination $resources
     Expand-CooperPowerShell -Destination (Join-Path $resources 'powershell') -Cache (Join-Path $repo 'dist/tools')
 
     & $InnoCompiler /Qp "/DCooperVersion=$Version" "/DCooperInternal=$($identity.InnoInternal)" "/DStageDir=$stage" "/DSetupOutputDir=$output" `

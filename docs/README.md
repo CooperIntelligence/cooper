@@ -40,7 +40,7 @@ packages/core/            内核：不依赖 Ink/React，不直接读写终端
   src/mcp/                MCP 配置、客户端、工具与资源适配
   src/session.ts          会话持久化与恢复
   src/instructions.ts     COOPER.md / AGENTS.md 加载
-packages/shell-sandbox/   Windows MXC 执行助手
+packages/shell-sandbox/   Linux MXC Bubblewrap 执行助手
 scripts/                  CLI 打包、Windows 原生与内部安装包构建
 docs/                     本组文档
 ```

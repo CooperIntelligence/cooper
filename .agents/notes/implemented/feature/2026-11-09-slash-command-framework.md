@@ -12,7 +12,7 @@ TUI 只有 4 个写死的斜杠命令（`/help` `/plan` `/ask` `/auto`）：命�
 
 ### 注册表作为唯一事实来源
 
-`apps/cli/src/commands.ts` 持有 `CommandSpec[]` 注册表（name、aliases、usage、description）。`parseCommand` 经别名表归一化后返回规范命令名，`commandHelp` 从注册表生成。`parseCommand` 的返回形状与 prompt/unknown 语义不变；handler 在 `app.tsx`（Ink 层），`commands.ts` 保持纯函数。格式化函数（`formatSessions` / `formatMcp` / `formatTools`）也在 `commands.ts`，与解析同层单测。
+`@cooper/host/commands` 提供浏览器可用的内置命令注册表和纯解析、补全函数。CLI 在 `apps/cli/src/commands.ts` 追加模型档位命令并保留终端格式化，执行入口位于 `app.tsx`。Desktop 用同一份元数据为已接入的命令生成帮助和补全，主进程分流提交。 [Desktop 宿主](../architecture/2026-11-17-electron-desktop-host.md)
 
 ### 首批命令
 
@@ -47,11 +47,17 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 - 支持 `findSessionFile` 的唯一前缀匹配；已在目标会话中则提示不动作。
 - `--no-session` 下拒绝（与 CLI「`--resume` 不能配 `--no-session`」对齐）。
 
-### 边界
+### TUI 边界
 
 - 所有命令只在空闲时可用（busy 期间统一提示等待或 Esc）；`/compact` 执行期间自行置 busy 并挂 AbortController，Esc 可中断摘要调用。
 - 命令不发给模型、不写 message 记录；`/clear`、`/compact`、`/resume` 是碰会话文件的三个命令（新建 / checkpoint / 切换写入目标）。
 - 参数校验从宽：多余参数忽略，与 `/auto please` 一致；`/resume` 是唯一必须带参数的命令，缺参报用法错误。
+
+### Desktop 的入口和草稿
+
+Desktop 的命令是现有图形操作的键盘入口。切换会话沿用侧栏的模式恢复规则，读取已保存的 `plan` 或 `ask`，忽略已保存的 `auto`。同一个会话通过鼠标或命令打开时拥有相同的权限。TUI 继续按进程持有模式。
+
+主进程在聊天提交的持久化流程之前识别本地命令。命令成功后清除来源会话中与提交文本匹配的草稿，失败时保留输入。这样切换会话可以保留目标草稿，命令也不会产生聊天提交回执。 [Desktop 草稿与提交决策](../../proposed/feature/2026-11-18-desktop-draft-and-submit-idempotency.md)
 
 ## Alternatives considered
 
@@ -69,10 +75,13 @@ Claude Code 中 `/clear`、`/new`、`/reset` 是同一命令的别名，语义�
 
 **`/resume` 恢复目标会话的 plan/ask 模式（对齐启动逻辑）。** 与启动一致看似统一，但 TUI 里模式是用户刚刚主动设的；切个对话就把权限改掉（甚至从 plan 放开到 ask）更 surprising。启动恢复是因为进程没有「当前模式」可言，条件不同。选了保持进程模式（选项 A）。
 
+**让 Desktop 命令按 TUI 的进程模式切换会话。** 同一个会话会因入口不同而得到不同权限。这也要求 Desktop 为命令单独维护会话切换流程，涉及草稿保存、恢复检查和会话模式。因此命令与侧栏共用宿主操作。
+
 ## Consequences
 
 - 加命令 = 注册表加一行 + `handleCommand` 加一个 `case`；help 自动更新。别名冲突由「注册表唯一性」测试拦住。
-- **输入浮层**：`input` 以 `/` 开头时在输入框上方渲染候选（`filterCommands` 前缀匹配 name+aliases，`/` 全量）。`↑`/`↓`/`Tab`/`Esc` 由宿主 `useInput` 处理——`ink-text-input` 明确忽略方向键与 Tab，无键冲突；`Enter` 走 `onSubmit`，浮层可见时执行高亮项的 `completeCommand` 结果（别名归一到规范名、保留已输参数）。`Esc` 只收浮层不清输入；无匹配不显示浮层，未知命令路径不变。纯函数在 `commands.ts`，Ink 层只做状态与渲染。
+- **TUI 输入浮层**：`input` 以 `/` 开头时在输入框上方渲染候选（`filterCommands` 前缀匹配 name+aliases，`/` 全量）。`↑`/`↓`/`Tab`/`Esc` 由宿主 `useInput` 处理——`ink-text-input` 明确忽略方向键与 Tab，无键冲突；`Enter` 走 `onSubmit`，浮层可见时执行高亮项的 `completeCommand` 结果（别名归一到规范名、保留已输参数）。`Esc` 只收浮层不清输入；无匹配不显示浮层，未知命令路径不变。Ink 层只做状态与渲染。
+- Desktop 的候选菜单用 `Enter`、`Tab` 或点击确认高亮命令。补全只更新输入框，执行仍需要发送，可以避免光标停在权限命令上时误切换模式。无参数命令收到多余文字时提示用法，降低误切换模式的风险。
 - `/clear` 后旧会话仍可 `--resume`，`--sessions` 列表会变长；未提供批量清理，避免误删。
 - 老 conhost 可能不支持 `ESC[3J` 清 scrollback：屏幕可能残留旧内容，但内存与会话状态已重置，不破坏一致性。
 - `/compact` 复用 core 的 `prepareContext`，与自动压缩使用同一套阈值与 checkpoint 语义。配置中的 `context.compact` 为 `false` 时明确拒绝。

@@ -2,7 +2,6 @@ import { z } from "zod";
 import type { ApprovalRequest } from "./agent.js";
 import type { Provider } from "./provider/types.js";
 import type { Message } from "./types.js";
-import type { ShellSandboxPlatform } from "./tools/shell-sandbox.js";
 
 const verdictSchema = z.strictObject({
   decision: z.enum(["allow", "ask", "deny"]),
@@ -22,7 +21,7 @@ export async function reviewShellCommand(
   model: string,
   request: ApprovalRequest,
   messages: readonly Message[],
-  boundary: { platform: ShellSandboxPlatform; workspace: string; network: boolean },
+  boundary: { workspace: string; network: boolean },
   signal?: AbortSignal,
 ): Promise<z.infer<typeof verdictSchema>> {
   const ask = { decision: "ask", reason: "The automatic reviewer could not verify this command." } as const;
@@ -38,7 +37,7 @@ export async function reviewShellCommand(
     userMessages,
     action: { tool: request.toolName, command: preview.command, shell: preview.shell, cwd: preview.cwd },
     boundary: {
-      backend: boundary.platform === "windows" ? "Windows MXC" : "Linux MXC Bubblewrap",
+      backend: "Linux MXC Bubblewrap",
       writableWorkspace: boundary.workspace,
       privateTemporaryDirectory: true,
       network: boundary.network ? "outbound permitted" : "blocked",

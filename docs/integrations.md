@@ -62,4 +62,4 @@ MCP 服务器会执行外部代码，因此配置是受信任输入。[`loadMcpC
 
 [`web_search`](../packages/core/src/tools/web-search.ts) 默认把查询直连发送到 Tavily 的免 Key 接口。查询最多 400 字符，`limit` 为 1–10（默认 5），返回标题、URL 和最多 1,000 字符的摘要。无效 URL 会被丢弃，标题与摘要中的 API 密钥会被替换为 `[redacted]`，包含密钥的 URL 会被跳过。免费请求收到 429 时会提示上游限流，并在响应提供重试秒数时显示等待时间。 [Tavily 免 Key 接口](https://docs.tavily.com/documentation/keyless)
 
-两个工具都声明 `network`。`PermissionPolicy` 按平台和运行模式决定是否允许，逐次审批的请求会展示出站参数。网页请求由宿主工具发出，Windows 的 MXC 网络限制适用于内置 `shell`。结果进入模型上下文，启用持久化时随会话落盘。 [权限决策](tools-and-permissions.md#权限决策) · [网页工具测试](../packages/core/test/web-tools.test.ts)
+两个工具都声明 `network`。`PermissionPolicy` 按平台和运行模式决定是否允许，逐次审批的请求会展示出站参数。网页请求由宿主工具发出，Linux 的 MXC 网络限制适用于内置 `shell`。结果进入模型上下文，启用持久化时随会话落盘。 [权限决策](tools-and-permissions.md#权限决策) · [网页工具测试](../packages/core/test/web-tools.test.ts)

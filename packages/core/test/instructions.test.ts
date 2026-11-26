@@ -30,11 +30,12 @@ describe("loadProjectInstructions", () => {
     await fs.writeFile(path.join(root, "AGENTS.md"), "Use tabs.\n", "utf8");
 
     const loaded = await loadProjectInstructions(root, { home });
+    const instructionPath = await fs.realpath(path.join(root, "AGENTS.md"));
 
     expect(loaded.text).toContain("Use tabs.");
-    expect(loaded.text).toContain(path.join(root, "AGENTS.md"));
+    expect(loaded.text).toContain(instructionPath);
     expect(loaded.sources).toEqual([
-      { path: path.join(root, "AGENTS.md"), chars: 9, truncated: false },
+      { path: instructionPath, chars: 9, truncated: false },
     ]);
   });
 
@@ -49,10 +50,18 @@ describe("loadProjectInstructions", () => {
     expect(loaded.text).not.toContain("generic");
   });
 
-  it("falls back to AGENTS.md when COOPER.md points outside the workspace", async () => {
+  it("falls back to AGENTS.md when COOPER.md points outside the workspace", async ({ skip }) => {
     const outside = path.join(base, "outside-instructions.md");
     await fs.writeFile(outside, "outside fixture", "utf8");
-    await fs.symlink(outside, path.join(root, "COOPER.md"), "file");
+    try {
+      await fs.symlink(outside, path.join(root, "COOPER.md"), "file");
+    } catch (error) {
+      if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") {
+        skip("Windows denied creation of a file symlink");
+        return;
+      }
+      throw error;
+    }
     await fs.writeFile(path.join(root, "AGENTS.md"), "project fallback", "utf8");
 
     const loaded = await loadProjectInstructions(root, { home });
@@ -89,7 +98,7 @@ describe("loadProjectInstructions", () => {
     expect(loaded.sources[0]?.truncated).toBe(true);
     expect(loaded.sources[0]?.chars).toBe(5000);
     expect(loaded.text).toContain("[truncated to fit the instructions budget]");
-    expect(loaded.text.length).toBeLessThan(400);
+    expect(loaded.text).toContain(`\n${"x".repeat(200)}\n`);
   });
 
   it("ignores a directory that happens to share the name", async () => {

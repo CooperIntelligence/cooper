@@ -12,12 +12,12 @@ const MODE_TEXT: Record<PermissionPreset, string> = {
     "Present a plan and wait for the user to switch modes.",
   ask:
     "Permission mode is now ask. This supersedes earlier runtime notices.\n" +
-    "File edits, commands, and web requests require user approval. Do not retry a denied call.",
+    "File edits, commands, and web requests require user approval. Approved shell commands run as the host user. " +
+    "Do not retry a denied call.",
   auto:
     "Permission mode is now auto. This supersedes earlier runtime notices.\n" +
-    "Tool calls skip interactive approval. The built-in shell requires an available Windows PowerShell sandbox. " +
-    "Its workspace is read-only, temporary storage is private to the command, and network access is blocked. " +
-    "Use file tools for workspace edits. Do not retry a denied action through another tool.",
+    "Tool calls skip interactive approval. The built-in shell requires an available sandbox. " +
+    "Do not retry a denied action through another tool.",
 };
 
 /**
@@ -31,9 +31,7 @@ export function permissionModeNotice(preset: PermissionPreset, platform?: ShellS
     ? `Permission mode is now ${preset}. This supersedes earlier runtime notices.\n` +
       (preset === "ask" ? "Gated calls require user approval. " :
         "Routine workspace edits can proceed; shell requires separate review. Sensitive edits and other gated tools require the user. ") +
-      (platform === "windows"
-        ? "The bundled PowerShell 7 always runs in MXC. Shell network access is blocked. Do not assign PowerShell automatic variables such as $HOME. "
-        : "Shell commands run in MXC Bubblewrap. Outbound access requires a workspace grant from the user's configuration. ") +
+      "Shell commands run in MXC Bubblewrap. Outbound access requires a workspace grant from the user's configuration. " +
       "The project and private per-call temp are writable. Check computed paths before deletes. " +
       "Do not retry a denied action through another tool."
     : MODE_TEXT[preset];

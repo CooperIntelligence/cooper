@@ -19,7 +19,7 @@
 ./scripts/build-desktop-setup.ps1 -Version '0.2.0-alpha.2'
 ```
 
-两个安装包都包含 `cooper-shell-sandbox.exe` 和完整的 `powershell/` 运行时。构建脚本使用官方 PowerShell 7 发布包并校验 SHA-256。源码调试可运行 `./scripts/build-windows-runtime.ps1`，将输出目录赋给 `COOPER_WINDOWS_RUNTIME_DIR`。运行时目录须在待操作的工作区外。这个环境变量只由未打包的开发入口读取。 [Windows 沙箱](../.agents/notes/implemented/architecture/2026-11-21-auto-shell-sandbox.md)
+两个安装包都包含完整的 `powershell/` 运行时。构建脚本使用官方 PowerShell 7 发布包并校验 SHA-256。源码调试可运行 `./scripts/build-windows-runtime.ps1`，将输出目录赋给 `COOPER_WINDOWS_RUNTIME_DIR`。这个环境变量只由未打包的入口读取。 [Windows 宿主执行](../.agents/notes/implemented/architecture/2026-11-26-windows-host-shell.md)
 
 ### Windows 内部构建
 
@@ -32,7 +32,7 @@
 ### Windows 安装包验收
 
 - 在干净的 Windows x64 普通用户环境安装 CLI 和 Desktop。检查版本、首次模型连接，以及选中工作区后的读取、修改与测试。
-- 在测试工作区分别走 Ask 和 Auto。确认普通写入和构建能完成，审批拒绝和沙箱拒绝的结果能显示出来。用测试文件验证工作区外写入被拒绝。
+- 在测试工作区分别走 Plan 和 Ask。确认 Plan 拒绝写入与命令，Ask 允许已批准的工作区写入和宿主构建，并显示审批拒绝的结果。用内置文件工具验证工作区外写入被拒绝。
 - 中断一个有工具调用的 Desktop 回合，重开后检查状态和只读核对，再验证继续。CLI 同时检查恢复会话和无头输出。
 - 安装新版本并检查用户配置和会话，验证 CLI 本地回滚。公开包与内部包并装后，分别检查启动入口、数据目录和独立卸载。
 
@@ -47,7 +47,7 @@
 [`runHeadless()`](../apps/cli/src/headless.ts)把回答写 stdout，其余一律 stderr：工具进度、会话状态与 id、模式提示、指令来源、MCP 状态、诊断，以及 `--show-reasoning` 打开时的推理。stdout 保持「只有回答」，才能安全地重定向给脚本。
 
 - 退出码：成功 `0`；请求错误、空提示、Skill 解析失败或达到轮次上限 `1`；被中断 `130`。
-- 无人可审批，宿主创建 `PermissionPolicy({ preset, interactive: false })`。`ask` 与 `plan` 对受管控工具一律拒绝。Windows 和 Linux 的 `auto` 允许通过检查的普通工作区编辑和通过审核的沙箱命令，凡需人工审批的调用都会被拒绝。
+- 无人可审批，宿主创建 `PermissionPolicy({ preset, interactive: false })`。`ask` 与 `plan` 对受管控工具一律拒绝。Linux 的 `auto` 允许通过检查的普通工作区编辑和通过审核的沙箱命令，凡需人工审批的调用都会被拒绝。
 - 会话写入失败只报告 `session not saved: …`，不改变退出码；恢复会话时会报出修复的无效行数。
 - 中断通过 `SIGINT` 触发同一个 `AbortSignal`，同时终止模型请求与可取消的工具。
 

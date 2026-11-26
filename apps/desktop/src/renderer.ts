@@ -1,4 +1,7 @@
-import type { ActiveTool, ChatMessage, DesktopApi, DesktopDraft, DesktopEvent, DesktopMode, DesktopState, RunDisplay, ToolDisplay } from "./ipc.js";
+import { isSlashInput } from "@cooper/host/commands";
+import { bindCommandMenu } from "./command-menu.js";
+import { DESKTOP_COMMANDS } from "./commands.js";
+import type { ActiveTool, ChatMessage, DesktopApi, DesktopCommandResult, DesktopDraft, DesktopEvent, DesktopMode, DesktopState, RunDisplay, ToolDisplay } from "./ipc.js";
 import { renderMarkdown } from "./markdown.js";
 import { bindModelSetup } from "./model-setup.js";
 
@@ -45,6 +48,7 @@ const errorBox = element("error");
 const runStatus = element("run-status");
 const runDetail = element("run-detail");
 const continueButton = element<HTMLButtonElement>("continue-turn");
+const commandOutput = element<HTMLDialogElement>("command-output");
 
 const sendShortcutKey = "cooper.desktop.sendShortcut";
 const savedShortcut = localStorage.getItem(sendShortcutKey);
@@ -74,6 +78,12 @@ let running = false;
 let displayedRun: RunDisplay | undefined;
 let retryStatus = "";
 
+const commandMenu = bindCommandMenu(prompt, element("command-menu"), availableCommands, saveCurrentDraft);
+
+function availableCommands() {
+  return DESKTOP_COMMANDS.filter(({ name }) => name !== "auto" || state?.autoAvailable);
+}
+
 function scrollToEnd(): void {
   conversation.scrollTop = conversation.scrollHeight;
 }
@@ -92,7 +102,9 @@ function isReadOnly(): boolean {
 }
 
 function updateSendButton(): void {
-  sendButton.disabled = working || isReadOnly() || !state || prompt.readOnly || Boolean(displayedRun?.needsReview) || !prompt.value.trim();
+  const onlyCommands = isReadOnly() || displayedRun?.needsReview;
+  sendButton.disabled = working || !state || prompt.readOnly || !prompt.value.trim() ||
+    (Boolean(onlyCommands) && !isSlashInput(prompt.value));
 }
 
 function updateControls(): void {
@@ -111,6 +123,7 @@ function updateControls(): void {
   sendButton.hidden = running;
   composer.hidden = state === null || pendingApproval !== undefined;
   if (composer.hidden && sendOptions.matches(":popover-open")) sendOptions.hidePopover();
+  commandMenu.refresh();
   const stopping = displayedRun?.status === "stopping";
   stopButton.disabled = stopping;
   approvalStopButton.disabled = stopping;
@@ -297,9 +310,8 @@ function displayState(next: DesktopState, resetConversation: boolean): void {
   model.textContent = next.model;
   model.title = next.model;
   autoMode.hidden = autoMode.disabled = !next.autoAvailable;
-  askMode.textContent = next.windowsShellStatus === "available" ? "Ask · Sandboxed PowerShell 7"
-    : next.linuxShellStatus === "available" ? "Ask · Sandboxed shell"
-    : next.windowsShellStatus === "unavailable" || next.linuxShellStatus === "unavailable" ? "Ask · Shell unavailable" : "Ask";
+  askMode.textContent = next.linuxShellStatus === "available" ? "Ask · Sandboxed shell"
+    : next.linuxShellStatus === "unavailable" ? "Ask · Shell unavailable" : "Ask · Host shell";
   mode.value = next.mode;
   const active = next.sessions.find(({ id }) => id === next.sessionId);
   const title = element("conversation-title");
@@ -309,7 +321,7 @@ function displayState(next: DesktopState, resetConversation: boolean): void {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = title;
-    button.title = title;
+    button.title = `${title}\n${id}`;
     if (id === next.sessionId) button.setAttribute("aria-current", "true");
     button.addEventListener("click", () => { void transition(() => api.restoreSession(id)); });
     return button;
@@ -465,6 +477,48 @@ function focusNewPrompt(): void {
   if (state?.sessionId === null && !prompt.disabled && !prompt.readOnly) prompt.focus({ preventScroll: true });
 }
 
+function setSidebarHidden(hidden: boolean): void {
+  sidebar.hidden = hidden;
+  toggleSidebar.setAttribute("aria-expanded", String(!hidden));
+}
+
+function showCommandOutput(title: string, rows: readonly (readonly [string, string])[]): void {
+  element("command-title").textContent = title;
+  element("command-details").replaceChildren(...rows.flatMap(([label, value]) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    return [term, description];
+  }));
+  commandOutput.showModal();
+}
+
+function presentCommand({ view, state }: DesktopCommandResult): void {
+  switch (view) {
+    case "help":
+      showCommandOutput("Commands", availableCommands().map(({ usage, description }) => [usage, description]));
+      break;
+    case "status":
+      showCommandOutput("Workspace status", [
+        ["Workspace", state.root],
+        ["Conversation ID", state.sessionId ?? "New conversation"],
+        ["Model", state.model],
+        ["Approval mode", state.mode],
+      ]);
+      break;
+    case "sessions":
+      setSidebarHidden(false);
+      (sessions.querySelector<HTMLButtonElement>('[aria-current="true"]') ??
+        sessions.querySelector<HTMLButtonElement>("button") ?? newButton).focus();
+      break;
+    case "config":
+      setup.open();
+      break;
+  }
+}
+
+element("close-command-output").addEventListener("click", () => commandOutput.close());
 for (const button of [openButton, newWorkspace]) {
   button.addEventListener("click", () => { void transition(() => api.openWorkspace()).then(focusNewPrompt); });
 }
@@ -495,13 +549,34 @@ prompt.addEventListener("input", saveCurrentDraft);
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   const text = prompt.value;
-  if (!text.trim() || sendButton.disabled) return;
-  running = true;
-  void transition(() => api.send(text), false);
+  const key = state?.draft.key;
+  if (!key || sendButton.disabled) return;
+  const slash = isSlashInput(text);
+  running = !slash;
+  commandMenu.dismiss();
+  let command: DesktopCommandResult | undefined;
+  void transition(async () => {
+    const result = await api.submit(key, text);
+    if (result.kind === "message") return result.state;
+    if (result.kind === "command-error") {
+      showError(result.message);
+      return null;
+    }
+    displayState(result.state, result.resetConversation);
+    if (!result.resetConversation) displayDraft(result.state.draft);
+    if (result.warning) showError(result.warning);
+    command = result;
+    return null;
+  }, false).then(() => {
+    if (!slash) return;
+    if (!prompt.disabled && !prompt.readOnly) prompt.focus({ preventScroll: true });
+    if (command) presentCommand(command);
+  }).catch(showError);
 });
 prompt.addEventListener("keydown", (event) => {
   // Some IMEs report 229 for the key that commits the candidate.
-  if (event.key !== "Enter" || event.isComposing || event.keyCode === 229 || event.altKey) return;
+  if (event.isComposing || event.keyCode === 229) return;
+  if (commandMenu.handleKey(event) || event.key !== "Enter" || event.altKey) return;
 
   const modified = event.ctrlKey || event.metaKey;
   if (modified && event.shiftKey) return;
@@ -522,10 +597,7 @@ const unsubscribe = api.subscribe(receive);
 window.addEventListener("beforeunload", unsubscribe, { once: true });
 if (api.windowsTitlebar) {
   titlebar.hidden = false;
-  toggleSidebar.addEventListener("click", () => {
-    sidebar.hidden = !sidebar.hidden;
-    toggleSidebar.setAttribute("aria-expanded", String(!sidebar.hidden));
-  });
+  toggleSidebar.addEventListener("click", () => setSidebarHidden(!sidebar.hidden));
   for (const button of titlebar.querySelectorAll<HTMLButtonElement>("button[data-menu]")) {
     button.addEventListener("mousedown", (event) => {
       // Native Edit commands should still target the focused editor.

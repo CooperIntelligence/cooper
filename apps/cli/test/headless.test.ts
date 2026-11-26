@@ -381,7 +381,7 @@ describe("runHeadless", () => {
     ['{"decision":"allow","reason":"Local build"}', true],
     ['{"decision":"deny","reason":"Outside scope"}', false],
     ["not JSON", false],
-  ] as const)("reviews a Windows Auto shell separately before dispatch: %s", async (verdict, executes) => {
+  ] as const)("reviews a Linux Auto shell separately before dispatch: %s", async (verdict, executes) => {
     const root = await realpath(await makeWorkspace());
     const sandbox = vi.fn<ShellSandbox>().mockResolvedValue({ kind: "exited", code: 0, stdout: "confined", stderr: "" });
     const requests: ChatRequest[] = [];
@@ -397,13 +397,13 @@ describe("runHeadless", () => {
         }
         yield { type: "done", finishReason: "stop", message: requests.length === 1 ? {
           content: "", toolCalls: [{ id: "command", name: "run_command",
-            arguments: JSON.stringify({ command: "Write-Output 'hello'", description: "Print a marker" }) }],
+            arguments: JSON.stringify({ command: "echo hello", description: "Print a marker" }) }],
         } : { content: "Done.", toolCalls: [] } };
       },
     };
     await runHeadless({
-      config: { ...config, shell: { kind: "pwsh", executable: process.execPath } }, root,
-      mode: "auto", sandboxPlatform: "windows", shellSandbox: sandbox, provider,
+      config: { ...config, shell: { kind: "bash", executable: process.execPath } }, root,
+      mode: "auto", sandboxPlatform: "linux", shellSandbox: sandbox, provider,
       prompt: "Print a marker", instructions: noInstructions, showReasoning: false, out: collector(), err: collector(),
     });
     expect(requests).toHaveLength(3);

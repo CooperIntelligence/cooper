@@ -61,17 +61,18 @@
           </div>
         </section>
         <form id="composer" hidden>
+          <div id="command-menu" class="command-menu" role="listbox" aria-label="Commands" hidden></div>
           <div id="pending-draft" class="pending-draft" hidden>
             <span>This draft may have been sent. Check the conversation before sending it again.</span>
             <button id="keep-editing" type="button">Keep editing</button>
           </div>
-          <textarea id="prompt" aria-label="Message" rows="2" placeholder="Ask Cooper about your workspace"></textarea>
+          <textarea id="prompt" aria-label="Message" aria-autocomplete="list" aria-controls="command-menu" rows="2" placeholder="Ask Cooper about your workspace"></textarea>
           <div class="composer-actions">
             <label class="composer-label">Approvals
               <select id="mode">
                 <option id="mode-ask" value="ask">Ask</option>
                 <option value="plan">Plan · Read only</option>
-                <option id="mode-auto" value="auto" hidden disabled>Auto · Sandboxed PowerShell 7</option>
+                <option id="mode-auto" value="auto" hidden disabled>Auto · Sandboxed shell</option>
               </select>
             </label>
             <button id="composer-settings" type="button" popovertarget="send-options" aria-label="Send shortcut" title="Send shortcut">
@@ -97,6 +98,11 @@
         </form>
       </div>
     </main>
+    <dialog id="command-output" class="command-output" aria-labelledby="command-title">
+      <h2 id="command-title"></h2>
+      <dl id="command-details"></dl>
+      <button id="close-command-output" type="button" autofocus>Close</button>
+    </dialog>
     <dialog id="model-setup" class="model-setup" aria-labelledby="setup-title">
       <div class="setup-heading">
         <img src="assets/cooper-icon-192.png" alt="" width="40" height="40">

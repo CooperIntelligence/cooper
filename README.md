@@ -4,7 +4,7 @@ Cooper Code 是 AI 编码助手，提供终端界面和 Windows 桌面预览。�
 
 ## 它能做什么
 
-- **先看方案，再动手。** `plan` 模式可以只读地梳理代码。`ask` 模式由你批准文件改动、命令和网络请求。Windows 和 Linux 可显式启用 `auto`，在工作区校验普通文件改动，对 shell 命令进行独立审核。 [权限模式](USAGE.md#权限模式)
+- **先看方案，再动手。** `plan` 模式可以只读地梳理代码。`ask` 模式由你批准文件改动、命令和网络请求。Linux 可显式启用 `auto`，在工作区校验普通文件改动，对 shell 命令进行独立审核。 [权限模式](USAGE.md#权限模式)
 - **从对话到脚本。** 在交互界面跟进多步任务；用 `-p` 发起单次请求，stdout 只有模型的回答，工具进度和诊断走 stderr，可以直接重定向给脚本。
 - **接着上次做。** 会话按工作区保存，重开终端后用 `--resume` 继续；`--sessions` 列出当前工作区的会话。
 - **接自己的模型。** 支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 三种协议，模型 ID、服务地址和 API 密钥由你配置；实验性的模型档位（`sera`、`cher`、`thr`）可在多个模型之间随时切换。
@@ -19,7 +19,7 @@ Cooper Code 是 AI 编码助手，提供终端界面和 Windows 桌面预览。�
 | CLI | `CooperSetup-<版本>-windows-x64.exe` | 在新终端运行 `cooper` |
 | Desktop | `CooperDesktopSetup-<版本>-windows-x64.exe` | 从开始菜单打开 **Cooper Desktop** |
 
-两个安装包都内置 PowerShell 7 和 MXC 沙箱助手。首次启动时选择 API 协议，填写模型 ID、服务地址和 API 密钥。Desktop 随后会让你选择工作区。CLI 的安装、修复与卸载说明见 [使用参考](USAGE.md#windows-x64-原生试装)。
+两个安装包都内置 PowerShell 7。首次启动时选择 API 协议，填写模型 ID、服务地址和 API 密钥。Desktop 随后会让你选择工作区。CLI 的安装、修复与卸载说明见 [使用参考](USAGE.md#windows-x64-原生试装)。
 
 ### npm CLI
 
@@ -54,9 +54,9 @@ npm run dev -- --resume <id>                        # 继续已有会话
 
 在仓库根目录运行 `npm run dev:desktop`。首次启动会下载 Electron 运行时。Desktop 与 CLI 共用 `~/.cooper/config.json`，缺少模型配置时会在打开工作区前提供引导。之后可从侧栏的 **Model settings** 修改连接。
 
-在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。Windows 中，`Ask` 和 `Auto` 都在 MXC 内运行随包 PowerShell 7。沙箱内的项目目录和单次调用临时目录可写。`Ask` 由用户批准，`Auto` 单独审核 shell 命令。恢复会话时需要重新开启 Auto。 [权限模式](USAGE.md#权限模式)
+在窗口中选择工作区即可发送消息，也可从侧栏恢复相同工作区的既有会话。Windows 的 `Ask` 经用户批准后，以当前用户权限运行宿主 PowerShell。Linux 检测到沙箱助手后可开启 `Auto`，恢复会话时需要重新开启。 [权限模式](USAGE.md#权限模式)
 
-在 Windows 上调试沙箱时，准备一份包含助手和 `powershell/pwsh.exe` 的独立运行时目录，再通过 `COOPER_WINDOWS_RUNTIME_DIR` 指向该目录。运行时目录应放在本次打开的工作区外。 [开发运行时布局](docs/cli.md#windows-原生安装包构建)
+本地 Windows 开发默认可用系统 PowerShell。如需使用安装包同款的 PowerShell 7，可通过 `COOPER_WINDOWS_RUNTIME_DIR` 指定运行时。 [开发运行时布局](docs/cli.md#windows-原生安装包构建)
 
 ```powershell
 $env:COOPER_WINDOWS_RUNTIME_DIR = (./scripts/build-windows-runtime.ps1).FullName

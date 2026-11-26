@@ -25,7 +25,7 @@
 
 1. 只读工具（能力全为 `read`）直接允许。
 2. `plan` 拒绝所有受管控工具，已有进程内授权在此模式无效。
-3. Windows 和 Linux `auto` 对普通工作区 `edit` 和 `write` 验证目标与预览，`shell` 单独调用审核模型。其他受管控工具转人工，无头时拒绝。非 Windows 入口沿用现有策略。
+3. Linux `auto` 对普通工作区 `edit` 和 `write` 验证目标与预览，`shell` 单独调用审核模型。其他受管控工具转人工，无头时拒绝。Windows 交互 `ask` 要求用户批准宿主命令。
 4. `ask` 在非交互宿主拒绝。交互宿主检查有效的进程内授权，其他调用提示用户。
 
 | 模式 | 只读工具 | 受管控工具 |
@@ -33,9 +33,9 @@
 | `plan` | 允许 | 直接拒绝 |
 | 交互式 `ask` | 允许 | 询问用户，或沿用符合条件的进程内授权 |
 | 无头 `ask` | 允许 | 直接拒绝 |
-| `auto`（Windows / Linux，交互） | 允许 | 普通编辑通过校验后执行，shell 独立审核，敏感编辑和其他受管控工具转人工 |
-| `auto`（Windows / Linux，无头） | 允许 | 普通编辑通过校验后执行，shell 独立审核，凡需人工审批的调用均拒绝 |
-| `auto`（其他平台，CLI） | 允许 | 沿用自动批准策略，内置 shell 因无支持的沙箱而拒绝 |
+| `auto`（Linux，交互） | 允许 | 普通编辑通过校验后执行，shell 独立审核，敏感编辑和其他受管控工具转人工 |
+| `auto`（Linux，无头） | 允许 | 普通编辑通过校验后执行，shell 独立审核，凡需人工审批的调用均拒绝 |
+| `auto`（macOS，CLI） | 允许 | 沿用自动批准策略，内置 shell 因无支持的沙箱而拒绝 |
 
 `prompt` 只有在宿主真的提供了审批回调时才会出现；[`runAgent()`](../packages/core/src/agent.ts) 拿不到回调就按拒绝处理（fail-closed），因此忘记接审批不会变成无人值守执行。
 
@@ -61,7 +61,7 @@
 - 解析结果必须仍位于真实工作区根之内，悬空链接、指向外部的链接一律拒绝；
 - Windows 上额外拒绝盘符、流后缀、结尾的点/空格和设备名（`CON`、`PRN`、`AUX` 等），因为这些在打开时会被系统重新解释。
 
-Windows `ask` 与 `auto` 中获准的内置 `shell` 都使用 MXC。工作区和单次调用的临时目录可写，网络访问被拒绝。Linux 采用 MXC Bubblewrap，默认使用独立的禁网命名空间。显式允许出站后，文件权限仍适用。沙箱不可用或启动失败时，调用返回错误。文件工具由宿主校验目标真实路径。 [Windows 沙箱](../.agents/notes/implemented/architecture/2026-11-21-auto-shell-sandbox.md)
+Windows 交互 `ask` 在用户批准后以当前用户权限启动宿主 shell。Windows 版提供 `plan` 和 `ask`。Linux 采用 MXC Bubblewrap，默认使用独立的禁网命名空间。显式允许出站后，文件权限仍适用。Linux 沙箱不可用或启动失败时，调用返回错误。文件工具由宿主校验目标真实路径。 [Windows 宿主执行](../.agents/notes/implemented/architecture/2026-11-26-windows-host-shell.md)
 
 `shell` 默认超时 120,000 ms，可传 1,000–600,000 ms。流式保留尾部 60,000 字符，最终输出保留头尾各 15,000 字符。目录条目最多 500 条。`grep` 默认返回 100 行，上限 500 行。默认 shell 和用户可见参数见 [使用参考](../USAGE.md)，平台选择由 [`resolveCommandShell()`](../packages/core/src/tools/shell.ts) 实现。
 

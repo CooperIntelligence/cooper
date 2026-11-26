@@ -1,6 +1,6 @@
 import type { CommandShell } from "./shell.js";
 
-export type ShellSandboxPlatform = "windows" | "linux";
+export type ShellSandboxPlatform = "linux";
 
 export type ShellSandboxRequest = {
   root: string;

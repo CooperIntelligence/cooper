@@ -4,6 +4,8 @@ Status: implemented
 
 ## Problem
 
+历史决策。现行策略见 [Windows 宿主执行](2026-11-26-windows-host-shell.md)。
+
 命令工作目录校验只能约束启动位置。AUTO 跳过人工确认后，原有 PowerShell 进程可以继续使用宿主的路径权限、环境变量和网络。审核模型也无法替代操作系统约束。[AUTO 审核提案](../../proposed/feature/2026-11-20-auto-mode-tool-review.md)
 
 ## Decision
@@ -12,7 +14,7 @@ CLI 的 TUI、无头入口和 Electron 主进程向 Core 提供同一个宿主�
 
 宿主从发布目录解析助手和 PowerShell 的真实路径。项目工作区与单次临时目录可写，明确拒绝工作区根下的 `.git`、`.cooper` 和 `.env`。标准位置安装的 Node.js 运行时可读，必要的父目录只开放枚举。Windows 自身的应用包 ACL 也可能提供对系统文件的访问。宿主构造环境并定向临时目录，Rust 助手用 MXC `ProcessContainer` 执行，网络入口、出口和宿主回环一律拒绝。PowerShell 在隔离桌面上初始化，保留 MXC 的剪贴板与输入注入限制。 [MXC 策略](https://github.com/microsoft/mxc/blob/main/docs/schema.md)
 
-宿主通过 stdin 发送一次固定格式的请求，EOF 取消执行。Rust 助手并发收集有限的 stdout 和 stderr，通过原生进程句柄处理退出、超时和取消。关闭助手前结束原生作业，宿主等待助手退出后清理专用临时目录。原生 Setup 按 CLI 版本安装助手。[宿主执行器](../../../../packages/host/src/shell-sandbox.ts) · [Rust 助手](../../../../packages/shell-sandbox/src/windows.rs)
+宿主通过 stdin 发送一次固定格式的请求，EOF 取消执行。Rust 助手并发收集有限的 stdout 和 stderr，通过原生进程句柄处理退出、超时和取消。关闭助手前结束原生作业，宿主等待助手退出后清理专用临时目录。原生 Setup 按 CLI 版本安装助手。
 
 `pwsh` 需要读取自身的 .NET 运行时。宿主给随包的 PowerShell 专用目录只读权限。Store 版 PowerShell 在部分 Windows 启动环境中无法通过 PSEC 启动 MSIX。 [MXC 的 Job Object 限制](https://github.com/microsoft/mxc/issues/1754)
 

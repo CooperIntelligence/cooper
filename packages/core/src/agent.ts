@@ -222,10 +222,10 @@ async function requestToolApproval(
   }
 }
 
-async function ordinaryWorkspaceEdit(request: ApprovalRequest, root: string, platform: NonNullable<PermissionPolicy["sandboxPlatform"]>): Promise<boolean> {
+async function ordinaryWorkspaceEdit(request: ApprovalRequest, root: string): Promise<boolean> {
   if (request.preview?.kind !== "diff") return false;
   const protectedPath = (file: string) => /(?:^|[/\\])(?:\.git|\.cooper|\.ssh|\.env(?:\.[^/\\]*)?|agents\.md|cooper\.md)(?:$|[/\\])/i.test(file);
-  const realRoot = await resolveSandboxProjectRoot(root, platform);
+  const realRoot = await resolveSandboxProjectRoot(root);
   const absolute = await resolveInRoot(realRoot, request.preview.path);
   return !protectedPath(request.preview.path) && !protectedPath(path.relative(realRoot, absolute));
 }
@@ -483,10 +483,9 @@ export async function* runAgent(
           let denialReason: string | undefined;
           const decideCall = async (request: ApprovalRequest): Promise<ApprovalOutcome> => {
             const platform = options.permissions.sandboxPlatform;
-            if (decision === "check-edit" && platform && await ordinaryWorkspaceEdit(request, toolContext.root, platform)) return "allow";
+            if (decision === "check-edit" && platform && await ordinaryWorkspaceEdit(request, toolContext.root)) return "allow";
             if (decision === "review-shell" && platform) {
               const verdict = await reviewShellCommand(provider, model, request, messages, {
-                platform,
                 workspace: toolContext.root,
                 network: toolContext.shellNetwork === true,
               }, toolContext.signal);
@@ -536,7 +535,7 @@ export async function* runAgent(
         if (result === undefined) {
           if (options.permissions.sandboxPlatform && (tool.name === "write" || tool.name === "edit")) {
             try {
-              await resolveSandboxProjectRoot(toolContext.root, options.permissions.sandboxPlatform);
+              await resolveSandboxProjectRoot(toolContext.root);
             } catch (error) {
               denied = true;
               result = { content: error instanceof Error ? error.message : String(error), isError: true };

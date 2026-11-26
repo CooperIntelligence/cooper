@@ -490,9 +490,10 @@ export function App({
       return;
     }
 
-    if (next === "auto" && sandboxPlatform && !shellSandbox) {
+    if (next === "auto" && (process.platform === "win32" || (sandboxPlatform && !shellSandbox))) {
       pushCommitted({ id: nextId.current++, kind: "notice", tone: "error",
-        text: "Auto requires the Cooper shell sandbox." });
+        text: process.platform === "win32" ? "Auto is unavailable on Windows. Use Ask to approve host shell commands."
+          : "Auto requires the Cooper shell sandbox." });
       return;
     }
     permissions.setPreset(next);
