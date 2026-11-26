@@ -4,6 +4,8 @@ Status: implemented
 
 ## Problem
 
+历史决策。Windows 的现行策略见 [Windows 宿主执行](2026-11-26-windows-host-shell.md)，Linux 继续使用独立的 [Bubblewrap 执行策略](2026-11-23-linux-shell-sandbox.md)。
+
 Windows PowerShell 把 `$home` 和只读的 `$HOME` 解析为同一变量。赋值错误可能是非终止错误，后续清理会访问启动时的用户目录。原先 Windows Ask 批准后在宿主执行，切换审批模式也改变了文件安全边界。Git Bash 和 Store PowerShell 又不是当前 PSEC 路径上可靠的运行时。
 
 ## Decision

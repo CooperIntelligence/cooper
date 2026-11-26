@@ -63,13 +63,8 @@ class ScriptedProvider implements Provider {
 }
 
 describe("runAgent", () => {
-  it.each([
-    { platform: "windows", available: true },
-    { platform: "windows", available: false },
-    { platform: "linux", available: true },
-    { platform: "linux", available: false },
-  ] as const)("keeps $platform Ask shell commands sandboxed after approval (sandbox available: $available)", async ({ platform, available }) => {
-    const command = createRunCommandTool({ kind: platform === "windows" ? "pwsh" : "bash", executable: process.execPath });
+  it.each([true, false])("keeps Linux Ask shell commands sandboxed after approval (sandbox available: %s)", async (available) => {
+    const command = createRunCommandTool({ kind: "bash", executable: process.execPath });
     const provider: Provider = {
       async *stream(request) {
         const finished = request.messages.some(({ role }) => role === "tool");
@@ -84,12 +79,36 @@ describe("runAgent", () => {
     for await (const _event of runAgent({
       provider, model: "test-model", tools: [command], messages, approve,
       context: { root: process.cwd(), shellSandbox: available ? sandbox : undefined },
-      permissions: new PermissionPolicy({ preset: "ask", interactive: true, sandboxPlatform: platform }),
+      permissions: new PermissionPolicy({ preset: "ask", interactive: true, sandboxPlatform: "linux" }),
     })) { /* Drain the tool request. */ }
     expect(sandbox).toHaveBeenCalledTimes(available ? 1 : 0);
     expect(approve).toHaveBeenCalledTimes(available ? 1 : 0);
     expect(messages.find(({ role }) => role === "tool")?.content).toContain(available ? "sandbox" : "No command was started");
   });
+  it.skipIf(process.platform !== "win32").each(["allow", "deny"] as const)(
+    "runs Windows Ask commands on the host only after approval: %s", async (outcome) => {
+      const command = createRunCommandTool({ kind: "cmd", executable: `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\cmd.exe` });
+      const provider: Provider = {
+        async *stream(request) {
+          const finished = request.messages.some(({ role }) => role === "tool");
+          yield { type: "done", finishReason: "stop", message: { content: "", toolCalls: finished ? [] : [{
+            id: "host-shell", name: "shell", arguments: JSON.stringify({ command: "echo cooper-host-shell", description: "Print a marker" }),
+          }] } };
+        },
+      };
+      const approve = vi.fn(() => outcome);
+      const messages: Message[] = [{ role: "user", content: "Print a marker" }];
+      for await (const _event of runAgent({
+        provider, model: "test-model", tools: [command], messages, approve,
+        context: { root: process.cwd() },
+        permissions: new PermissionPolicy({ preset: "ask", interactive: true }),
+      })) { /* Drain the tool request. */ }
+      expect(approve).toHaveBeenCalledTimes(1);
+      const result = messages.find(({ role }) => role === "tool")?.content;
+      expect(result).toBeDefined();
+      if (outcome === "allow") expect(result).toContain("cooper-host-shell");
+      else expect(result).not.toContain("cooper-host-shell");
+    });
   it("does not record an assistant message when the provider never completes", async () => {
     const messages: Message[] = [{ role: "user", content: "go" }];
     const provider: Provider = {

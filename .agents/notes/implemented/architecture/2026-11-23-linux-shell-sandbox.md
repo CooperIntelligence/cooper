@@ -8,7 +8,7 @@ Linux 的交互 Ask 原先直接启动宿主 shell，Auto 则要求一个尚未�
 
 ## Decision
 
-Linux 通过 MXC 的 Bubblewrap 后端执行 shell。平台共享审批决策与助手进程生命周期。Linux 使用系统命名空间及 MXC 的 seccomp 过滤实现隔离，复用发行版现有工具链，采用私有临时目录与用户级、精确匹配工作区的出站配置。来自模型的命令和参数不决定出站范围。Windows 的独立 PowerShell 与 PSEC 策略见 [Windows 执行策略](2026-11-22-windows-agent-execution-policy.md)。
+Linux 通过 MXC 的 Bubblewrap 后端执行 shell。Linux 使用系统命名空间及 MXC 的 seccomp 过滤实现隔离，复用发行版现有工具链，采用私有临时目录与用户级、精确匹配工作区的出站配置。来自模型的命令和参数不决定出站范围。Windows 使用独立的 [宿主执行策略](2026-11-26-windows-host-shell.md)。
 
 ## Alternatives considered
 

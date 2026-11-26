@@ -90,6 +90,78 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
+it("handles Desktop commands without submitting a user message", async () => {
+  const { draft } = runtime.getState()!;
+  runtime.saveDraft(draft.key, " /HeLP ");
+  expect(await runtime.submit(draft.key, " /HeLP ")).toMatchObject({
+    kind: "command", view: "help", state: { draft: { text: "", pending: false } },
+  });
+  for (const view of ["status", "config", "sessions"]) {
+    expect(await runtime.submit(draft.key, `/${view}`)).toMatchObject({ kind: "command", view });
+  }
+  expect(await runtime.submit(draft.key, "/plan")).toMatchObject({ kind: "command", state: { mode: "plan" } });
+  expect(await runtime.submit(draft.key, "/ask")).toMatchObject({ kind: "command", state: { mode: "ask" } });
+  expect(requests).toEqual([]);
+  expect(events).toEqual([]);
+  expect(runtime.getState()).toMatchObject({ sessions: [], messages: [] });
+
+  replies = [done];
+  expect(await runtime.submit(draft.key, "What does /plan do?")).toMatchObject({ kind: "message" });
+  expect(events).toContainEqual(expect.objectContaining({
+    type: "accepted", message: { role: "user", text: "What does /plan do?" },
+  }));
+});
+
+it("keeps failed commands and newer edits in the draft", async () => {
+  const { draft } = runtime.getState()!;
+  for (const [input, error] of [
+    ["/compact", "Unknown command /compact"],
+    ["/resume", "Usage: /resume <id>"],
+    ["/resume missing", "No session matching"],
+    ["/auto", "requires the Cooper shell sandbox"],
+    ["/ask extra", "Usage: /ask"],
+  ] as const) {
+    runtime.saveDraft(draft.key, input);
+    expect(await runtime.submit(draft.key, input)).toMatchObject({
+      kind: "command-error", message: expect.stringContaining(error),
+    });
+    expect(runtime.getState()?.draft.text).toBe(input);
+  }
+  runtime.saveDraft(draft.key, "New edit");
+  expect(await runtime.submit(draft.key, "/help")).toMatchObject({ state: { draft: { text: "New edit" } } });
+  expect(requests).toEqual([]);
+});
+
+it("opens a new conversation and restores a saved one by command with independent drafts", async () => {
+  replies = [done];
+  const saved = await runtime.send("Save this conversation");
+  expect(saved.sessionId).toBeTruthy();
+  runtime.setMode("plan");
+  runtime.saveDraft(saved.draft.key, "/new");
+  const fresh = await runtime.submit(saved.draft.key, "/new");
+  if (fresh.kind !== "command") throw new Error("Expected a new conversation command result");
+  expect(fresh).toMatchObject({
+    kind: "command", resetConversation: true,
+    state: { sessionId: null, mode: "ask", draft: { text: "" }, messages: [], sessions: [{ id: saved.sessionId }] },
+  });
+
+  await expect(runtime.submit(saved.draft.key, "/clear")).rejects.toThrow("draft is no longer open");
+  const resume = "/resume " + saved.sessionId!.slice(0, -2);
+  runtime.saveDraft(fresh.state.draft.key, resume);
+  const restored = await runtime.submit(fresh.state.draft.key, resume);
+  expect(restored).toMatchObject({
+    kind: "command", resetConversation: true,
+    state: { sessionId: saved.sessionId, mode: "plan", draft: { text: "" }, messages: saved.messages },
+  });
+  runtime.saveDraft(saved.draft.key, "Draft for the saved conversation");
+  const next = runtime.newChat();
+  expect(next.draft.text).toBe("");
+  expect(await runtime.submit(next.draft.key, "/resume " + saved.sessionId)).toMatchObject({
+    state: { draft: { text: "Draft for the saved conversation" } },
+  });
+  expect(requests).toHaveLength(1);
+});
+
 it("applies saved connection settings to the next message without replacing the conversation or draft", async () => {
   replies = [done, done];
   const previous = await runtime.send("First message");
@@ -129,6 +201,7 @@ it.each(hasSessionLocks() ? [1, 2] : [1])("restores the tool results in a v%i co
   replies = [read, edit, done];
   const sending = runtime.send("Update the file");
   const pending = await approval;
+  await expect(runtime.submit(runtime.getState()!.draft.key, "/help")).rejects.toThrow("current operation");
   expect(events[0]?.type).toBe("accepted");
   expect(pending.preview).toContain("-old");
   expect(pending.preview).toContain("+new");

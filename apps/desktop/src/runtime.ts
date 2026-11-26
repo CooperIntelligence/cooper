@@ -14,8 +14,10 @@ import {
   prepareTools, selectModelTier, transitionMessage, type Config, type PreparedTools,
   writeSettingsDocument, type SettingsDocument,
 } from "@cooper/host";
+import { parseCommand } from "@cooper/host/commands";
+import { DESKTOP_COMMANDS, type DesktopCommandName } from "./commands.js";
 import type { Draft, DraftStore } from "./drafts.js";
-import type { ActiveTool, ApprovalEvent, DesktopDraft, DesktopEvent, DesktopMode, DesktopState, RunDisplay, ToolDisplay } from "./ipc.js";
+import type { ActiveTool, ApprovalEvent, DesktopCommandResult, DesktopDraft, DesktopEvent, DesktopMode, DesktopState, DesktopSubmission, RunDisplay, ToolDisplay } from "./ipc.js";
 
 type Workspace = {
   root: string;
@@ -100,7 +102,7 @@ export class DesktopRuntime {
     private readonly useV2 = hasSessionLocks(),
     private readonly shellSandbox?: ShellSandbox,
     private readonly windowsShell?: CommandShell,
-    private readonly sandboxPlatform: PermissionPolicy["sandboxPlatform"] = windowsShell ? "windows" : undefined,
+    private readonly sandboxPlatform?: PermissionPolicy["sandboxPlatform"],
   ) {}
 
   getState(): DesktopState | null {
@@ -187,7 +189,7 @@ export class DesktopRuntime {
         const original = this.findAcceptedDraft(workspace, this.drafts.read(key));
         if (original) {
           chat = this.createChat(workspace, original);
-          warning = this.clearAcceptedDraft(key);
+          warning = this.clearDraft(key);
         }
       } catch { /* The regular draft view reports an unreadable draft or receipt. */ }
       const state = this.snapshot(workspace, chat);
@@ -280,6 +282,60 @@ export class DesktopRuntime {
     return this.snapshot(workspace, chat);
   }
 
+  async submit(key: string, input: string): Promise<DesktopSubmission> {
+    this.requireIdle();
+    const { workspace, chat } = this.current();
+    if (key !== this.draftKey(workspace, chat)) throw new Error("This draft is no longer open.");
+    const command = parseCommand(input, DESKTOP_COMMANDS);
+    if (command.kind === "prompt") return { kind: "message", state: await this.send(command.text) };
+    if (command.kind === "unknown") {
+      return { kind: "command-error", message: `Unknown command /${command.name}. Type /help to list commands.` };
+    }
+    try {
+      return this.runCommand(key, input, command);
+    } catch (error) {
+      return { kind: "command-error", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private runCommand(key: string, input: string, command: { name: DesktopCommandName; args: string }): DesktopCommandResult {
+    const { workspace, chat } = this.current();
+    const draft = this.drafts.read(key);
+    if (draft.pending) throw new Error("Check the pending draft before running a command.");
+    if (command.name === "resume" && !command.args) throw new Error("Usage: /resume <id>. Use /sessions to show conversations.");
+    if (command.name !== "resume" && command.args) throw new Error(`Usage: /${command.name}`);
+
+    let state: DesktopState;
+    let resetConversation = false;
+    let view: DesktopCommandResult["view"];
+    switch (command.name) {
+      case "clear":
+      case "resume":
+        state = this.newChat(command.name === "resume" ? command.args : undefined);
+        resetConversation = true;
+        break;
+      case "plan":
+      case "ask":
+      case "auto":
+        state = this.setMode(command.name);
+        break;
+      case "help":
+      case "sessions":
+      case "status":
+      case "config":
+        state = this.snapshot(workspace, chat);
+        view = command.name;
+        break;
+    }
+
+    let warning: string | undefined;
+    if (draft.text === input) {
+      warning = this.clearDraft(key, "Command completed");
+      if (state.draft.key === key) state.draft = { ...state.draft, text: "" };
+    }
+    return { kind: "command", state, resetConversation, view, warning };
+  }
+
   async send(prompt: string): Promise<DesktopState> {
     this.requireIdle();
     const { workspace, chat } = this.current();
@@ -357,7 +413,7 @@ export class DesktopRuntime {
           if (receipt.text !== text) throw new Error("This submission ID belongs to a different message.");
           chat.sessionId = writer.id;
           this.refresh(chat, current);
-          this.clearAcceptedDraft(key);
+          this.clearDraft(key);
           const state = this.snapshot(workspace, chat);
           this.emit({ type: "reconciled", state });
           return state;
@@ -378,7 +434,7 @@ export class DesktopRuntime {
         ? { kind: "submission", requestId: submission.requestId, turnId } : undefined));
       chat.messages.push(user);
       chat.sessionId = writer.id;
-      const warning = this.clearAcceptedDraft(key);
+      const warning = this.clearDraft(key);
       const editor = this.readDraft(workspace, chat);
       this.emit({ type: "accepted", message: { role: "user", text }, sessionId: writer.id,
         requestId: submission?.requestId, turnId,
@@ -402,13 +458,13 @@ export class DesktopRuntime {
     }
   }
 
-  private clearAcceptedDraft(key: string): string | undefined {
+  private clearDraft(key: string, result = "Message saved"): string | undefined {
     try {
       this.drafts.write(key, { text: "", pending: false });
       return undefined;
     } catch (error) {
       this.drafts.edit(key, "");
-      return `Message saved. Could not clear the saved draft: ${String(error)}`;
+      return `${result}. Could not clear the saved draft: ${String(error)}`;
     }
   }
 
@@ -605,7 +661,7 @@ export class DesktopRuntime {
         try { accepted = this.findAcceptedDraft(workspace, draft); }
         catch { return { key, text: draft.text, pending: true, warning: "Could not verify the original submission." }; }
         if (accepted) {
-          const warning = this.clearAcceptedDraft(key);
+          const warning = this.clearDraft(key);
           return { key, text: "", pending: false, warning };
         }
       }
@@ -654,7 +710,6 @@ export class DesktopRuntime {
       expandReasoning: chat.config.showReasoning,
       mode: chat.permissions.preset,
       autoAvailable: this.shellSandbox !== undefined,
-      ...(this.windowsShell ? { windowsShellStatus: this.shellSandbox ? "available" : "unavailable" } : {}),
       ...(this.sandboxPlatform === "linux" ? { linuxShellStatus: this.shellSandbox ? "available" : "unavailable" } : {}),
       sessionId: chat.sessionId,
       draft: this.readDraft(workspace, chat),

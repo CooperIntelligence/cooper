@@ -41,7 +41,6 @@ UninstallDisplayIcon={app}\cooper.ico
 [Files]
 Source: "{#LauncherPath}"; DestDir: "{app}\bin"; DestName: "{#CooperLauncherName}"; Flags: ignoreversion
 Source: "{#PayloadPath}"; DestDir: "{app}\versions\{#CooperVersion}"; DestName: "cooper.exe"; Flags: ignoreversion
-Source: "{#SandboxPath}"; DestDir: "{app}\versions\{#CooperVersion}"; DestName: "cooper-shell-sandbox.exe"; Flags: ignoreversion
 Source: "{#PowerShellDir}\*"; DestDir: "{app}\versions\{#CooperVersion}\powershell"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "cooper.ico"; DestDir: "{app}"; Flags: ignoreversion
 

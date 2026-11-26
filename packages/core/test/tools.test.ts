@@ -310,6 +310,27 @@ describe("edit_file", () => {
 });
 
 describe("run_command", () => {
+  it.each([
+    "$home = 'fixture'",
+    'echo "$HoMe"',
+    "echo '${HOME}'",
+    'echo "${HOME:-fixture}"',
+    "echo $global:HOME",
+    "echo ${env:Home}",
+  ])("blocks the entire command when it contains %s", async (reference) => {
+    const input = {
+      command: `echo started > marker.txt; ${reference}`,
+      description: "Check that the shell blocks HOME before any step runs.",
+    };
+    expect(runCommandTool.inputSchema.safeParse(input).success).toBe(false);
+    await expect(runCommandTool.preview?.(input, { root })).resolves.toMatchObject({ kind: "invalid" });
+    await expect(runCommandTool.execute(input, { root })).resolves.toMatchObject({
+      isError: true,
+      content: expect.stringContaining("No command was started."),
+    });
+    await expect(fs.readdir(root)).resolves.toEqual([]);
+  });
+
   it("requires a nonblank description and carries it into the command preview", async () => {
     const command = "echo hello";
     expect(toToolSpec(runCommandTool).parameters).toMatchObject({
@@ -317,6 +338,8 @@ describe("run_command", () => {
     });
     expect(runCommandTool.inputSchema.safeParse({ command }).success).toBe(false);
     expect(runCommandTool.inputSchema.safeParse({ command, description: " \n " }).success).toBe(false);
+    expect(runCommandTool.inputSchema.safeParse({ command: "echo $HOMEWORK", description: "Read a different variable." }).success)
+      .toBe(true);
 
     const description = "Print a greeting to check shell output.";
     const input = runCommandTool.inputSchema.parse({ command, description: `  ${description}  ` });

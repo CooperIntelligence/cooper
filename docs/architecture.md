@@ -31,7 +31,7 @@ Cooper 使用 npm workspaces。
 
 [Electron 主进程](../apps/desktop/src/main.ts)打开本地页面和原生目录选择器，会话、Provider、工具权限及审批复查由[主进程运行时](../apps/desktop/src/runtime.ts)管理。`sandbox` 与 `contextIsolation` 都启用，[预加载脚本](../apps/desktop/src/preload.ts)暴露固定的 IPC 操作。发送给渲染器的数据包括可见对话、工具结果、审批内容与状态。Provider 配置、协议续传数据和审批回调保留在主进程中。
 
-选中的目录作为配置装配、工具和会话的工作区根路径。同一安装渠道的 Desktop 与 CLI 读取相同的配置和 JSONL 会话。Desktop 的审批界面提供单次允许和拒绝，支持在空闲时切换 `plan` 和 `ask`，检测到 Windows 沙箱运行时后也开放 `auto`。 [内部安装渠道](cli.md#windows-内部构建)
+选中的目录作为配置装配、工具和会话的工作区根路径。同一安装渠道的 Desktop 与 CLI 读取相同的配置和 JSONL 会话。Desktop 的审批界面提供单次允许和拒绝，支持在空闲时切换 `plan` 和 `ask`，检测到 Linux 沙箱运行时后也开放 `auto`。 [内部安装渠道](cli.md#windows-内部构建)
 
 ## 事件契约
 

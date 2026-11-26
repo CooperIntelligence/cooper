@@ -43,7 +43,6 @@ export type DesktopState = {
   expandReasoning: boolean;
   mode: DesktopMode;
   autoAvailable: boolean;
-  windowsShellStatus?: "available" | "unavailable";
   linuxShellStatus?: "available" | "unavailable";
   sessionId: string | null;
   sessions: { id: string; title: string }[];
@@ -55,6 +54,19 @@ export type DesktopState = {
   activeTool?: ActiveTool;
   running?: boolean;
 };
+
+export type DesktopCommandResult = {
+  kind: "command";
+  state: DesktopState;
+  resetConversation: boolean;
+  view?: "help" | "status" | "sessions" | "config";
+  warning?: string;
+};
+
+export type DesktopSubmission =
+  | { kind: "message"; state: DesktopState }
+  | { kind: "command-error"; message: string }
+  | DesktopCommandResult;
 
 export type DesktopEvent =
   | { type: "accepted"; message: ChatMessage; sessionId: string; requestId?: string; turnId?: string; draft: DesktopDraft }
@@ -87,7 +99,7 @@ export type DesktopApi = {
   setMode(mode: DesktopMode): Promise<DesktopState>;
   saveDraft(key: string, text: string): Promise<void>;
   keepEditingDraft(key: string): Promise<DesktopState>;
-  send(prompt: string): Promise<DesktopState>;
+  submit(key: string, input: string): Promise<DesktopSubmission>;
   continueTurn(turnId: string, confirmReview?: boolean): Promise<DesktopState>;
   stop(runId?: string): Promise<void>;
   approve(id: string, allowed: boolean): Promise<void>;

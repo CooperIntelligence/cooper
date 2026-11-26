@@ -4,11 +4,11 @@ Status: proposed
 
 ## Problem
 
-Cooper 的 `auto` 跳过交互审批，`ask` 则把写文件、命令执行和网络请求交给用户。修复失败测试这样的任务需要反复读代码、改文件、运行命令。用户需要让常规步骤连续运行，同时保留对命令实际副作用和任务授权范围的检查。Windows CLI 已引入独立的操作系统沙箱来执行 AUTO 的内置 shell。[AUTO shell 沙箱](../../implemented/architecture/2026-11-21-auto-shell-sandbox.md) · [交互式工具审批](../../implemented/feature/2026-11-11-interactive-tool-approvals.md)
+Cooper 的 `auto` 跳过交互审批，`ask` 则把写文件、命令执行和网络请求交给用户。修复失败测试这样的任务需要反复读代码、改文件、运行命令。用户需要让常规步骤连续运行，同时保留对命令实际副作用和任务授权范围的检查。Linux 的内置 shell 已接入操作系统沙箱。[Linux 沙箱](../../implemented/architecture/2026-11-23-linux-shell-sandbox.md) · [交互式工具审批](../../implemented/feature/2026-11-11-interactive-tool-approvals.md)
 
 ## Proposal
 
-Windows 已接入一次独立审核和 Ask/Auto 共享的沙箱策略。脚本证据收集、审核模型单独配置、两阶段筛查和单次权限扩展仍待实现。 [Windows 执行与审批设计](../../implemented/architecture/2026-11-22-windows-agent-execution-policy.md)
+Linux 已接入一次独立审核和 Ask/Auto 共享的沙箱策略。脚本证据收集、审核模型单独配置、两阶段筛查和单次权限扩展仍待实现。 [Linux 沙箱](../../implemented/architecture/2026-11-23-linux-shell-sandbox.md)
 
 将 `auto` 改为逐调用审批。权限规则处理可直接判定的动作，独立模型审核需要理解用户意图或命令副作用的动作。借鉴 Claude Code 的实现，审核输入以用户原话和实际工具调用为主，固定审核策略由宿主提供。审核放行的 shell 使用宿主预先选定的执行范围，审核结果没有扩权字段。写工作区外的安装路径或打开网络需要用户明确授权，宿主将授权绑定到具体调用的可写目录与网络范围。[Claude Code Auto 工程说明](https://www.anthropic.com/research/claude-code-auto-mode)
 
@@ -31,7 +31,7 @@ Windows 已接入一次独立审核和 Ask/Auto 共享的沙箱策略。脚本�
 
 ### 运行专用临时目录
 
-Windows AUTO shell 已为单次调用分配专用临时目录，命令退出后回收。跨调用的临时文件共享需要另行定义生命周期与显式文件工具范围，并修改仓库工作区根约定。两个范围分别以宿主分配的真实根校验路径及符号链接和 Windows junction。崩溃恢复处理须核对目录归属及运行状态。[路径包含性](../../implemented/bug-fix/2026-11-11-workspace-real-path-containment.md)
+Linux shell 沙箱为单次调用分配专用临时目录，命令退出后回收。跨调用的临时文件共享需要另行定义生命周期与显式文件工具范围，并修改仓库工作区根约定。两个范围分别以宿主分配的真实根校验路径及符号链接和 Windows junction。崩溃恢复处理须核对目录归属及运行状态。[路径包含性](../../implemented/bug-fix/2026-11-11-workspace-real-path-containment.md)
 
 ### 生效与迁移
 

@@ -122,9 +122,9 @@ function openWindow(): void {
     if (typeof key !== "string") throw new Error("Invalid draft.");
     return runtime.keepEditingDraft(key);
   });
-  handle("cooper:send", (prompt) => {
-    if (typeof prompt !== "string") throw new Error("Invalid message.");
-    return runtime.send(prompt);
+  handle("cooper:submit", (key, input) => {
+    if (typeof key !== "string" || typeof input !== "string") throw new Error("Invalid composer submission.");
+    return runtime.submit(key, input);
   });
   handle("cooper:continue", (turnId, confirmReview) => {
     if (typeof turnId !== "string" || (confirmReview !== undefined && typeof confirmReview !== "boolean")) {

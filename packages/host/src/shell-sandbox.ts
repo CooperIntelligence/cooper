@@ -6,7 +6,6 @@ import { z } from "zod";
 import { cooperHome, resolveSandboxProjectRoot } from "@cooper/core";
 import type { CommandShell, ShellSandbox, ShellSandboxPlatform, ShellSandboxRequest, ShellSandboxResult } from "@cooper/core";
 
-const executableName = "cooper-shell-sandbox.exe";
 const maxReplyBytes = 512 * 1024;
 const shutdownGraceMs = 5_000;
 
@@ -17,29 +16,19 @@ const replySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("error"), message: z.string() }),
 ]);
 
-const absoluteLocalPath = /^[a-z]:[\\/]/i;
-
 export function windowsAgentShell(appDirectory: string): CommandShell | undefined {
   if (process.platform !== "win32") return undefined;
-  return { kind: "pwsh", executable: path.resolve(appDirectory, "powershell", "pwsh.exe") };
-}
-
-export function windowsShellSandbox(appDirectory: string): ShellSandbox | undefined {
-  const shell = windowsAgentShell(appDirectory);
-  if (!shell) return undefined;
-  const executable = path.resolve(appDirectory, executableName);
+  const executable = path.resolve(appDirectory, "powershell", "pwsh.exe");
   try {
-    for (const required of [executable, shell.executable]) {
-      if (!absoluteLocalPath.test(required) || !statSync(required).isFile()) return undefined;
-    }
+    if (statSync(executable).isFile()) return { kind: "pwsh", executable };
   } catch {
-    return undefined;
+    // Source and npm builds can use the host shell without a bundled runtime.
   }
-  return (request, signal) => runWindowsShell(executable, shell.executable, request, signal);
+  return undefined;
 }
 
 export const shellSandboxPlatform: ShellSandboxPlatform | undefined =
-  process.platform === "win32" ? "windows" : process.platform === "linux" ? "linux" : undefined;
+  process.platform === "linux" ? "linux" : undefined;
 
 /** Only exact, explicitly configured workspaces receive outbound access. */
 export function linuxWorkspaceNetwork(root: string, workspaces?: readonly string[]): boolean {
@@ -51,7 +40,6 @@ export function linuxWorkspaceNetwork(root: string, workspaces?: readonly string
 }
 
 export function localShellSandbox(appDirectory: string): ShellSandbox | undefined {
-  if (shellSandboxPlatform === "windows") return windowsShellSandbox(appDirectory);
   if (shellSandboxPlatform !== "linux") return undefined;
   const name = "cooper-shell-sandbox";
   for (const executable of [
@@ -76,7 +64,7 @@ async function runLinuxShell(
 ): Promise<ShellSandboxResult> {
   if (signal?.aborted) return { kind: "cancelled" };
   const [helper, shell, workspace, cwd, home, temp] = await Promise.all([
-    fs.realpath(executable), fs.realpath(request.executable), resolveSandboxProjectRoot(request.root, "linux"),
+    fs.realpath(executable), fs.realpath(request.executable), resolveSandboxProjectRoot(request.root),
     fs.realpath(request.cwd), fs.realpath(os.homedir()), fs.realpath(os.tmpdir()),
   ]);
   const configHome = await fs.realpath(cooperHome()).catch(() => cooperHome());
@@ -126,88 +114,6 @@ async function runLinuxShell(
 function inside(root: string, file: string): boolean {
   const relative = path.relative(root, file);
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
-// MSVC argv quoting, since MXC takes a CreateProcess command line. Never route
-// through cmd.exe. PowerShell receives the same argv as the normal shell tool.
-function quoteArg(arg: string): string {
-  return `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/\\+$/, "$&$&")}"`;
-}
-
-function ancestors(directories: readonly string[]): string[] {
-  const paths = new Set<string>();
-  for (const directory of directories) {
-    let current = directory;
-    for (let parent = path.dirname(current); parent !== current; parent = path.dirname(current)) {
-      paths.add(parent);
-      current = parent;
-    }
-  }
-  return [...paths];
-}
-
-async function runWindowsShell(
-  executable: string,
-  bundledPowerShell: string,
-  request: ShellSandboxRequest,
-  signal?: AbortSignal,
-): Promise<ShellSandboxResult> {
-  if (signal?.aborted) return { kind: "cancelled" };
-  if (request.kind !== "pwsh" || path.relative(bundledPowerShell, request.executable) !== "") {
-    throw new Error("The Windows shell sandbox requires Cooper's bundled PowerShell 7.");
-  }
-  const [helper, shellExecutable, workspace] = await Promise.all([
-    fs.realpath(executable), fs.realpath(bundledPowerShell), resolveSandboxProjectRoot(request.root, "windows"),
-  ]);
-  const shellDirectory = path.dirname(shellExecutable);
-  const appDirectory = path.dirname(helper);
-  if (path.relative(path.join(appDirectory, "powershell"), shellDirectory) !== "" ||
-      inside(workspace, appDirectory) || inside(appDirectory, workspace)) {
-    throw new Error("Windows sandbox runtime files must be in a dedicated installation outside the workspace.");
-  }
-
-  const systemRoot = process.env.SystemRoot || "C:\\Windows";
-  const system32 = path.join(systemRoot, "System32");
-  const nodeDirectory = process.env.ProgramFiles
-    ? await fs.realpath(path.join(process.env.ProgramFiles, "nodejs")).catch(() => undefined)
-    : undefined;
-  const tempRoot = await fs.realpath(os.tmpdir());
-  const scratch = await fs.mkdtemp(path.join(tempRoot, "cooper-shell-"));
-  try {
-    const env = Object.entries({
-      SystemRoot: systemRoot,
-      ComSpec: path.join(system32, "cmd.exe"),
-      PATH: [shellDirectory, system32, nodeDirectory].filter(Boolean).join(path.delimiter),
-      PATHEXT: ".COM;.EXE;.BAT;.CMD",
-      LOCALAPPDATA: scratch,
-      APPDATA: scratch,
-      USERPROFILE: scratch,
-      HOME: scratch,
-      TEMP: scratch,
-      TMP: scratch,
-      TMPDIR: scratch,
-    });
-    const readOnly = [shellDirectory];
-    if (nodeDirectory) readOnly.push(nodeDirectory);
-    const readWrite = [workspace, scratch];
-    const payload = JSON.stringify({
-      protocol: 1,
-      commandLine: [shellExecutable, ...request.args].map(quoteArg).join(" "),
-      cwd: request.cwd,
-      env,
-      timeoutMs: request.timeoutMs,
-      readOnly,
-      readWrite,
-      denied: [".git", ".cooper", ".env"].map((name) => path.join(workspace, name)),
-      // Node and npm stat ancestors during module and workspace discovery.
-      enumerate: ancestors([...readOnly, ...readWrite]),
-    });
-    if (signal?.aborted) return { kind: "cancelled" };
-    return await runHelper(helper, payload, request.timeoutMs, signal);
-  } finally {
-    // Only remove the directory allocated by this call, after the helper has stopped.
-    await fs.rm(scratch, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 function runHelper(

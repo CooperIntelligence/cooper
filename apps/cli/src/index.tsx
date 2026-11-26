@@ -44,7 +44,7 @@ import { userConfigFile } from "@cooper/host";
 declare const COOPER_BUILD_VERSION: string | undefined;
 const cliVersion = typeof COOPER_BUILD_VERSION === "string" ? COOPER_BUILD_VERSION : cliPackage.version;
 
-const HELP = `Cooper — a terminal coding agent
+const HELP = `Cooper — Cooperation with Your Own Intelligence.
 
 Usage:
   cooper                          start the interactive TUI
@@ -83,7 +83,7 @@ Modes:
 
 Configuration:
   Set protocol, model, baseURL, and apiKey in ~/.cooper/config.json.
-  The supported protocols are openai-chat, anthropic-messages, and openai-responses.
+  The supported protocols are openai-chat, openai-responses, and anthropic-messages.
   Run cooper interactively to complete setup.
   Use /config in the TUI to edit and apply settings.
   Use /reload to apply edits made to config.json elsewhere.
@@ -141,8 +141,8 @@ function printSessions(root: string): void {
 }
 
 async function main(): Promise<void> {
-  const native = isSea();
-  const entry = native ? process.execPath : fileURLToPath(import.meta.url);
+  const native = isSea();  // Check if Single Executable Application
+  const entry = native ? process.execPath : fileURLToPath(import.meta.url);  // Check the paths to Cooper Runtime.
   const linuxSourceRuntime = entry.endsWith(".tsx") ? path.resolve(path.dirname(entry), "../dist") : path.dirname(entry);
   const appDirectory = native ? path.dirname(process.execPath)
     : process.platform === "linux"
@@ -171,6 +171,9 @@ async function main(): Promise<void> {
   if (args.help) {
     console.log(HELP);
     return;
+  }
+  if (process.platform === "win32" && args.mode === "auto") {
+    fail("Auto is unavailable on Windows. Use interactive Ask to approve host shell commands.");
   }
 
   let root: string;

@@ -29,8 +29,8 @@ await Promise.all([
   ...images.map((name) => copyFile("src/assets/" + name, "dist/assets/" + name)),
 ]);
 
-if (process.platform === "win32" || process.platform === "linux") {
-  const name = process.platform === "win32" ? "cooper-shell-sandbox.exe" : "cooper-shell-sandbox";
+if (process.platform === "linux") {
+  const name = "cooper-shell-sandbox";
   const binary = new URL(`../../packages/shell-sandbox/target/release/${name}`, import.meta.url);
   await copyFile(binary, `dist/${name}`).catch((error) => {
     if (error.code !== "ENOENT") throw error;
